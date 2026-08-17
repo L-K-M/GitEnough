@@ -1,0 +1,73 @@
+import SwiftUI
+import AppKit
+
+/// The app's menu-bar commands. Everything here forwards to the active repo's view
+/// model; items are disabled when no repository is selected or the model is busy.
+struct AppCommands: Commands {
+
+    @ObservedObject var appState: AppState
+    @AppStorage("pullRebase") private var pullRebase = false
+
+    private var active: RepoViewModel? { appState.activeViewModel }
+
+    var body: some Commands {
+        CommandGroup(after: .newItem) {
+            Button("Add Repository…") {
+                appState.showingAddRepository = true
+            }
+            .keyboardShortcut("o", modifiers: .command)
+        }
+
+        CommandMenu("Repository") {
+            Button("Fetch") { active?.fetch() }
+                .keyboardShortcut("f", modifiers: [.option, .command])
+                .disabled(active == nil)
+
+            Button(pullRebase ? "Pull (Rebase)" : "Pull") { active?.pull(rebase: pullRebase) }
+                .keyboardShortcut("l", modifiers: [.shift, .command])
+                .disabled(active == nil)
+
+            Button("Push") { active?.push() }
+                .keyboardShortcut("p", modifiers: [.shift, .command])
+                .disabled(active == nil)
+
+            Divider()
+
+            Button("New Branch…") { appState.showingNewBranch = true }
+                .keyboardShortcut("b", modifiers: [.shift, .command])
+                .disabled(active == nil)
+
+            Button("Refresh") { active?.refresh(includeHistory: true) }
+                .keyboardShortcut("r", modifiers: .command)
+                .disabled(active == nil)
+
+            Divider()
+
+            Button("Show in Finder") {
+                if let repo = appState.selectedRepository {
+                    NSWorkspace.shared.activateFileViewerSelecting([repo.url])
+                }
+            }
+            .disabled(appState.selectedRepository == nil)
+
+            Button("Open in Terminal") {
+                if let repo = appState.selectedRepository,
+                   let terminal = NSWorkspace.shared.urlForApplication(
+                       withBundleIdentifier: "com.apple.Terminal") {
+                    NSWorkspace.shared.open([repo.url], withApplicationAt: terminal,
+                                            configuration: .init())
+                }
+            }
+            .disabled(appState.selectedRepository == nil)
+        }
+
+        CommandGroup(after: .toolbar) {
+            Button("History") { appState.selectedTab = .history }
+                .keyboardShortcut("1", modifiers: .command)
+            Button("Changes") { appState.selectedTab = .changes }
+                .keyboardShortcut("2", modifiers: .command)
+            Button("Branches") { appState.selectedTab = .branches }
+                .keyboardShortcut("3", modifiers: .command)
+        }
+    }
+}

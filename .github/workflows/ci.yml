@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Least privilege: the build/test job only needs to read the repo. Uploading test
+# results uses the artifact API, which doesn't need extra token scopes.
+permissions:
+  contents: read
+
+# Cancel an in-progress run when a branch is pushed again.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PROJECT: GitEnough.xcodeproj
+  SCHEME: GitEnough
+
+jobs:
+  build-test:
+    name: Build & Test
+    runs-on: macos-14
+    steps:
+      # Pin actions to commit SHAs: a mutable tag can be repointed at tampered code,
+      # a SHA cannot. Same pin-and-verify discipline zai-code-review.yml already uses.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false   # nothing here runs git after checkout
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1.7.0
+        with:
+          xcode-version: '16.2'   # pin so a runner-image bump can't change the toolchain
+
+      - name: Install xcbeautify
+        run: brew install xcbeautify
+
+      - name: Build & test
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -destination 'platform=macOS' \
+            -resultBundlePath TestResults.xcresult \
+            CODE_SIGNING_ALLOWED=NO \
+            clean test | xcbeautify
+
+      - name: Upload test results on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: TestResults
+          path: TestResults.xcresult
+          if-no-files-found: ignore
