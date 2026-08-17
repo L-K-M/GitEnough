@@ -26,11 +26,15 @@ final class GitParsersTests: XCTestCase {
         XCTAssertEqual(commits[0].author, "Lukas Mathis")
         XCTAssertEqual(commits[0].subject, "Ship it")
         XCTAssertNotNil(commits[0].date)
-        XCTAssertEqual(commits[0].decorations.count, 3)
+        // "HEAD -> main" expands to two chips (HEAD marker + branch), plus
+        // origin/main and the tag.
+        XCTAssertEqual(commits[0].decorations.count, 4)
         XCTAssertEqual(commits[0].decorations[0].kind, .head)
         XCTAssertEqual(commits[0].decorations[1],
                        RefDecoration(kind: .localBranch, name: "main"))
         XCTAssertEqual(commits[0].decorations[2],
+                       RefDecoration(kind: .remoteBranch, name: "origin/main"))
+        XCTAssertEqual(commits[0].decorations[3],
                        RefDecoration(kind: .tag, name: "v1.0"))
         XCTAssertTrue(commits[0].isHead)
         XCTAssertFalse(commits[0].isMerge)

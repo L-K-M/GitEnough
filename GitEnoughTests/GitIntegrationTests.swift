@@ -119,10 +119,13 @@ final class GitIntegrationTests: XCTestCase {
     func testDiffRoundTrip() throws {
         try write("one\nchanged\n", to: "a.txt")
         let diff = try client.diff(path: "a.txt", staged: false)
-        XCTAssertTrue(diff.contains("-one"))
-        XCTAssertTrue(diff.contains("+one\nchanged") || diff.contains("+changed"))
+        // "one" is unchanged (context); only "changed" is added.
+        XCTAssertFalse(diff.contains("-one"))
+        XCTAssertTrue(diff.contains("+changed"))
         let lines = DiffParser.parse(diff)
-        XCTAssertTrue(lines.contains(DiffLine(kind: .deletion, text: "-one")))
+        XCTAssertFalse(lines.contains(DiffLine(kind: .deletion, text: "-one")))
+        XCTAssertTrue(lines.contains(DiffLine(kind: .addition, text: "+changed")))
+        XCTAssertTrue(lines.contains(DiffLine(kind: .context, text: " one")))
     }
 
     func testUntrackedDiffUsesNoIndex() throws {
