@@ -161,7 +161,7 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertEqual(stash[0].message, "wip")
         XCTAssertEqual(stash[0].branch, "main")
 
-        try client.stashApply(stash[0], pop: true)
+        try client.stashApply(index: stash[0].index, pop: true)
         status = try client.status()
         XCTAssertEqual(status.unstaged.map(\.path), ["a.txt"])
         XCTAssertTrue(try client.stashList().isEmpty)
