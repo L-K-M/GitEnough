@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  GitEnough is NOT sandboxed: it must spawn the user's `git` binary, read and
+	  write arbitrary repository folders the user points it at, and invoke external
+	  merge tools — none of which the App Sandbox permits. The App Store is out of
+	  scope; distribution is a signed (ad-hoc for CI builds) DMG/zip with the
+	  Hardened Runtime enabled (see the target's ENABLE_HARDENED_RUNTIME).
+
+	  This file deliberately enables no App Sandbox key and no Hardened Runtime
+	  exceptions: the app loads no third-party plug-ins and runs no unsigned
+	  library code, so the default hardened-runtime policy applies as-is.
+	-->
+</dict>
+</plist>

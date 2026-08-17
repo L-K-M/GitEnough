@@ -1,0 +1,365 @@
+import Foundation
+
+/// Typed git operations for one repository. Every method is synchronous (see
+/// GitShell) — `RepoViewModel` calls them from its serial background queue.
+///
+/// All repo-scoped commands run as `git -C <worktree> <cmd>` with arguments passed
+/// as an array (never through a shell), so paths with spaces or shell metacharacters
+/// are safe. `--` separates pathspecs from revisions everywhere a path is involved.
+final class GitClient {
+
+    let shell: GitShell
+    let worktree: URL
+
+    init(worktree: URL, shell: GitShell = .shared) {
+        self.worktree = worktree
+        self.shell = shell
+    }
+
+    // MARK: - Discovery / validation
+
+    /// True when `directory` is inside a git worktree.
+    static func isRepository(at directory: URL) -> Bool {
+        guard let result = try? GitShell.shared.run(
+            ["rev-parse", "--is-inside-work-tree"], in: directory) else { return false }
+        return result.exitCode == 0
+            && result.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "true"
+    }
+
+    /// The canonical top-level path of the worktree containing `directory`
+    /// (so adding `repo/Documentation/` registers the repo root).
+    static func topLevel(of directory: URL) -> URL? {
+        guard let result = try? GitShell.shared.run(
+            ["rev-parse", "--show-toplevel"], in: directory),
+            result.exitCode == 0 else { return nil }
+        let path = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !path.isEmpty else { return nil }
+        return URL(fileURLWithPath: path)
+    }
+
+    /// The `.git` directory (a file for linked worktrees — resolved by git).
+    func gitDir() -> URL? {
+        guard let result = try? shell.run(
+            ["-C", worktree.path, "rev-parse", "--absolute-git-dir"], in: nil),
+            result.exitCode == 0 else { return nil }
+        let path = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !path.isEmpty else { return nil }
+        return URL(fileURLWithPath: path)
+    }
+
+    static func version() -> String? {
+        guard let result = try? GitShell.shared.run(["--version"], in: nil),
+              result.exitCode == 0 else { return nil }
+        return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    // MARK: - Status / branches / remotes
+
+    func status() throws -> RepoStatus {
+        // --no-optional-locks: read-only queries must not take the index lock or
+        // refresh stat info, so polling can never fight a concurrent `git commit`.
+        let result = try shell.runChecked(
+            ["-C", worktree.path, "--no-optional-locks",
+             "status", "--porcelain=v2", "--branch", "--untracked-files=normal"],
+            in: nil)
+        return GitParsers.parseStatus(result.stdout)
+    }
+
+    func branches() throws -> [Branch] {
+        let f = GitParsers.fieldSep
+        let format = "%(refname)\(f)%(refname:short)\(f)%(upstream:short)\(f)%(upstream:track)\(f)%(HEAD)"
+        let result = try shell.runChecked(
+            ["-C", worktree.path, "for-each-ref",
+             "--format=\(format)", "refs/heads", "refs/remotes"],
+            in: nil)
+        return GitParsers.parseBranches(result.stdout)
+    }
+
+    func remotes() throws -> [Remote] {
+        let result = try shell.runChecked(["-C", worktree.path, "remote", "-v"], in: nil)
+        return GitParsers.parseRemotes(result.stdout)
+    }
+
+    // MARK: - History
+
+    /// Newest-first, topologically ordered commits across all refs — the input to
+    /// the graph layout. `skip`/`limit` drive the "Load more" pagination.
+    func log(limit: Int, skip: Int = 0) throws -> [Commit] {
+        let f = GitParsers.fieldSep
+        let r = GitParsers.recordSep
+        let format = "%H\(f)%P\(f)%an\(f)%ae\(f)%aI\(f)%D\(f)%s\(r)"
+        var args = ["-C", worktree.path, "log", "--all",
+                    "--topo-order", "--date-order",
+                    "--pretty=tformat:\(format)",
+                    "--max-count=\(limit)"]
+        if skip > 0 { args.append("--skip=\(skip)") }
+        let result = try shell.runChecked(args, in: nil)
+        return GitParsers.parseLog(result.stdout)
+    }
+
+    /// Full header + changed-file list for the detail pane.
+    func commitDetail(_ hash: String) throws -> CommitDetail? {
+        let f = GitParsers.fieldSep
+        let r = GitParsers.recordSep
+        let format = "%H\(f)%an\(f)%ae\(f)%aI\(f)%P\(f)%s\(f)%b\(r)"
+        // -m --first-parent: for merges, show the diff against the first parent.
+        let result = try shell.runChecked(
+            ["-C", worktree.path, "show", "-m", "--first-parent",
+             "--format=\(format)", "--name-status", "--no-color", hash],
+            in: nil)
+        return GitParsers.parseCommitDetail(result.stdout)
+    }
+
+    // MARK: - Diffs
+
+    /// Unified diff for one worktree/index path.
+    func diff(path: String, staged: Bool) throws -> String {
+        var args = ["-C", worktree.path, "diff", "--no-color", "--no-ext-diff"]
+        if staged { args.append("--staged") }
+        args.append(contentsOf: ["--", path])
+        return try shell.runChecked(args, in: nil).stdout
+    }
+
+    /// Untracked files have no index entry; diff them against /dev/null.
+    func diffForUntracked(path: String) throws -> String {
+        let result = try shell.run(
+            ["-C", worktree.path, "diff", "--no-color", "--no-index",
+             "--", "/dev/null", path],
+            in: nil)
+        // --no-index exits 1 when files differ (i.e. always, here); 0/1 are both OK.
+        guard result.exitCode == 0 || result.exitCode == 1 else {
+            throw GitError(message: result.stderr, exitCode: result.exitCode)
+        }
+        return result.stdout
+    }
+
+    /// Patch of one file within a commit (for the detail pane).
+    func commitFileDiff(hash: String, path: String) throws -> String {
+        try shell.runChecked(
+            ["-C", worktree.path, "show", "-m", "--first-parent",
+             "--format=", "--no-color", hash, "--", path],
+            in: nil).stdout
+    }
+
+    /// Full staged patch — the input for LLM commit-message generation.
+    func stagedDiff() throws -> String {
+        try shell.runChecked(
+            ["-C", worktree.path, "diff", "--staged", "--no-color"], in: nil).stdout
+    }
+
+    /// `--stat` summary of the staged changes (always sent to the model in full).
+    func stagedDiffStat() throws -> String {
+        try shell.runChecked(
+            ["-C", worktree.path, "diff", "--staged", "--stat", "--no-color"], in: nil).stdout
+    }
+
+    // MARK: - Staging
+
+    func stage(paths: [String]) throws {
+        guard !paths.isEmpty else { return }
+        try shell.runChecked(["-C", worktree.path, "add", "--"] + paths, in: nil)
+    }
+
+    func stageAll() throws {
+        try shell.runChecked(["-C", worktree.path, "add", "-A"], in: nil)
+    }
+
+    func unstage(paths: [String]) throws {
+        guard !paths.isEmpty else { return }
+        do {
+            try shell.runChecked(["-C", worktree.path, "restore", "--staged", "--"] + paths, in: nil)
+        } catch {
+            // On an unborn HEAD (no commits yet) `restore --staged` has nothing to
+            // resolve HEAD against; `rm --cached` is the equivalent there.
+            try shell.runChecked(["-C", worktree.path, "rm", "--cached", "-r", "--ignore-unmatch", "--"] + paths, in: nil)
+        }
+    }
+
+    /// Reverts worktree changes for tracked paths. Untracked paths must be handled
+    /// by the caller (they need a file move to the Trash, not a git command).
+    func discard(paths: [String]) throws {
+        guard !paths.isEmpty else { return }
+        try shell.runChecked(["-C", worktree.path, "checkout", "--"] + paths, in: nil)
+    }
+
+    func commit(message: String, amend: Bool = false) throws {
+        var args = ["-C", worktree.path, "commit", "-F", "-"]
+        if amend { args.append("--amend") }
+        try shell.runChecked(args, in: nil, stdin: message)
+    }
+
+    // MARK: - Network
+
+    func fetch() throws {
+        try shell.runChecked(
+            ["-C", worktree.path, "fetch", "--all", "--prune", "--tags"], in: nil)
+    }
+
+    func pull(rebase: Bool) throws {
+        var args = ["-C", worktree.path, "pull", "--tags"]
+        args.append(rebase ? "--rebase" : "--no-rebase")
+        try shell.runChecked(args, in: nil)
+    }
+
+    func push(setUpstream: Bool, remote: String = "origin") throws {
+        var args = ["-C", worktree.path, "push"]
+        if setUpstream {
+            args.append(contentsOf: ["-u", remote, "HEAD"])
+        }
+        try shell.runChecked(args, in: nil)
+    }
+
+    // MARK: - Branches
+
+    func createBranch(_ name: String, at startPoint: String? = nil, checkout: Bool) throws {
+        var args = ["-C", worktree.path]
+        args.append(checkout ? "checkout" : "branch")
+        if checkout { args.append("-b") }
+        args.append(name)
+        if let startPoint { args.append(startPoint) }
+        try shell.runChecked(args, in: nil)
+    }
+
+    func checkout(branch: String) throws {
+        try shell.runChecked(["-C", worktree.path, "checkout", branch], in: nil)
+    }
+
+    /// Checks out a remote branch as a new local tracking branch.
+    func checkoutTracking(remoteBranch: String, localName: String) throws {
+        try shell.runChecked(
+            ["-C", worktree.path, "checkout", "-b", localName, "--track", remoteBranch],
+            in: nil)
+    }
+
+    func deleteBranch(_ name: String, force: Bool) throws {
+        try shell.runChecked(
+            ["-C", worktree.path, "branch", force ? "-D" : "-d", name], in: nil)
+    }
+
+    func renameBranch(old: String, new: String) throws {
+        try shell.runChecked(["-C", worktree.path, "branch", "-m", old, new], in: nil)
+    }
+
+    // MARK: - Merging
+
+    func merge(_ branch: String) throws {
+        try shell.runChecked(["-C", worktree.path, "merge", "--no-edit", branch], in: nil)
+    }
+
+    func mergeAbort() throws {
+        try shell.runChecked(["-C", worktree.path, "merge", "--abort"], in: nil)
+    }
+
+    /// Commits an in-progress merge after conflicts were resolved (staged).
+    func mergeContinue() throws {
+        try shell.runChecked(["-C", worktree.path, "commit", "--no-edit"], in: nil)
+    }
+
+    func mergeHead() throws -> String? {
+        let result = try shell.run(
+            ["-C", worktree.path, "rev-parse", "--verify", "-q", "MERGE_HEAD"], in: nil)
+        guard result.exitCode == 0 else { return nil }
+        let hash = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        return hash.isEmpty ? nil : hash
+    }
+
+    /// First line of MERGE_MSG — "Merge branch 'feature'" — for the banner label.
+    func mergeMessageLabel() -> String? {
+        guard let result = try? shell.run(
+            ["-C", worktree.path, "rev-parse", "--verify", "-q", "MERGE_HEAD"], in: nil),
+            result.exitCode == 0 else { return nil }
+        guard let gitDir = gitDir() else { return nil }
+        let messageURL = gitDir.appendingPathComponent("MERGE_MSG")
+        guard let text = try? String(contentsOf: messageURL, encoding: .utf8) else { return nil }
+        return text.components(separatedBy: "\n").first?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    func conflictedPaths() throws -> [String] {
+        let result = try shell.runChecked(
+            ["-C", worktree.path, "diff", "--name-only", "--diff-filter=U", "-z"], in: nil)
+        return result.stdout.components(separatedBy: "\0").filter { !$0.isEmpty }
+    }
+
+    /// Hands one conflicted file to an external merge tool (`git mergetool`).
+    /// Blocks until the tool exits. Afterwards the caller refreshes: if the tool
+    /// (or git's "was the merge successful?" prompt, which gets a headless EOF)
+    /// didn't stage the file, the UI still offers “Mark Resolved”.
+    func runMergeTool(_ tool: String, path: String) throws {
+        try shell.runChecked(
+            ["-C", worktree.path,
+             "-c", "mergetool.keepBackup=false",   // don't litter .orig files
+             "mergetool", "--no-prompt", "--tool=\(tool)", "--", path],
+            in: nil)
+    }
+
+    /// Marks a conflicted path resolved (for when the user fixed it by hand or in
+    /// a tool that didn't stage it).
+    func markResolved(path: String) throws {
+        try shell.runChecked(["-C", worktree.path, "add", "--", path], in: nil)
+    }
+
+    /// Resolves a conflicted path by checking out one side and staging it.
+    func resolveConflict(path: String, ours: Bool) throws {
+        try shell.runChecked(
+            ["-C", worktree.path, "checkout", ours ? "--ours" : "--theirs", "--", path],
+            in: nil)
+        try shell.runChecked(["-C", worktree.path, "add", "--", path], in: nil)
+    }
+
+    // MARK: - Stash
+
+    func stashList() throws -> [StashEntry] {
+        let f = GitParsers.fieldSep
+        let result = try shell.runChecked(
+            ["-C", worktree.path, "stash", "list", "--format=%gd\(f)%gs"], in: nil)
+        return GitParsers.parseStash(result.stdout)
+    }
+
+    func stashPush(message: String?, includeUntracked: Bool) throws {
+        var args = ["-C", worktree.path, "stash", "push"]
+        if includeUntracked { args.append("--include-untracked") }
+        if let message, !message.isEmpty {
+            args.append(contentsOf: ["-m", message])
+        }
+        try shell.runChecked(args, in: nil)
+    }
+
+    func stashApply(index: Int, pop: Bool) throws {
+        try shell.runChecked(
+            ["-C", worktree.path, "stash", pop ? "pop" : "apply", "stash@{\(index)}"],
+            in: nil)
+    }
+
+    func stashDrop(index: Int) throws {
+        try shell.runChecked(
+            ["-C", worktree.path, "stash", "drop", "stash@{\(index)}"], in: nil)
+    }
+
+    // MARK: - Commit-targeted actions
+
+    func cherryPick(_ hash: String) throws {
+        try shell.runChecked(["-C", worktree.path, "cherry-pick", hash], in: nil)
+    }
+
+    enum ResetMode: String {
+        case soft = "--soft"
+        case mixed = "--mixed"
+        case hard = "--hard"
+    }
+
+    func reset(to hash: String, mode: ResetMode) throws {
+        try shell.runChecked(["-C", worktree.path, "reset", mode.rawValue, hash], in: nil)
+    }
+
+    func revert(_ hash: String) throws {
+        try shell.runChecked(["-C", worktree.path, "revert", "--no-edit", hash], in: nil)
+    }
+
+    // MARK: - Clone
+
+    /// Clones `url` into `destination`. Progress goes to stderr (which we surface).
+    static func clone(_ url: String, into destination: URL) throws {
+        try GitShell.shared.runChecked(["clone", "--", url, destination.path], in: nil)
+    }
+}
