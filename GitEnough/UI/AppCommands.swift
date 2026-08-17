@@ -51,11 +51,13 @@ struct AppCommands: Commands {
             .disabled(appState.selectedRepository == nil)
 
             Button("Open in Terminal") {
-                if let repo = appState.selectedRepository,
-                   let terminal = NSWorkspace.shared.urlForApplication(
-                       withBundleIdentifier: "com.apple.Terminal") {
-                    NSWorkspace.shared.open([repo.url], withApplicationAt: terminal,
-                                            configuration: .init())
+                if let repo = appState.selectedRepository {
+                    // `open -a Terminal <path>` — avoids the NSWorkspace.OpenConfiguration
+                    // init() ambiguity and works on every stock macOS install.
+                    let process = Process()
+                    process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+                    process.arguments = ["-a", "Terminal", repo.path]
+                    try? process.run()
                 }
             }
             .disabled(appState.selectedRepository == nil)
