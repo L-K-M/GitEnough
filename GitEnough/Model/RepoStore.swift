@@ -93,14 +93,14 @@ final class RepoStore: ObservableObject {
     /// (discovery may re-offer it).
     @discardableResult
     func register(_ repo: Repository) -> Repository {
-        if !repositories.contains(repo) {
-            repositories.append(repo)
-            persist()
+        if let existing = repositories.first(where: { $0 == repo }) {
+            if excludedPaths.remove(repo.path) != nil { persistExclusions() }
+            return existing
         }
-        if excludedPaths.remove(repo.path) != nil {
-            persistExclusions()
-        }
-        return repositories.first { $0 == repo } ?? repo
+        repositories.append(repo)
+        persist()
+        if excludedPaths.remove(repo.path) != nil { persistExclusions() }
+        return repo
     }
     /// Adds already-validated repository URLs found by folder discovery. Skips
     /// paths the user removed earlier (removal sticks) and existing entries.

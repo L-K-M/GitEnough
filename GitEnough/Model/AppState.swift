@@ -118,9 +118,12 @@ final class AppState: ObservableObject {
     /// ContentView instead of failing silently.
     func addDroppedRepository(at url: URL) {
         addRepository(at: url) { [weak self] repo in
-            if repo == nil {
-                self?.dropAddError = "“\(url.lastPathComponent)” is not inside a git repository — nothing was added."
-            }
+            guard let self, repo == nil else { return }
+            // A drop reports through its own alert; clear the sheet-scoped error
+            // set inside addRepository so this failure doesn't resurface as a
+            // stale message the next time the Add sheet opens.
+            self.addRepositoryError = nil
+            self.dropAddError = "“\(url.lastPathComponent)” is not inside a git repository — nothing was added."
         }
     }
 
