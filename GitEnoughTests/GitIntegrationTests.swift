@@ -158,6 +158,30 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertEqual(content, "one\n")
     }
 
+    func testDiscardOnUnbornHEADKeepsEditedStagedFile() throws {
+        // A brand-new repo without commits: discard can only unstage, and must
+        // cope with a file that was edited *after* staging (rm --cached needs
+        // -f for that) — while never touching the worktree file.
+        let unbornURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitEnoughTests-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: unbornURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: unbornURL) }
+        _ = try GitShell.shared.runChecked(["init", "-b", "main"], in: unbornURL)
+        let unborn = GitClient(worktree: unbornURL)
+
+        let file = unbornURL.appendingPathComponent("new.txt")
+        try "first\n".write(to: file, atomically: true, encoding: .utf8)
+        try unborn.stage(paths: ["new.txt"])
+        try "edited after staging\n".write(to: file, atomically: true, encoding: .utf8)
+
+        try unborn.discard(paths: ["new.txt"])
+        let status = try unborn.status()
+        XCTAssertTrue(status.staged.isEmpty)
+        XCTAssertEqual(status.unstaged.map(\.path), ["new.txt"])
+        let content = try String(contentsOf: file, encoding: .utf8)
+        XCTAssertEqual(content, "edited after staging\n")
+    }
+
     func testDiffRoundTrip() throws {
         try write("one\nchanged\n", to: "a.txt")
         let diff = try client.diff(path: "a.txt", staged: false)
