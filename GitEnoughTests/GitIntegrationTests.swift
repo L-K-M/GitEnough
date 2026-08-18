@@ -185,8 +185,9 @@ final class GitIntegrationTests: XCTestCase {
     }
 
     func testSyntheticToolRefsAreExcludedFromHistory() throws {
-        // A commit reachable ONLY through a filter-branch-style backup ref and a
-        // bisect ref must not leak into the graph.
+        // A commit reachable ONLY through filter-branch-style backup refs, bisect
+        // markers, prefetch refs, notes, and rewrite bookkeeping must not leak
+        // into the graph — every hidden namespace gets covered.
         try run(["checkout", "-b", "scratch"])
         try write("scratch\n", to: "scratch.txt")
         try run(["add", "scratch.txt"])
@@ -194,13 +195,20 @@ final class GitIntegrationTests: XCTestCase {
         let scratchHash = try GitShell.shared.runChecked(
             ["-C", repoURL.path, "rev-parse", "HEAD"], in: nil).stdout
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        try run(["checkout", "main"])
+        try run(["checkout", "-"])  // back to where we came from (main)
         try run(["branch", "-D", "scratch"])
-        try run(["update-ref", "refs/original/refs/heads/scratch", scratchHash])
-        try run(["update-ref", "refs/bisect/bad", scratchHash])
+        let hiddenRefs = ["refs/original/refs/heads/scratch",
+                          "refs/bisect/bad",
+                          "refs/prefetch/remotes/origin/main",
+                          "refs/notes/commits",
+                          "refs/rewritten/scratch"]
+        for ref in hiddenRefs {
+            try run(["update-ref", ref, scratchHash])
+        }
         defer {
-            try? run(["update-ref", "-d", "refs/original/refs/heads/scratch"])
-            try? run(["update-ref", "-d", "refs/bisect/bad"])
+            for ref in hiddenRefs {
+                try? run(["update-ref", "-d", ref])
+            }
         }
 
         let commits = try client.log(limit: 50)
