@@ -13,7 +13,12 @@ struct ChangesView: View {
     @State private var showingStashSheet = false
 
     private var conflicts: [FileChange] { viewModel.status.conflicted }
-    private var mergeInProgress: Bool { viewModel.mergeState.isMerging }
+    /// Conflicted files must be visible whenever *any* sequencer operation is in
+    /// progress — merges, but also rebases, cherry-picks, and reverts, whose
+    /// unmerged entries otherwise vanish from the UI entirely.
+    private var conflictUIActive: Bool {
+        viewModel.mergeState.isInProgress || viewModel.mergeState.isResolvingConflicts
+    }
 
     var body: some View {
         HSplitView {
@@ -66,7 +71,7 @@ struct ChangesView: View {
 
     private var fileList: some View {
         List {
-            if mergeInProgress {
+            if conflictUIActive {
                 Section {
                     ForEach(conflicts) { file in
                         ConflictRow(path: file.path, viewModel: viewModel)

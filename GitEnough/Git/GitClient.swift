@@ -326,6 +326,80 @@ final class GitClient {
         try shell.runChecked(["-C", worktree.path, "add", "--", path], in: nil)
     }
 
+    // MARK: - Sequencer state (merge / rebase / cherry-pick / revert)
+
+    /// Which sequencer operation is currently in progress, if any.
+    ///
+    /// Rebase is detected via the `rebase-merge`/`rebase-apply` state directories and
+    /// checked FIRST: during a conflicted rebase git writes MERGE_MSG (and other
+    /// sequencer files) but *not* MERGE_HEAD, so merge-only detection misses it —
+    /// exactly the gap that used to make conflicted rebases invisible in the UI.
+    func inProgressOperation() -> InProgressOperation? {
+        guard let gitDir = gitDir() else { return nil }
+        let fileManager = FileManager.default
+        func stateExists(_ relative: String) -> Bool {
+            fileManager.fileExists(atPath: gitDir.appendingPathComponent(relative).path)
+        }
+        if stateExists("rebase-merge") || stateExists("rebase-apply") { return .rebase }
+        if stateExists("CHERRY_PICK_HEAD") { return .cherryPick }
+        if stateExists("REVERT_HEAD") { return .revert }
+        let mergeHead = (try? mergeHead()) ?? nil
+        return mergeHead != nil ? .merge : nil
+    }
+
+    /// A human label for the operation banner: MERGE_MSG's first line for merges,
+    /// "Rebasing <branch>" for rebases, a plain phrase otherwise.
+    func operationLabel(for operation: InProgressOperation) -> String? {
+        switch operation {
+        case .merge:
+            return mergeMessageLabel()
+        case .rebase:
+            guard let gitDir = gitDir() else { return nil }
+            // head-name holds the full ref of the branch being rebased.
+            for relative in ["rebase-merge/head-name", "rebase-apply/head-name"] {
+                let url = gitDir.appendingPathComponent(relative)
+                guard let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
+                let ref = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                if ref.hasPrefix("refs/heads/") {
+                    return "Rebasing \(String(ref.dropFirst("refs/heads/".count)))"
+                }
+                if !ref.isEmpty { return "Rebasing \(ref)" }
+            }
+            return nil
+        case .cherryPick:
+            return "Cherry-pick in progress"
+        case .revert:
+            return "Revert in progress"
+        }
+    }
+
+    /// Continues an in-progress rebase. Safe headless: GIT_EDITOR=true (set by
+    /// GitShell) makes `--continue` accept git's prepared commit message instead
+    /// of blocking on an editor.
+    func rebaseContinue() throws {
+        try shell.runChecked(["-C", worktree.path, "rebase", "--continue"], in: nil)
+    }
+
+    func rebaseAbort() throws {
+        try shell.runChecked(["-C", worktree.path, "rebase", "--abort"], in: nil)
+    }
+
+    func cherryPickContinue() throws {
+        try shell.runChecked(["-C", worktree.path, "cherry-pick", "--continue"], in: nil)
+    }
+
+    func cherryPickAbort() throws {
+        try shell.runChecked(["-C", worktree.path, "cherry-pick", "--abort"], in: nil)
+    }
+
+    func revertContinue() throws {
+        try shell.runChecked(["-C", worktree.path, "revert", "--continue"], in: nil)
+    }
+
+    func revertAbort() throws {
+        try shell.runChecked(["-C", worktree.path, "revert", "--abort"], in: nil)
+    }
+
     // MARK: - Stash
 
     func stashList() throws -> [StashEntry] {
