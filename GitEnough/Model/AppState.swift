@@ -39,7 +39,14 @@ final class AppState: ObservableObject {
     /// discovery). Shared with SettingsView's @AppStorage.
     static let discoveryFolderKey = "discoveryFolder"
 
+    /// UserDefaults key for the auto-fetch interval in minutes (0 = never).
+    /// Shared with SettingsView's @AppStorage.
+    static let autoFetchMinutesKey = "autoFetchMinutes"
+
     private var discoveryTimer: Timer?
+    /// repo path → last auto-fetch, so switching repos doesn't make a
+    /// never-fetched repo wait out an interval it earned elsewhere.
+    private var lastAutoFetchByRepo: [String: Date] = [:]
 
     /// The view model for the currently selected repository, if any.
     var activeViewModel: RepoViewModel? {
@@ -55,6 +62,7 @@ final class AppState: ObservableObject {
         // Watch-folder discovery: cheap file-system scan, no git invocation.
         let timer = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
             self?.scanDiscoveryFolder()
+            self?.autoFetchIfDue()
         }
         RunLoop.main.add(timer, forMode: .common)
         discoveryTimer = timer
@@ -163,6 +171,24 @@ final class AppState: ObservableObject {
                 self?.store.summaries = result
             }
         }
+    }
+
+    // MARK: - Auto-fetch
+
+    /// Fetches the active repository when the Settings → General interval
+    /// (Never / 5 / 15 / 30 / 60 minutes) has elapsed. Shares the one-minute
+    /// discovery timer; skipped while an operation is already running so an
+    /// automatic fetch never queues behind (or double-books) a manual one.
+    private func autoFetchIfDue() {
+        let minutes = UserDefaults.standard.integer(forKey: Self.autoFetchMinutesKey)
+        guard minutes > 0 else { return }
+        guard let viewModel = activeViewModel, !viewModel.isBusy else { return }
+        // Multiply in Double: minutes comes from UserDefaults, where a
+        // corrupted/out-of-range value must not trap on Int overflow.
+        let lastFetch = lastAutoFetchByRepo[viewModel.repo.path] ?? .distantPast
+        guard Date().timeIntervalSince(lastFetch) >= TimeInterval(minutes) * 60 else { return }
+        lastAutoFetchByRepo[viewModel.repo.path] = Date()
+        viewModel.fetch()
     }
 
     // MARK: - Watch-folder discovery
