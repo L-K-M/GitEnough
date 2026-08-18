@@ -51,6 +51,16 @@ struct MergeTool: Identifiable, Hashable {
         known.filter { $0.isInstalled }
     }
 
+    /// Detection result, computed once at launch: probing ~9 executables plus
+    /// ~9 app bundles per conflicted-file row (on the main thread) made the
+    /// conflict list stutter. `rescan()` refreshes after the user installs a
+    /// tool (Settings → Merge Tools).
+    private(set) static var installed: [MergeTool] = detectInstalled()
+
+    static func rescan() {
+        installed = detectInstalled()
+    }
+
     var isInstalled: Bool {
         let fm = FileManager.default
         if executablePaths.contains(where: { fm.isExecutableFile(atPath: $0) }) {
