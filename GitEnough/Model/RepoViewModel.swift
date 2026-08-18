@@ -328,13 +328,19 @@ final class RepoViewModel: ObservableObject, Identifiable {
     /// the file if needed). A plain file append, not a git command — the
     /// post-op snapshot picks up the change and the row disappears.
     func ignore(_ change: FileChange) {
-        perform("Updating .gitignore…", includeHistory: false) { _ in
-            let url = self.repo.url.appendingPathComponent(".gitignore")
-            let existing = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
-            let lines = existing.components(separatedBy: "\n")
-            guard !lines.contains(change.path), !lines.contains("/" + change.path) else { return }
-            let separator = existing.isEmpty || existing.hasSuffix("\n") ? "" : "\n"
-            let updated = existing + separator + "/" + change.path + "\n"
+        // gitignore doesn't affect tracked files — ignoring one would be a
+        // silent no-op, so refuse it here like the UI does.
+        guard change.isUntracked else { return }
+        perform("Updating .gitignore…", includeHistory: false) { client in
+            let url = client.worktree.appendingPathComponent(".gitignore")
+            // Only a genuinely missing file maps to empty: a *read* failure
+            // (e.g. non-UTF-8 bytes) must throw rather than let the write
+            // below clobber the existing file with a single line.
+            let existing = FileManager.default.fileExists(atPath: url.path)
+                ? try String(contentsOf: url, encoding: .utf8)
+                : ""
+            let updated = GitIgnore.appending(change.path, to: existing)
+            guard updated != existing else { return }
             try updated.write(to: url, atomically: true, encoding: .utf8)
         }
     }

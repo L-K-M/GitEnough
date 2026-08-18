@@ -198,6 +198,19 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertEqual(content, "from main\n")
     }
 
+    func testGitIgnoreEscapedPatternMatchesLiterally() throws {
+        // A filename full of glob metacharacters must be ignored *literally*.
+        try write("data\n", to: "report[1].txt")
+        let updated = GitIgnore.appending("report[1].txt", to: "")
+        try updated.write(to: repoURL.appendingPathComponent(".gitignore"),
+                          atomically: true, encoding: .utf8)
+        // check-ignore exits 0 (and echoes the path) when the path is ignored.
+        let result = try GitShell.shared.runChecked(
+            ["-C", repoURL.path, "check-ignore", "report[1].txt"], in: nil)
+        XCTAssertEqual(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines),
+                       "report[1].txt")
+    }
+
     func testValidationHelpers() throws {
         XCTAssertTrue(GitClient.isRepository(at: repoURL))
         // git reports the physical path; temporaryDirectory may sit behind the
