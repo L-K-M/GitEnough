@@ -171,20 +171,17 @@ final class GitIntegrationTests: XCTestCase {
     }
 
     func testStashCommitsAreExcludedFromHistory() throws {
+        let before = try client.log(limit: 50)
+        XCTAssertEqual(before.count, 4)
+
         try write("dirty\n", to: "a.txt")
         try client.stashPush(message: "wip", includeUntracked: false)
+        XCTAssertFalse(try client.stashList().isEmpty)
 
-        // The graph must show the four real commits — not the stash's synthetic
-        // commits ("On <branch>: …" with a custom message, or "WIP on <branch>:
-        // …" without one, plus the "index on …" parent), which --all would
-        // otherwise include via refs/stash.
-        let commits = try client.log(limit: 50)
-        XCTAssertEqual(commits.count, 4)
-        XCTAssertFalse(commits.contains {
-            $0.subject.hasPrefix("On ") || $0.subject.hasPrefix("WIP on ")
-                || $0.subject.hasPrefix("index on ")
-        })
-        XCTAssertEqual(Set(commits.map(\.hash)).count, 4)
+        // Stashing must not change the visible graph. Without --exclude=refs/stash,
+        // --all leaks the stash's synthetic WIP/index commits as extra lanes.
+        let after = try client.log(limit: 50)
+        XCTAssertEqual(after.map(\.hash), before.map(\.hash))
     }
 
     func testMergeConflictDetectionAndOursResolution() throws {
