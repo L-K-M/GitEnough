@@ -75,6 +75,9 @@ final class GitShell {
         env["GIT_TERMINAL_PROMPT"] = "0"
         env["GIT_ASKPASS"] = "/usr/bin/true"
         env["SSH_ASKPASS"] = "/usr/bin/true"
+        // Without a TTY ssh may ignore SSH_ASKPASS and probe /dev/tty instead;
+        // force makes the fail-fast override deterministic (OpenSSH 8.4+).
+        env["SSH_ASKPASS_REQUIRE"] = "force"
         env["LC_ALL"] = "en_US.UTF-8"
         // Keep hooks and editor invocations from opening an interactive editor.
         env["GIT_EDITOR"] = "/usr/bin/true"
