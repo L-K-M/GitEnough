@@ -56,12 +56,16 @@ struct SidebarView: View {
         List(selection: selection) {
             Section {
                 if sortOrder == .manual {
-                    repoRows
-                        .onMove { offsets, destination in
-                            store.move(fromOffsets: offsets, toOffset: destination)
-                        }
+                    ForEach(visibleRepositories) { repo in
+                        rowContent(repo)
+                    }
+                    .onMove { offsets, destination in
+                        store.move(fromOffsets: offsets, toOffset: destination)
+                    }
                 } else {
-                    repoRows
+                    ForEach(visibleRepositories) { repo in
+                        rowContent(repo)
+                    }
                 }
             } header: {
                 Text("Repositories")
@@ -104,24 +108,23 @@ struct SidebarView: View {
         }
     }
 
-    private var repoRows: some View {
-        ForEach(visibleRepositories) { repo in
-            SidebarRow(repo: repo, summary: store.summaries[repo.path] ?? .unknown)
-                .tag(repo.path)
-                .contextMenu {
-                    Button("Show in Finder") {
-                        NSWorkspace.shared.activateFileViewerSelecting([repo.url])
-                    }
-                    Button("Copy Path") {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(repo.path, forType: .string)
-                    }
-                    Divider()
-                    Button("Remove from GitEnough") {
-                        appState.remove(repo)
-                    }
+    @ViewBuilder
+    private func rowContent(_ repo: Repository) -> some View {
+        SidebarRow(repo: repo, summary: store.summaries[repo.path] ?? .unknown)
+            .tag(repo.path)
+            .contextMenu {
+                Button("Show in Finder") {
+                    NSWorkspace.shared.activateFileViewerSelecting([repo.url])
                 }
-        }
+                Button("Copy Path") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(repo.path, forType: .string)
+                }
+                Divider()
+                Button("Remove from GitEnough") {
+                    appState.remove(repo)
+                }
+            }
     }
 
     private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
