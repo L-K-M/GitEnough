@@ -116,10 +116,11 @@ struct GraphLayout: Equatable {
                 let firstParent = commit.parents[0]
                 if let existing = lanes.indices.first(where: { $0 != column && lanes[$0] == firstParent }) {
                     // First parent already has a lane (it is the second parent of a
-                    // merge further up): fold this lane into it.
+                    // merge further up): fold this lane into it. The join takes the
+                    // TARGET lane's color — consistent with merge-node joins.
                     layout.segments.append(Segment(fromRow: row, fromColumn: column,
                                                    toRow: row + 1, toColumn: existing,
-                                                   colorIndex: laneColors[column],
+                                                   colorIndex: laneColors[existing],
                                                    kind: .joinExisting))
                     lanes[column] = nil
                 } else {

@@ -162,6 +162,18 @@ final class GraphLayoutTests: XCTestCase {
         XCTAssertTrue(hasSegment(layout, fromRow: 3, fromColumn: 1, toRow: 4, toColumn: 0, kind: .joinExisting))
     }
 
+    /// Truncated history: the last row folds into a lane whose parent lies
+    /// below the loaded window, so the join must reach toRow == commitCount
+    /// (clipped at the canvas bottom) instead of stopping short.
+    func testLastRowFoldReachesCommitCount() {
+        let layout = GraphLayout.layout(commits: [
+            commit("a", parents: ["ghost"]),
+            commit("b", parents: ["ghost"]),
+        ])
+        XCTAssertTrue(hasSegment(layout, fromRow: 1, fromColumn: 1,
+                                 toRow: 2, toColumn: 0, kind: .joinExisting))
+    }
+
     // MARK: - Attachment invariant
 
     /// Deterministic RNG so a failing history reproduces from its seed.
