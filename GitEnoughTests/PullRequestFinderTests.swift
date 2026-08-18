@@ -190,6 +190,22 @@ final class PullRequestFinderTests: XCTestCase {
         XCTAssertEqual(probed as? [String], ["gitlab"])
     }
 
+    func testGitHubKindHitsGitHubEndpoint() async {
+        let pr = "[{\"number\": 7, \"title\": \"Add graph\", \"head\": {\"ref\": \"add-graph\", "
+            + "\"repo\": {\"full_name\": \"acme/widget\"}}}]"
+        let probed: NSMutableArray = []
+        MockURLProtocol.handler = { request in
+            let url = request.url!
+            probed.add(url.host == "api.github.com" ? "github" : "other")
+            return (MockURLProtocol.ok(url), Data(pr.utf8))
+        }
+        defer { MockURLProtocol.handler = nil }
+
+        let pull = await stubbedFinder().findOpenPullRequest(for: github, headBranch: "add-graph")
+        XCTAssertEqual(pull?.number, 7)
+        XCTAssertEqual(probed as? [String], ["github"])
+    }
+
     func testGenericHostTriesForgejoThenGitLab() async {
         let mr = "[{\"iid\": 5, \"title\": \"Topic\", \"source_branch\": \"topic\"}]"
         let probed: NSMutableArray = []
