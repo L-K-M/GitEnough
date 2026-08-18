@@ -235,7 +235,7 @@ final class GitClient {
     /// (`git check-ignore`), so "Ignore" doesn't pile redundant specific
     /// entries under a broader pattern like `*.log` or `build/`.
     func isIgnored(path: String) -> Bool {
-        guard let result = try? shell.run(
+        guard let result = try? run(
             ["-C", worktree.path, "check-ignore", "-q", "--", path], in: nil) else { return false }
         return result.exitCode == 0
     }
@@ -383,7 +383,7 @@ final class GitClient {
             args.append(contentsOf: ["-a", "-m", message])
         }
         args.append(contentsOf: [name, hash])
-        try shell.runChecked(args, in: nil)
+        try runChecked(args, in: nil)
     }
 
     // MARK: - Merging
@@ -529,27 +529,27 @@ final class GitClient {
     /// GitShell) makes `--continue` accept git's prepared commit message instead
     /// of blocking on an editor.
     func rebaseContinue() throws {
-        try shell.runChecked(["-C", worktree.path, "rebase", "--continue"], in: nil)
+        try runChecked(["-C", worktree.path, "rebase", "--continue"], in: nil)
     }
 
     func rebaseAbort() throws {
-        try shell.runChecked(["-C", worktree.path, "rebase", "--abort"], in: nil)
+        try runChecked(["-C", worktree.path, "rebase", "--abort"], in: nil)
     }
 
     func cherryPickContinue() throws {
-        try shell.runChecked(["-C", worktree.path, "cherry-pick", "--continue"], in: nil)
+        try runChecked(["-C", worktree.path, "cherry-pick", "--continue"], in: nil)
     }
 
     func cherryPickAbort() throws {
-        try shell.runChecked(["-C", worktree.path, "cherry-pick", "--abort"], in: nil)
+        try runChecked(["-C", worktree.path, "cherry-pick", "--abort"], in: nil)
     }
 
     func revertContinue() throws {
-        try shell.runChecked(["-C", worktree.path, "revert", "--continue"], in: nil)
+        try runChecked(["-C", worktree.path, "revert", "--continue"], in: nil)
     }
 
     func revertAbort() throws {
-        try shell.runChecked(["-C", worktree.path, "revert", "--abort"], in: nil)
+        try runChecked(["-C", worktree.path, "revert", "--abort"], in: nil)
     }
 
     // MARK: - Stash
