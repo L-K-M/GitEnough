@@ -36,25 +36,24 @@ struct ChangesView: View {
             // every stage/unstage); clear it only when the file is gone from
             // both lists (committed, discarded, resolved).
             guard let selected = selectedFile else { return }
-            let inStaged = status.staged.contains { $0.path == selected.path }
-            let inUnstaged = status.unstaged.contains { $0.path == selected.path }
-            switch (inStaged, inUnstaged, selectionIsStaged) {
-            case (false, false, _):
+            let stagedMatch = status.staged.first { $0.path == selected.path }
+            let unstagedMatch = status.unstaged.first { $0.path == selected.path }
+            switch (stagedMatch, unstagedMatch) {
+            case (nil, nil):
                 selectedFile = nil
-            case (false, true, true):
+            case (nil, let unstaged?):
                 // Unstaged it: follow the file into the Changes list.
                 selectionIsStaged = false
-                selectedFile = status.unstaged.first { $0.path == selected.path } ?? selected
-            case (true, false, false):
+                selectedFile = unstaged
+            case (let staged?, nil):
                 // Staged it: follow the file into the Staged list.
                 selectionIsStaged = true
-                selectedFile = status.staged.first { $0.path == selected.path } ?? selected
-            default:
-                // Still in its list (or in both — partially staged file).
-                // Refresh the cached value so status-column changes don't leave
-                // it stale; assigning an equal value is a no-op (no reload).
-                let current = selectionIsStaged ? status.staged : status.unstaged
-                selectedFile = current.first { $0.path == selected.path } ?? selected
+                selectedFile = staged
+            case (let staged?, let unstaged?):
+                // In both lists (partially staged file): keep the current side,
+                // refreshing the cached value so status-column changes don't
+                // leave it stale (assigning an equal value is a no-op).
+                selectedFile = selectionIsStaged ? staged : unstaged
             }
         }
         .confirmationDialog("Discard changes?",
