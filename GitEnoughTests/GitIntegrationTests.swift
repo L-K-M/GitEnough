@@ -198,6 +198,18 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertEqual(content, "from main\n")
     }
 
+    func testCreateTagLightweightAndAnnotated() throws {
+        let head = try XCTUnwrap(try client.log(limit: 1).first?.hash)
+        try client.createTag(name: "v1.0", message: nil, at: head)
+        try client.createTag(name: "v2.0-beta", message: "Second release", at: head)
+        let after = try XCTUnwrap(try client.log(limit: 1).first)
+        let tags = after.decorations.filter { $0.kind == .tag }.map(\.name)
+        XCTAssertTrue(tags.contains("v1.0"))
+        XCTAssertTrue(tags.contains("v2.0-beta"))
+        // Invalid refnames surface as git errors, not silent success.
+        XCTAssertThrowsError(try client.createTag(name: "not a tag", message: nil, at: head))
+    }
+
     func testValidationHelpers() throws {
         XCTAssertTrue(GitClient.isRepository(at: repoURL))
         // git reports the physical path; temporaryDirectory may sit behind the
