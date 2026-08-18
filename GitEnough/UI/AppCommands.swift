@@ -7,6 +7,7 @@ struct AppCommands: Commands {
 
     @ObservedObject var appState: AppState
     @AppStorage("pullRebase") private var pullRebase = false
+    @Environment(\.openWindow) private var openWindow
 
     private var active: RepoViewModel? { appState.activeViewModel }
 
@@ -74,6 +75,9 @@ struct AppCommands: Commands {
                 .keyboardShortcut("2", modifiers: .command)
             Button("Branches") { appState.selectedTab = .branches }
                 .keyboardShortcut("3", modifiers: .command)
+            Divider()
+            Button("Git Activity History") { openWindow(id: "git-activity") }
+                .keyboardShortcut("a", modifiers: [.shift, .command])
         }
     }
 }

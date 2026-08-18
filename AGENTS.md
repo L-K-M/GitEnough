@@ -51,7 +51,8 @@ xcodebuild -project GitEnough.xcodeproj -scheme GitEnough -destination 'platform
   exclusions), AppState (selection, view-model cache, watch-folder scans),
   RepoViewModel (per-repo state + ops; all git calls on one serial DispatchQueue
   per repo), RepoWatcher (cheap .git mtime polling), RepoDiscovery (watch-folder
-  filesystem scan).
+  filesystem scan), GitActivityLog (per-repo rolling command log feeding the
+  status bar), GitActivityStore (persistent app-wide JSONL command history).
 - `GitEnough/AI/` — LLMConfiguration, CommitMessageGenerator, KeychainStore.
 - `GitEnough/Tools/` — MergeTool detection (git mergetool integration).
 - `GitEnough/UI/` — SwiftUI views. `GraphMetrics` ties the graph Canvas and the
