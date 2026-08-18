@@ -30,6 +30,14 @@ final class GitActivityLog {
         var isRunning: Bool { finishedAt == nil }
         /// False while the entry is still running — check `isRunning` first.
         var succeeded: Bool { exitCode == 0 }
+
+        /// Setters are private to Entry, so the log transitions entries through
+        /// this instead of poking properties directly.
+        mutating func markFinished(at date: Date, exitCode: Int32?, stderrTail: String?) {
+            finishedAt = date
+            self.exitCode = exitCode
+            self.stderrTail = stderrTail
+        }
     }
 
     /// Called after every begin/finish, on the mutating thread, OUTSIDE the
@@ -70,12 +78,11 @@ final class GitActivityLog {
             lock.unlock()
             return
         }
-        storage[index].finishedAt = now
-        storage[index].exitCode = exitCode
         // stderr can echo a remote URL on network errors — redact before storing.
         let redacted = stderr.map(Self.redactCredentials)
         let tail = redacted.map(Self.stderrTail)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        storage[index].stderrTail = (tail?.isEmpty ?? true) ? nil : tail
+        storage[index].markFinished(at: now, exitCode: exitCode,
+                                    stderrTail: (tail?.isEmpty ?? true) ? nil : tail)
         let snapshot = storage
         lock.unlock()
         onChange?(snapshot)
