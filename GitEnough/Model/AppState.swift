@@ -100,14 +100,20 @@ final class AppState: ObservableObject {
                     return
                 }
                 guard let validated else {
-                    self.addRepositoryError = "“\(url.lastPathComponent)” is not inside a git repository."
+                    // The sheet is the only surface that renders this error — the
+                    // drop path reports through dropAddError's alert instead.
+                    if self.showingAddRepository {
+                        self.addRepositoryError = "“\(url.lastPathComponent)” is not inside a git repository."
+                    }
                     completion?(nil)
                     return
                 }
                 let repo = self.store.register(Repository(url: validated))
                 self.select(repo)
                 self.refreshSummaries()
-                self.addRepositoryError = nil
+                if !self.showingAddRepository {
+                    self.addRepositoryError = nil
+                }
                 completion?(repo)
             }
         }
@@ -118,12 +124,8 @@ final class AppState: ObservableObject {
     /// ContentView instead of failing silently.
     func addDroppedRepository(at url: URL) {
         addRepository(at: url) { [weak self] repo in
-            guard let self, repo == nil else { return }
-            // A drop reports through its own alert; clear the sheet-scoped error
-            // set inside addRepository so this failure doesn't resurface as a
-            // stale message the next time the Add sheet opens.
-            self.addRepositoryError = nil
-            self.dropAddError = "“\(url.lastPathComponent)” is not inside a git repository — nothing was added."
+            guard repo == nil else { return }
+            self?.dropAddError = "“\(url.lastPathComponent)” is not inside a git repository — nothing was added."
         }
     }
 
