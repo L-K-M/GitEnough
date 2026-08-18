@@ -178,7 +178,7 @@ struct SidebarView: View {
                 }
                 guard let url else { return }
                 DispatchQueue.main.async {
-                    _ = appState.addRepository(at: url)
+                    appState.addDroppedRepository(at: url)
                 }
             }
         }

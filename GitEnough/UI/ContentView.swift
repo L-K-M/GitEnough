@@ -27,6 +27,12 @@ struct ContentView: View {
         .sheet(isPresented: $appState.showingAddRepository) {
             AddRepositoryView()
         }
+        .alert("Couldn't add repository",
+               isPresented: dropErrorPresented) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(appState.dropAddError ?? "")
+        }
         .onAppear {
             appState.refreshSummaries()
             appState.scanDiscoveryFolder()
@@ -40,6 +46,15 @@ struct ContentView: View {
         } message: {
             Text("GitEnough drives the git command-line tool, which ships with the Xcode Command Line Tools. Install them, then relaunch GitEnough.")
         }
+    }
+
+    private var dropErrorPresented: Binding<Bool> {
+        Binding(
+            get: { appState.dropAddError != nil },
+            set: { isPresented in
+                if !isPresented { appState.dropAddError = nil }
+            }
+        )
     }
 
     private var gitUnavailable: Binding<Bool> {

@@ -26,6 +26,10 @@ final class AppState: ObservableObject {
     @Published var showingAddRepository = false
     @Published var addRepositoryError: String?
 
+    /// Why a dropped folder couldn't be added. Unlike the Add sheet, a drop has
+    /// no inline error surface, so ContentView shows this as an alert.
+    @Published var dropAddError: String?
+
     /// New-branch sheet (triggered from the Repository menu, shown by the detail pane).
     @Published var showingNewBranch = false
 
@@ -83,18 +87,48 @@ final class AppState: ObservableObject {
         _ = viewModel(for: repo)
     }
 
-    /// Registers the repository containing `url` and selects it. On failure, sets
-    /// `addRepositoryError` for the sheet to show.
-    @discardableResult
-    func addRepository(at url: URL) -> Bool {
-        if let repo = store.add(url: url) {
-            select(repo)
-            refreshSummaries()
-            addRepositoryError = nil
-            return true
+    /// Registers the repository containing `url` and selects it.
+    ///
+    /// Validation shells out to git (twice), so it runs on a background queue —
+    /// never the main thread; a slow or network volume must not beachball the
+    /// UI while the folder is probed. `completion` runs on the main thread with
+    /// the registered repository, or nil when `url` isn't inside a git repository
+    /// (in which case `addRepositoryError` is set for the sheet to show).
+    func addRepository(at url: URL, completion: ((Repository?) -> Void)? = nil) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let validated = GitClient.isRepository(at: url) ? GitClient.topLevel(of: url) : nil
+            DispatchQueue.main.async { [weak self] in
+                guard let self else {
+                    completion?(nil)
+                    return
+                }
+                guard let validated else {
+                    // The sheet is the only surface that renders this error — the
+                    // drop path reports through dropAddError's alert instead.
+                    if self.showingAddRepository {
+                        self.addRepositoryError = "“\(url.lastPathComponent)” is not inside a git repository."
+                    }
+                    completion?(nil)
+                    return
+                }
+                let repo = self.store.register(Repository(url: validated))
+                self.select(repo)
+                self.refreshSummaries()
+                // Success invalidates any previous failure message, sheet or not.
+                self.addRepositoryError = nil
+                completion?(repo)
+            }
         }
-        addRepositoryError = "“\(url.lastPathComponent)” is not inside a git repository."
-        return false
+    }
+
+    /// Drop-path wrapper around `addRepository`: a drop has no inline error
+    /// surface (the Add sheet isn't open), so failures surface as an alert on
+    /// ContentView instead of failing silently.
+    func addDroppedRepository(at url: URL) {
+        addRepository(at: url) { [weak self] repo in
+            guard repo == nil else { return }
+            self?.dropAddError = "“\(url.lastPathComponent)” is not inside a git repository — nothing was added."
+        }
     }
 
     func remove(_ repo: Repository) {
