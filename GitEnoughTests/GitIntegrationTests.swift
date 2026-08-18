@@ -170,6 +170,18 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertTrue(try client.stashList().isEmpty)
     }
 
+    func testStashCommitsAreExcludedFromHistory() throws {
+        try write("dirty\n", to: "a.txt")
+        try client.stashPush(message: "wip", includeUntracked: false)
+
+        // The graph must show the four real commits — not the stash's synthetic
+        // "WIP on main…" commits, which --all would otherwise include via refs/stash.
+        let commits = try client.log(limit: 50)
+        XCTAssertEqual(commits.count, 4)
+        XCTAssertFalse(commits.contains { $0.subject.contains("WIP on") })
+        XCTAssertEqual(Set(commits.map(\.hash)).count, 4)
+    }
+
     func testMergeConflictDetectionAndOursResolution() throws {
         // Create a conflicting change on a second branch.
         try run(["checkout", "-b", "conflicter"])
