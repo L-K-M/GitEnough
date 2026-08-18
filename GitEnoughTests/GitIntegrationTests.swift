@@ -177,6 +177,7 @@ final class GitIntegrationTests: XCTestCase {
         try write("dirty\n", to: "a.txt")
         try client.stashPush(message: "wip", includeUntracked: false)
         XCTAssertFalse(try client.stashList().isEmpty)
+        defer { try? run(["stash", "drop", "stash@{0}"]) }
 
         // Stashing must not change the visible graph. Without --exclude=refs/stash,
         // --all leaks the stash's synthetic WIP/index commits as extra lanes.
@@ -202,13 +203,14 @@ final class GitIntegrationTests: XCTestCase {
                           "refs/prefetch/remotes/origin/main",
                           "refs/notes/commits",
                           "refs/rewritten/scratch"]
-        for ref in hiddenRefs {
-            try run(["update-ref", ref, scratchHash])
-        }
+        // Register cleanup *before* creation so a mid-loop throw still unwinds.
         defer {
             for ref in hiddenRefs {
                 try? run(["update-ref", "-d", ref])
             }
+        }
+        for ref in hiddenRefs {
+            try run(["update-ref", ref, scratchHash])
         }
 
         let commits = try client.log(limit: 50)
