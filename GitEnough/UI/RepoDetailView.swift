@@ -93,7 +93,7 @@ struct RepoDetailView: View {
                     } label: {
                         Label("Publish", systemImage: "arrow.up.to.line")
                     }
-                    .disabled(viewModel.isBusy)
+                    .disabled(viewModel.isBusy || viewModel.remotes.isEmpty)
                     .help("Push and set upstream to \(viewModel.publishRemoteName)")
                 } else {
                     Button {
