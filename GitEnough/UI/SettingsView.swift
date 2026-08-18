@@ -24,6 +24,7 @@ private struct GeneralSettingsView: View {
 
     @AppStorage("pullRebase") private var pullRebase = false
     @AppStorage(AppState.discoveryFolderKey) private var discoveryFolder = ""
+    @AppStorage(AppState.autoFetchMinutesKey) private var autoFetchMinutes = 0
     @EnvironmentObject var appState: AppState
 
     var body: some View {
@@ -33,6 +34,14 @@ private struct GeneralSettingsView: View {
                 Text("Rebase the current branch").tag(true)
             }
             .pickerStyle(.radioGroup)
+
+            Picker("Automatically fetch the active repository:", selection: $autoFetchMinutes) {
+                Text("Never").tag(0)
+                Text("Every 5 minutes").tag(5)
+                Text("Every 15 minutes").tag(15)
+                Text("Every 30 minutes").tag(30)
+                Text("Every hour").tag(60)
+            }
 
             Section("Repository discovery") {
                 HStack {

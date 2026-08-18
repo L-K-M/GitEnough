@@ -35,7 +35,12 @@ final class AppState: ObservableObject {
     /// discovery). Shared with SettingsView's @AppStorage.
     static let discoveryFolderKey = "discoveryFolder"
 
+    /// UserDefaults key for the auto-fetch interval in minutes (0 = never).
+    /// Shared with SettingsView's @AppStorage.
+    static let autoFetchMinutesKey = "autoFetchMinutes"
+
     private var discoveryTimer: Timer?
+    private var lastAutoFetch = Date.distantPast
 
     /// The view model for the currently selected repository, if any.
     var activeViewModel: RepoViewModel? {
@@ -51,6 +56,7 @@ final class AppState: ObservableObject {
         // Watch-folder discovery: cheap file-system scan, no git invocation.
         let timer = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
             self?.scanDiscoveryFolder()
+            self?.autoFetchIfDue()
         }
         RunLoop.main.add(timer, forMode: .common)
         discoveryTimer = timer
@@ -132,6 +138,21 @@ final class AppState: ObservableObject {
                 self?.store.summaries = result
             }
         }
+    }
+
+    // MARK: - Auto-fetch
+
+    /// Fetches the active repository when the Settings → General interval
+    /// (Never / 5 / 15 / 30 / 60 minutes) has elapsed. Shares the one-minute
+    /// discovery timer; skipped while an operation is already running so an
+    /// automatic fetch never queues behind (or double-books) a manual one.
+    private func autoFetchIfDue() {
+        let minutes = UserDefaults.standard.integer(forKey: Self.autoFetchMinutesKey)
+        guard minutes > 0 else { return }
+        guard Date().timeIntervalSince(lastAutoFetch) >= TimeInterval(minutes * 60) else { return }
+        guard let viewModel = activeViewModel, !viewModel.isBusy else { return }
+        lastAutoFetch = Date()
+        viewModel.fetch()
     }
 
     // MARK: - Watch-folder discovery
