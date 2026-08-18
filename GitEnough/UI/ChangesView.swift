@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 /// The Changes tab: conflict resolution (while merging), staged/unstaged file
 /// lists, the commit box with AI message generation, and the diff of the selected
@@ -130,6 +131,7 @@ struct ChangesView: View {
             Section {
                 ForEach(viewModel.status.staged) { file in
                     FileRow(file: file,
+                            repoURL: viewModel.repo.url,
                             isSelected: selectedFile?.path == file.path && selectionIsStaged,
                             actionIcon: "minus.circle",
                             actionHelp: "Unstage") {
@@ -156,6 +158,7 @@ struct ChangesView: View {
             Section {
                 ForEach(viewModel.status.unstaged) { file in
                     FileRow(file: file,
+                            repoURL: viewModel.repo.url,
                             isSelected: selectedFile?.path == file.path && !selectionIsStaged,
                             actionIcon: "plus.circle",
                             actionHelp: "Stage") {
@@ -308,6 +311,7 @@ struct ChangesView: View {
 private struct FileRow: View {
 
     let file: FileChange
+    let repoURL: URL
     let isSelected: Bool
     let actionIcon: String
     let actionHelp: String
@@ -338,6 +342,30 @@ private struct FileRow: View {
         .contextMenu {
             Button(action: onAction) {
                 Label(actionHelp, systemImage: actionIcon)
+            }
+            Divider()
+            if FileManager.default.fileExists(
+                atPath: repoURL.appendingPathComponent(file.path).path) {
+                Button {
+                    NSWorkspace.shared.activateFileViewerSelecting(
+                        [repoURL.appendingPathComponent(file.path)])
+                } label: {
+                    Label("Show in Finder", systemImage: "folder")
+                }
+            }
+            Button {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(file.path, forType: .string)
+            } label: {
+                Label("Copy Path", systemImage: "doc.on.doc")
+            }
+            if FileManager.default.fileExists(
+                atPath: repoURL.appendingPathComponent(file.path).path) {
+                Button {
+                    NSWorkspace.shared.open(repoURL.appendingPathComponent(file.path))
+                } label: {
+                    Label("Open in External Editor", systemImage: "arrow.up.forward.app")
+                }
             }
             Divider()
             Button("Discard Changes…", role: .destructive, action: onDiscard)
