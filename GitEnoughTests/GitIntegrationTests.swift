@@ -248,6 +248,50 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertEqual(content, "from rebaser\n")
     }
 
+    func testRebaseSkipDropsTheReplayedCommit() throws {
+        try run(["checkout", "-b", "rebaser"])
+        try write("from rebaser\n", to: "a.txt")
+        try run(["add", "a.txt"])
+        try run(["commit", "-m", "Change a on rebaser"])
+        try run(["checkout", "main"])
+        try write("from main\n", to: "a.txt")
+        try run(["add", "a.txt"])
+        try run(["commit", "-m", "Change a on main"])
+        try run(["checkout", "rebaser"])
+        XCTAssertThrowsError(try GitShell.shared.runChecked(["rebase", "main"], in: repoURL))
+        XCTAssertTrue(client.rebaseInProgress())
+
+        // Skip works even with the conflict unresolved: the replayed commit is
+        // dropped and the (single-commit) rebase completes.
+        try client.rebaseSkip()
+        XCTAssertFalse(client.rebaseInProgress())
+        let commits = try client.log(limit: 10)
+        XCTAssertEqual(commits.first?.subject, "Change a on main")
+        let content = try String(contentsOf: repoURL.appendingPathComponent("a.txt"), encoding: .utf8)
+        XCTAssertEqual(content, "from main\n")
+    }
+
+    func testRebaseApplyBackendIsDetected() throws {
+        // The apply backend stores state in rebase-apply (without the
+        // rebase-apply/applying marker that would mean `git am`).
+        try run(["checkout", "-b", "rebaser"])
+        try write("from rebaser\n", to: "a.txt")
+        try run(["add", "a.txt"])
+        try run(["commit", "-m", "Change a on rebaser"])
+        try run(["checkout", "main"])
+        try write("from main\n", to: "a.txt")
+        try run(["add", "a.txt"])
+        try run(["commit", "-m", "Change a on main"])
+        try run(["checkout", "rebaser"])
+
+        XCTAssertThrowsError(try GitShell.shared.runChecked(
+            ["-c", "rebase.backend=apply", "rebase", "main"], in: repoURL))
+        XCTAssertTrue(client.rebaseInProgress())
+
+        try client.rebaseAbort()
+        XCTAssertFalse(client.rebaseInProgress())
+    }
+
     func testValidationHelpers() throws {
         XCTAssertTrue(GitClient.isRepository(at: repoURL))
         // git reports the physical path; temporaryDirectory may sit behind the

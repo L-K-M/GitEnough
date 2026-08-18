@@ -38,13 +38,20 @@ final class GitClient {
     }
 
     /// The `.git` directory (a file for linked worktrees — resolved by git).
-    func gitDir() -> URL? {
+    /// Cached: the absolute git dir is fixed for a worktree's lifetime, and
+    /// this feeds per-refresh state checks (rebase detection), so it must not
+    /// spawn a process every time.
+    private lazy var resolvedGitDir: URL? = {
         guard let result = try? shell.run(
             ["-C", worktree.path, "rev-parse", "--absolute-git-dir"], in: nil),
             result.exitCode == 0 else { return nil }
         let path = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !path.isEmpty else { return nil }
         return URL(fileURLWithPath: path)
+    }()
+
+    func gitDir() -> URL? {
+        resolvedGitDir
     }
 
     static func version() -> String? {
@@ -277,20 +284,32 @@ final class GitClient {
 
     // MARK: - Rebase
 
-    /// True while a rebase is stopped (conflicts or edit) — rebase-merge for the
-    /// merge backend, rebase-apply for the apply backend. The state lives in the
-    /// (worktree-specific) git dir, which `--absolute-git-dir` resolves for us.
+    /// True while a rebase is stopped (conflicts or edit). Detection mirrors
+    /// git's own wt-status logic: rebase-merge for the merge backend, or
+    /// rebase-apply for the apply backend — unless rebase-apply/applying
+    /// exists, which marks an interrupted `git am`, not a rebase.
     func rebaseInProgress() -> Bool {
         guard let gitDir = gitDir() else { return false }
         let fileManager = FileManager.default
-        return fileManager.fileExists(atPath: gitDir.appendingPathComponent("rebase-merge").path)
-            || fileManager.fileExists(atPath: gitDir.appendingPathComponent("rebase-apply").path)
+        if fileManager.fileExists(atPath: gitDir.appendingPathComponent("rebase-merge").path) {
+            return true
+        }
+        let rebaseApply = gitDir.appendingPathComponent("rebase-apply")
+        return fileManager.fileExists(atPath: rebaseApply.path)
+            && !fileManager.fileExists(atPath: rebaseApply.appendingPathComponent("applying").path)
     }
 
     /// Continues a rebase whose conflicts were resolved (staged). GIT_EDITOR is
     /// pinned to /usr/bin/true by the shell, so this never blocks on an editor.
     func rebaseContinue() throws {
         try shell.runChecked(["-C", worktree.path, "rebase", "--continue"], in: nil)
+    }
+
+    /// Drops the commit currently being replayed and moves on — the escape
+    /// hatch for "my change is already upstream / I don't want this commit
+    /// after all" mid-rebase. Works even with unresolved conflicts.
+    func rebaseSkip() throws {
+        try shell.runChecked(["-C", worktree.path, "rebase", "--skip"], in: nil)
     }
 
     func rebaseAbort() throws {

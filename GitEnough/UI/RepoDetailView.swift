@@ -215,6 +215,11 @@ struct RepoDetailView: View {
                 viewModel.rebaseAbort()
             }
             .disabled(viewModel.isBusy)
+            Button("Skip Commit") {
+                viewModel.rebaseSkip()
+            }
+            .disabled(viewModel.isBusy)
+            .help("Drop the commit being replayed and continue the rebase without it")
             Button("Continue Rebase") {
                 viewModel.rebaseContinue()
             }

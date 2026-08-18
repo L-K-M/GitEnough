@@ -249,6 +249,9 @@ final class RepoViewModel: ObservableObject, Identifiable {
     /// message) when conflicts are still open.
     func rebaseContinue() { perform("Continuing rebase…") { try $0.rebaseContinue() } }
 
+    /// Drops the commit being replayed and continues the rebase without it.
+    func rebaseSkip() { perform("Skipping commit…") { try $0.rebaseSkip() } }
+
     func rebaseAbort() { perform("Aborting rebase…") { try $0.rebaseAbort() } }
 
     /// Opens the external merge tool for one conflicted file. The tool process

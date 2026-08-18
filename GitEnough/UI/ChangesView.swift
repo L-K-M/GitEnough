@@ -195,9 +195,12 @@ struct ChangesView: View {
                 }
                 .keyboardShortcut(.return, modifiers: .command)
                 .buttonStyle(.borderedProminent)
+                // A plain commit mid-rebase derails the replay — the banner's
+                // Continue/Abort/Skip are the only safe actions there.
                 .disabled(viewModel.draftCommitMessage
                     .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                     || (!viewModel.amendLastCommit && viewModel.status.staged.isEmpty)
+                    || viewModel.mergeState.rebaseInProgress
                     || viewModel.isBusy)
             }
         }
