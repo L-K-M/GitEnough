@@ -61,6 +61,9 @@ struct HistoryView: View {
                 activeFilter = trimmed
             }
         }
+        .onDisappear {
+            filterDebounceTask?.cancel()
+        }
         .onChange(of: viewModel.commits.map(\.hash)) { _, hashes in
             // Keep the selection across refreshes; drop it if the commit vanished
             // (e.g. after a reset --hard).
@@ -168,10 +171,10 @@ struct HistoryView: View {
                 }
             }
             .background(Color(nsColor: .textBackgroundColor))
-            // Reset the scroll offset when toggling the filter — otherwise a
-            // deep scroll position can land the filtered (shorter) list in
-            // blank space.
-            .id(isFiltering)
+            // Reset the scroll offset whenever the (debounced) filter changes —
+            // otherwise a deep scroll position can land the shorter result
+            // list in blank space. Constant ("") while unfiltered.
+            .id(activeFilter)
         }
     }
 
@@ -190,6 +193,10 @@ struct HistoryView: View {
                     .foregroundStyle(.secondary)
                     .fixedSize()
                     .accessibilityLabel("\(matchCount) of \(viewModel.commits.count) commits shown")
+            }
+            // Visible whenever there's text to clear — including
+            // whitespace-only input that doesn't (yet) activate filtering.
+            if !filterText.isEmpty {
                 Button {
                     filterText = ""
                     filterDebounceTask?.cancel()
