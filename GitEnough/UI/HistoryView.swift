@@ -8,10 +8,26 @@ struct HistoryView: View {
     @ObservedObject var viewModel: RepoViewModel
 
     @State private var selectedHash: String?
+    @State private var filterText = ""
     @State private var branchNameForNewBranch = ""
     @State private var commitForNewBranch: Commit?
     @State private var commitToCheckout: Commit?
     @State private var commitToReset: Commit?
+
+    private var isFiltering: Bool { !filterText.isEmpty }
+
+    /// Commits matching the filter (subject / author / hash prefix,
+    /// case-insensitive). Only searches the loaded pages — "Load older
+    /// commits…" widens the searchable set.
+    private var visibleCommits: [Commit] {
+        guard isFiltering else { return viewModel.commits }
+        let needle = filterText.lowercased()
+        return viewModel.commits.filter {
+            $0.subject.lowercased().contains(needle)
+                || $0.author.lowercased().contains(needle)
+                || $0.hash.lowercased().hasPrefix(needle)
+        }
+    }
 
     private var headRow: Int? {
         viewModel.commits.firstIndex { $0.isHead }
@@ -80,40 +96,83 @@ struct HistoryView: View {
     // MARK: - List
 
     private var historyList: some View {
-        ScrollView {
-            VStack(spacing: 0) {
-                HStack(alignment: .top, spacing: 0) {
-                    GraphCanvasView(layout: viewModel.layout,
-                                    commitCount: viewModel.commits.count,
-                                    headRow: headRow,
-                                    selectedRow: selectedRow)
-                    LazyVStack(spacing: 0) {
-                        ForEach(Array(viewModel.commits.enumerated()), id: \.element.id) { index, commit in
-                            CommitRowView(commit: commit,
-                                          isSelected: commit.hash == selectedHash,
-                                          isHead: index == headRow)
-                            .frame(height: GraphMetrics.rowHeight)
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                selectedHash = commit.hash
+        VStack(spacing: 0) {
+            filterBar
+            Divider()
+            ScrollView {
+                VStack(spacing: 0) {
+                    HStack(alignment: .top, spacing: 0) {
+                        // The graph only aligns with the full, unfiltered row
+                        // sequence — hide it while filtering.
+                        if !isFiltering {
+                            GraphCanvasView(layout: viewModel.layout,
+                                            commitCount: viewModel.commits.count,
+                                            headRow: headRow,
+                                            selectedRow: selectedRow)
+                        }
+                        LazyVStack(spacing: 0) {
+                            ForEach(visibleCommits) { commit in
+                                CommitRowView(commit: commit,
+                                              isSelected: commit.hash == selectedHash,
+                                              isHead: commit.isHead)
+                                .frame(height: GraphMetrics.rowHeight)
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    selectedHash = commit.hash
+                                }
+                                .contextMenu {
+                                    commitContextMenu(commit)
+                                }
                             }
-                            .contextMenu {
-                                commitContextMenu(commit)
+                            if isFiltering && visibleCommits.isEmpty {
+                                Text("No commits match “\(filterText)”")
+                                    .font(.callout)
+                                    .foregroundStyle(.secondary)
+                                    .frame(maxWidth: .infinity, alignment: .center)
+                                    .padding(.vertical, 24)
                             }
                         }
+                        .padding(.trailing, 12)
                     }
-                    .padding(.trailing, 12)
-                }
-                if viewModel.canLoadMoreHistory {
-                    Button("Load older commits…") {
-                        viewModel.loadMoreHistory()
+                    if viewModel.canLoadMoreHistory {
+                        Button("Load older commits…") {
+                            viewModel.loadMoreHistory()
+                        }
+                        .buttonStyle(.link)
+                        .padding(.vertical, 10)
+                        .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.link)
-                    .padding(.vertical, 10)
-                    .frame(maxWidth: .infinity)
                 }
             }
+            .background(Color(nsColor: .textBackgroundColor))
         }
+    }
+
+    // MARK: - Filter bar
+
+    private var filterBar: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "line.3.horizontal.decrease.circle")
+                .foregroundStyle(.secondary)
+            TextField("Filter by message, author, or hash", text: $filterText)
+                .textFieldStyle(.plain)
+            if isFiltering {
+                Text("\(visibleCommits.count) of \(viewModel.commits.count)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize()
+                Button {
+                    filterText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Clear filter")
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
         .background(Color(nsColor: .textBackgroundColor))
     }
 
