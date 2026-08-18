@@ -38,6 +38,14 @@ struct RepoDetailView: View {
                     BranchesView(viewModel: viewModel)
                 }
             }
+            // Re-key the tab content per repository: @State (history selection +
+            // filter, changes selection, …) must not survive a repo switch. It
+            // used to: the old selected commit hash lingered into the new repo's
+            // HistoryView, and when the hash existed in both repos the detail
+            // pane spun forever — selectCommit was never re-run for the new view
+            // model. A remount also resets scroll to the top (HEAD), which is
+            // where you want to land on a fresh repo anyway.
+            .id(repo.path)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             Divider()
