@@ -149,6 +149,10 @@ struct HistoryView: View {
                 }
             }
             .background(Color(nsColor: .textBackgroundColor))
+            // Reset the scroll offset when toggling the filter — otherwise a
+            // deep scroll position can land the filtered (shorter) list in
+            // blank space.
+            .id(isFiltering)
         }
     }
 
@@ -158,7 +162,7 @@ struct HistoryView: View {
         HStack(spacing: 6) {
             Image(systemName: "line.3.horizontal.decrease.circle")
                 .foregroundStyle(.secondary)
-            TextField("Filter by message, author, or hash", text: $filterText)
+            TextField("Filter by subject, author, or hash", text: $filterText)
                 .textFieldStyle(.plain)
                 .autocorrectionDisabled()
             if isFiltering {
@@ -166,6 +170,7 @@ struct HistoryView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize()
+                    .accessibilityLabel("\(matchCount) of \(viewModel.commits.count) commits shown")
                 Button {
                     filterText = ""
                 } label: {
@@ -175,7 +180,9 @@ struct HistoryView: View {
                 .buttonStyle(.plain)
                 .help("Clear filter")
                 .accessibilityLabel("Clear filter")
-                .keyboardShortcut(.cancelAction)
+                // No Esc shortcut here: .cancelAction would capture Esc
+                // window-wide while a filter is active, fighting the sheets
+                // and confirmation dialogs this view also hosts.
             }
         }
         .padding(.horizontal, 10)
