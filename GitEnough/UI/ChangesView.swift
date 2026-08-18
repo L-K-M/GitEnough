@@ -30,11 +30,27 @@ struct ChangesView: View {
             viewModel.selectFile(file, staged: selectionIsStaged)
         }
         .onChange(of: viewModel.status) { _, status in
-            // Drop the selection if the file vanished from the lists (committed,
-            // discarded, resolved).
-            if let file = selectedFile,
-               !status.staged.contains(file) && !status.unstaged.contains(file) {
+            // Keep the selection pointed at the file as it moves between the
+            // staged and unstaged lists (FileChange equality includes the status
+            // columns, so comparing whole values would drop the selection on
+            // every stage/unstage); clear it only when the file is gone from
+            // both lists (committed, discarded, resolved).
+            guard let selected = selectedFile else { return }
+            let inStaged = status.staged.contains { $0.path == selected.path }
+            let inUnstaged = status.unstaged.contains { $0.path == selected.path }
+            switch (inStaged, inUnstaged, selectionIsStaged) {
+            case (false, false, _):
                 selectedFile = nil
+            case (false, true, true):
+                // Unstaged it: follow the file into the Changes list.
+                selectionIsStaged = false
+                selectedFile = status.unstaged.first { $0.path == selected.path } ?? selected
+            case (true, false, false):
+                // Staged it: follow the file into the Staged list.
+                selectionIsStaged = true
+                selectedFile = status.staged.first { $0.path == selected.path } ?? selected
+            default:
+                break // still in its list (or in both — partially staged file)
             }
         }
         .confirmationDialog("Discard changes?",
@@ -80,7 +96,7 @@ struct ChangesView: View {
             Section {
                 ForEach(viewModel.status.staged) { file in
                     FileRow(file: file,
-                            isSelected: selectedFile == file && selectionIsStaged,
+                            isSelected: selectedFile?.path == file.path && selectionIsStaged,
                             actionIcon: "minus.circle",
                             actionHelp: "Unstage") {
                         selectedFile = file
@@ -106,7 +122,7 @@ struct ChangesView: View {
             Section {
                 ForEach(viewModel.status.unstaged) { file in
                     FileRow(file: file,
-                            isSelected: selectedFile == file && !selectionIsStaged,
+                            isSelected: selectedFile?.path == file.path && !selectionIsStaged,
                             actionIcon: "plus.circle",
                             actionHelp: "Stage") {
                         selectedFile = file
