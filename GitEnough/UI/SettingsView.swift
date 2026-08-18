@@ -26,10 +26,11 @@ private struct GeneralSettingsView: View {
     @AppStorage(AppState.discoveryFolderKey) private var discoveryFolder = ""
     @EnvironmentObject var appState: AppState
 
-    /// Cached: `git --version` shells out synchronously, and calling it in `body`
-    /// spawned a fresh process on every Settings render. Static stored
-    /// properties initialize lazily and exactly once.
-    private static let gitVersion = GitClient.version() ?? "not found"
+    /// `git --version` shells out synchronously — computing it in `body` spawned a
+    /// process on every Settings render. Fetched once per Settings appearance
+    /// instead, so it also picks up a CLT install without relaunching (matching
+    /// the git-missing alert's reprobe flow).
+    @State private var gitVersion: String?
 
     var body: some View {
         Form {
@@ -60,8 +61,9 @@ private struct GeneralSettingsView: View {
             }
 
             LabeledContent("git") {
-                Text(Self.gitVersion)
+                Text(gitVersion ?? "Checking…")
                     .foregroundStyle(.secondary)
+                    .onAppear { gitVersion = GitClient.version() ?? "not found" }
             }
         }
         .formStyle(.grouped)
