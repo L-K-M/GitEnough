@@ -271,11 +271,14 @@ private struct FileRow: View {
                 Label(actionHelp, systemImage: actionIcon)
             }
             Divider()
-            Button {
-                NSWorkspace.shared.activateFileViewerSelecting(
-                    [repoURL.appendingPathComponent(file.path)])
-            } label: {
-                Label("Show in Finder", systemImage: "folder")
+            if FileManager.default.fileExists(
+                atPath: repoURL.appendingPathComponent(file.path).path) {
+                Button {
+                    NSWorkspace.shared.activateFileViewerSelecting(
+                        [repoURL.appendingPathComponent(file.path)])
+                } label: {
+                    Label("Show in Finder", systemImage: "folder")
+                }
             }
             Button {
                 NSPasteboard.general.clearContents()
