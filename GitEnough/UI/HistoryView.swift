@@ -8,17 +8,34 @@ struct HistoryView: View {
     @ObservedObject var viewModel: RepoViewModel
 
     @State private var selectedHash: String?
+    @State private var filterText = ""
     @State private var branchNameForNewBranch = ""
     @State private var commitForNewBranch: Commit?
     @State private var commitToCheckout: Commit?
     @State private var commitToReset: Commit?
 
+    private var isFiltering: Bool {
+        !filterText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// While filtering, the lane graph is re-laid-out for the matching subset —
+    /// the same convention Fork/Tower use — so rows and lanes stay aligned.
+    /// (The full layout is a single fast pass; recomputing per keystroke for a
+    /// few hundred loaded commits is effectively free.)
+    private var visibleCommits: [Commit] {
+        HistorySearch.filter(viewModel.commits, query: filterText)
+    }
+
+    private var visibleLayout: GraphLayout {
+        isFiltering ? GraphLayout.layout(commits: visibleCommits) : viewModel.layout
+    }
+
     private var headRow: Int? {
-        viewModel.commits.firstIndex { $0.isHead }
+        visibleCommits.firstIndex { $0.isHead }
     }
 
     private var selectedRow: Int? {
-        viewModel.commits.firstIndex { $0.hash == selectedHash }
+        visibleCommits.firstIndex { $0.hash == selectedHash }
     }
 
     var body: some View {
@@ -80,41 +97,81 @@ struct HistoryView: View {
     // MARK: - List
 
     private var historyList: some View {
-        ScrollView {
-            VStack(spacing: 0) {
-                HStack(alignment: .top, spacing: 0) {
-                    GraphCanvasView(layout: viewModel.layout,
-                                    commitCount: viewModel.commits.count,
-                                    headRow: headRow,
-                                    selectedRow: selectedRow)
-                    LazyVStack(spacing: 0) {
-                        ForEach(Array(viewModel.commits.enumerated()), id: \.element.id) { index, commit in
-                            CommitRowView(commit: commit,
-                                          isSelected: commit.hash == selectedHash,
-                                          isHead: index == headRow)
-                            .frame(height: GraphMetrics.rowHeight)
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                selectedHash = commit.hash
-                            }
-                            .contextMenu {
-                                commitContextMenu(commit)
+        VStack(spacing: 0) {
+            filterBar
+            Divider()
+            ScrollView {
+                VStack(spacing: 0) {
+                    HStack(alignment: .top, spacing: 0) {
+                        GraphCanvasView(layout: visibleLayout,
+                                        commitCount: visibleCommits.count,
+                                        headRow: headRow,
+                                        selectedRow: selectedRow)
+                        LazyVStack(spacing: 0) {
+                            ForEach(Array(visibleCommits.enumerated()), id: \.element.id) { index, commit in
+                                CommitRowView(commit: commit,
+                                              isSelected: commit.hash == selectedHash,
+                                              isHead: index == headRow)
+                                    .frame(height: GraphMetrics.rowHeight)
+                                    .contentShape(Rectangle())
+                                    .onTapGesture {
+                                        selectedHash = commit.hash
+                                    }
+                                    .contextMenu {
+                                        commitContextMenu(commit)
+                                    }
                             }
                         }
+                        .padding(.trailing, 12)
                     }
-                    .padding(.trailing, 12)
-                }
-                if viewModel.canLoadMoreHistory {
-                    Button("Load older commits…") {
-                        viewModel.loadMoreHistory()
+                    if isFiltering && visibleCommits.isEmpty {
+                        VStack(spacing: 8) {
+                            Image(systemName: "line.3.horizontal.decrease.circle")
+                                .font(.system(size: 28))
+                                .foregroundStyle(.tertiary)
+                            Text("No commits match “\(filterText)”")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 40)
                     }
-                    .buttonStyle(.link)
-                    .padding(.vertical, 10)
-                    .frame(maxWidth: .infinity)
+                    if viewModel.canLoadMoreHistory {
+                        Button("Load older commits…") {
+                            viewModel.loadMoreHistory()
+                        }
+                        .buttonStyle(.link)
+                        .padding(.vertical, 10)
+                        .frame(maxWidth: .infinity)
+                    }
                 }
             }
         }
         .background(Color(nsColor: .textBackgroundColor))
+    }
+
+    private var filterBar: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+            TextField("Filter commits (message, author, hash, branch)", text: $filterText)
+                .textFieldStyle(.plain)
+            if isFiltering {
+                Text("\(visibleCommits.count) of \(viewModel.commits.count)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Button {
+                    filterText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
+                .help("Clear filter")
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
     }
 
     @ViewBuilder
