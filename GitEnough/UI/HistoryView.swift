@@ -186,6 +186,8 @@ struct HistoryView: View {
             }
         }
         .padding(20)
+    }
+
     private func newTagSheet(for commit: Commit) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Tag \(commit.shortHash)")
