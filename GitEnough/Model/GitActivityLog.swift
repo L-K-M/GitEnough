@@ -16,7 +16,8 @@ final class GitActivityLog {
     /// is deliberately NOT captured — only argv and a stderr tail. Note that
     /// free text passed as an argument (e.g. `stash push -m <message>`) IS
     /// part of argv and therefore appears in `command`.
-    struct Entry: Identifiable, Equatable {
+    /// Codable so the global history store can persist finished entries.
+    struct Entry: Identifiable, Equatable, Codable {
         let id: UUID
         /// The command as displayed, e.g. `commit -F -` or `fetch --prune --all`
         /// (the leading `-C <worktree>` is stripped; the repo is implied).
@@ -40,9 +41,20 @@ final class GitActivityLog {
         }
     }
 
+    /// Lifecycle events for observers that maintain their own derived state
+    /// (the global activity-history store). Fired after `onChange`, on the
+    /// mutating thread, outside the lock.
+    enum Event {
+        case began(Entry)
+        case finished(Entry)
+    }
+
     /// Called after every begin/finish, on the mutating thread, OUTSIDE the
     /// lock (so observers can safely re-enter, e.g. read `entries`).
     var onChange: (([Entry]) -> Void)?
+
+    /// Called once per lifecycle transition, same threading as `onChange`.
+    var onEvent: ((Event) -> Void)?
 
     private let capacity: Int
     private let lock = NSLock()
@@ -69,6 +81,7 @@ final class GitActivityLog {
         let snapshot = storage
         lock.unlock()
         onChange?(snapshot)
+        onEvent?(.began(entry))
         return entry.id
     }
 
@@ -83,9 +96,11 @@ final class GitActivityLog {
         let tail = redacted.map(Self.stderrTail)?.trimmingCharacters(in: .whitespacesAndNewlines)
         storage[index].markFinished(at: now, exitCode: exitCode,
                                     stderrTail: (tail?.isEmpty ?? true) ? nil : tail)
+        let updated = storage[index]
         let snapshot = storage
         lock.unlock()
         onChange?(snapshot)
+        onEvent?(.finished(updated))
     }
 
     /// Must be called with the lock held. Drops oldest finished entries;

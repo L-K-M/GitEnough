@@ -22,6 +22,14 @@ struct GitEnoughApp: App {
             AppCommands(appState: appState)
         }
 
+        /// The persistent git command history ("shell history") — one shared
+        /// window, reachable via View → Git Activity History (⇧⌘A) or the
+        /// status-bar activity popover.
+        Window("Git Activity", id: "git-activity") {
+            ActivityHistoryView(store: appState.activityStore)
+        }
+        .defaultSize(width: 760, height: 480)
+
         Settings {
             SettingsView()
                 .environmentObject(appState)

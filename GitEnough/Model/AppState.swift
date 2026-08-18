@@ -35,6 +35,10 @@ final class AppState: ObservableObject {
 
     private var viewModels: [String: RepoViewModel] = [:]
 
+    /// App-wide persistent git command history ("shell history" window).
+    /// Every repo view model's activity log forwards events here.
+    let activityStore = GitActivityStore()
+
     /// UserDefaults key for the watch folder (Settings → General → Repository
     /// discovery). Shared with SettingsView's @AppStorage.
     static let discoveryFolderKey = "discoveryFolder"
@@ -82,6 +86,9 @@ final class AppState: ObservableObject {
         let vm = RepoViewModel(repo: repo)
         vm.onStatusChange = { [weak self] summary in
             self?.store.summaries[repo.path] = summary
+        }
+        vm.activityLog.onEvent = { [weak self] event in
+            self?.activityStore.record(event, repoName: repo.name, repoPath: repo.path)
         }
         viewModels[repo.path] = vm
         vm.start()

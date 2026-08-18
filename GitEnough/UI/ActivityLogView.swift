@@ -11,12 +11,24 @@ struct ActivityLogView: View {
     /// Chronological order (oldest first), as stored by GitActivityLog.
     let entries: [GitActivityLog.Entry]
 
+    @Environment(\.openWindow) private var openWindow
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("Recent git activity")
-                .font(.headline)
-                .padding([.horizontal, .top], 12)
-                .padding(.bottom, 6)
+            HStack {
+                Text("Recent git activity")
+                    .font(.headline)
+                Spacer()
+                Button {
+                    openWindow(id: "git-activity")
+                } label: {
+                    Label("History", systemImage: "clock.arrow.circlepath")
+                }
+                .controlSize(.small)
+                .help("Open the persistent, searchable history of all repositories' git commands")
+            }
+            .padding([.horizontal, .top], 12)
+            .padding(.bottom, 6)
             if entries.isEmpty {
                 Text("No git commands yet.")
                     .foregroundStyle(.secondary)
