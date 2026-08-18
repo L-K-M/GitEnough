@@ -26,6 +26,12 @@ private struct GeneralSettingsView: View {
     @AppStorage(AppState.discoveryFolderKey) private var discoveryFolder = ""
     @EnvironmentObject var appState: AppState
 
+    /// `git --version` shells out synchronously — computing it in `body` spawned a
+    /// process on every Settings render. Fetched once per Settings appearance
+    /// instead, so it also picks up a CLT install without relaunching (matching
+    /// the git-missing alert's reprobe flow).
+    @State private var gitVersion: String?
+
     var body: some View {
         Form {
             Picker("When pulling:", selection: $pullRebase) {
@@ -55,8 +61,15 @@ private struct GeneralSettingsView: View {
             }
 
             LabeledContent("git") {
-                Text(GitClient.version() ?? "not found")
+                Text(gitVersion ?? "Checking…")
                     .foregroundStyle(.secondary)
+                    .task {
+                        // Off the main thread: even one synchronous process
+                        // spawn would beachball Settings briefly.
+                        gitVersion = await Task.detached {
+                            GitClient.version() ?? "not found"
+                        }.value
+                    }
             }
         }
         .formStyle(.grouped)
