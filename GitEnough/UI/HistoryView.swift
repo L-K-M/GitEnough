@@ -16,15 +16,16 @@ struct HistoryView: View {
 
     private var isFiltering: Bool { !filterText.isEmpty }
 
-    /// Commits matching the filter (subject / author / hash prefix,
-    /// case-insensitive). Only searches the loaded pages — "Load older
-    /// commits…" widens the searchable set.
+    /// Commits matching the filter (subject / author / hash prefix).
+    /// `localizedStandardContains` is Finder-style: case- *and*
+    /// diacritic-insensitive, so "muller" finds "Müller". Only searches the
+    /// loaded pages — "Load older commits…" widens the searchable set.
     private var visibleCommits: [Commit] {
         guard isFiltering else { return viewModel.commits }
         let needle = filterText.lowercased()
         return viewModel.commits.filter {
-            $0.subject.lowercased().contains(needle)
-                || $0.author.lowercased().contains(needle)
+            $0.subject.localizedStandardContains(filterText)
+                || $0.author.localizedStandardContains(filterText)
                 || $0.hash.lowercased().hasPrefix(needle)
         }
     }
@@ -96,8 +97,11 @@ struct HistoryView: View {
     // MARK: - List
 
     private var historyList: some View {
-        VStack(spacing: 0) {
-            filterBar
+        // Evaluated once per body evaluation and shared by the list, the
+        // empty-state check, and the filter bar's counter.
+        let visible = visibleCommits
+        return VStack(spacing: 0) {
+            filterBar(matchCount: visible.count)
             Divider()
             ScrollView {
                 VStack(spacing: 0) {
@@ -111,7 +115,7 @@ struct HistoryView: View {
                                             selectedRow: selectedRow)
                         }
                         LazyVStack(spacing: 0) {
-                            ForEach(visibleCommits) { commit in
+                            ForEach(visible) { commit in
                                 CommitRowView(commit: commit,
                                               isSelected: commit.hash == selectedHash,
                                               isHead: commit.isHead)
@@ -124,7 +128,7 @@ struct HistoryView: View {
                                     commitContextMenu(commit)
                                 }
                             }
-                            if isFiltering && visibleCommits.isEmpty {
+                            if isFiltering && visible.isEmpty {
                                 Text("No commits match “\(filterText)”")
                                     .font(.callout)
                                     .foregroundStyle(.secondary)
@@ -150,14 +154,15 @@ struct HistoryView: View {
 
     // MARK: - Filter bar
 
-    private var filterBar: some View {
+    private func filterBar(matchCount: Int) -> some View {
         HStack(spacing: 6) {
             Image(systemName: "line.3.horizontal.decrease.circle")
                 .foregroundStyle(.secondary)
             TextField("Filter by message, author, or hash", text: $filterText)
                 .textFieldStyle(.plain)
+                .autocorrectionDisabled()
             if isFiltering {
-                Text("\(visibleCommits.count) of \(viewModel.commits.count)")
+                Text("\(matchCount) of \(viewModel.commits.count)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize()
@@ -169,6 +174,8 @@ struct HistoryView: View {
                 }
                 .buttonStyle(.plain)
                 .help("Clear filter")
+                .accessibilityLabel("Clear filter")
+                .keyboardShortcut(.cancelAction)
             }
         }
         .padding(.horizontal, 10)
