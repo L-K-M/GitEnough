@@ -32,7 +32,7 @@ final class PullRequestFinderTests: XCTestCase {
                        "https://code.acme.dev/api/v1/repos/acme/widget/pulls?state=open&limit=50")
     }
 
-    func testGitLabLookupURLDoubleEncodesProjectPath() throws {
+    func testGitLabLookupURLEncodesProjectPath() throws {
         // Nested groups: every "/" of the project path becomes %2F.
         let url = try XCTUnwrap(PullRequestFinder.gitLabLookupURL(gitlab, headBranch: "feature/x"))
         XCTAssertEqual(url.absoluteString,
@@ -42,10 +42,14 @@ final class PullRequestFinderTests: XCTestCase {
 
     // MARK: - Response parsing
 
-    func testParseGitHubPullRequestsVerifiesHeadRef() {
+    func testParseGitHubPullRequestsVerifiesHeadRefAndHeadRepo() {
         let json = """
-        [{"number": 7, "title": "Add graph", "head": {"ref": "add-graph"}},
-         {"number": 9, "title": "Different branch", "head": {"ref": "other"}}]
+        [{"number": 7, "title": "Add graph", "head": {"ref": "add-graph",
+                                                    "repo": {"full_name": "acme/widget"}}},
+         {"number": 9, "title": "Different branch", "head": {"ref": "other",
+                                                          "repo": {"full_name": "acme/widget"}}},
+         {"number": 11, "title": "Stranger's fork", "head": {"ref": "add-graph",
+                                                         "repo": {"full_name": "someone/fork"}}}]
         """
         let pulls = PullRequestFinder.parseGitHubPullRequests(Data(json.utf8), forge: github,
                                                               headBranch: "add-graph")
@@ -120,14 +124,39 @@ final class PullRequestFinderTests: XCTestCase {
 
     func testParseGitLabMergeRequestsUsesIIDAndSourceBranch() {
         let json = """
-        [{"id": 999999, "iid": 7, "title": "Add graph", "source_branch": "add-graph"},
-         {"id": 888888, "iid": 8, "title": "Other", "source_branch": "other"}]
+        [{"id": 999999, "iid": 7, "title": "Add graph", "source_branch": "add-graph",
+          "source_project_id": 42, "target_project_id": 42},
+         {"id": 888888, "iid": 8, "title": "Other", "source_branch": "other",
+          "source_project_id": 42, "target_project_id": 42}]
         """
         let pulls = PullRequestFinder.parseGitLabMergeRequests(Data(json.utf8), forge: gitlab,
                                                                headBranch: "add-graph")
         XCTAssertEqual(pulls.map(\.number), [7]) // iid, not id
         XCTAssertEqual(pulls.first?.url.absoluteString,
                        "https://gitlab.com/group/sub/project/-/merge_requests/7")
+    }
+
+    func testParseGitLabMergeRequestsSkipsForkSources() {
+        // MRs from forks target this project and share source-branch names; a
+        // differing source_project_id marks them as strangers'.
+        let json = """
+        [{"iid": 5, "title": "Stranger's fork", "source_branch": "topic",
+          "source_project_id": 77, "target_project_id": 42},
+         {"iid": 6, "title": "Topic work", "source_branch": "topic",
+          "source_project_id": 42, "target_project_id": 42}]
+        """
+        let pulls = PullRequestFinder.parseGitLabMergeRequests(Data(json.utf8), forge: gitlab,
+                                                               headBranch: "topic")
+        XCTAssertEqual(pulls.map(\.number), [6])
+    }
+
+    func testParseGitLabMergeRequestsLenientWhenProjectIdsAbsent() {
+        let json = """
+        [{"iid": 7, "title": "Add graph", "source_branch": "add-graph"}]
+        """
+        let pulls = PullRequestFinder.parseGitLabMergeRequests(Data(json.utf8), forge: gitlab,
+                                                               headBranch: "add-graph")
+        XCTAssertEqual(pulls.map(\.number), [7])
     }
 
     func testParseGitLabMergeRequestsRejectsErrorBody() {

@@ -32,9 +32,11 @@ final class PullRequestFinder {
 
     /// An ephemeral session with short timeouts — the lookup is a nice-to-have
     /// before opening the browser and must never hang the button for long.
+    /// Generic hosts run two probes sequentially (Forgejo, then GitLab), so the
+    /// per-request budget is 5 s to keep the worst case ~10 s.
     private static func makeSession() -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral
-        configuration.timeoutIntervalForRequest = 10
+        configuration.timeoutIntervalForRequest = 5
         configuration.timeoutIntervalForResource = 20
         return URLSession(configuration: configuration)
     }
@@ -115,8 +117,8 @@ final class PullRequestFinder {
 
     /// `{origin}/api/v4/projects/{owner%2Frepo}/merge_requests?state=opened&source_branch={branch}`
     /// — readable without credentials for public projects, like the rest of
-    /// the lookups here. GitLab identifies a project by its *double-encoded*
-    /// full path: every "/" of nested groups becomes %2F.
+    /// the lookups here. GitLab identifies a project by its full path with
+    /// every "/" percent-encoded as %2F (nested groups included).
     static func gitLabLookupURL(_ forge: ForgeRepo, headBranch: String) -> URL? {
         let project = "\(forge.owner)/\(forge.repo)"
             .addingPercentEncoding(withAllowedCharacters: CharacterSet.alphanumerics
@@ -137,21 +139,28 @@ final class PullRequestFinder {
     // MARK: - Response parsing (pure)
 
     /// Parses a GitHub `GET /repos/…/pulls` array and keeps only PRs whose head
-    /// ref is `headBranch` — client-side verification of the server-side
-    /// `?head=` filter, so an ignored or dropped filter can never open an
-    /// unrelated PR. The URL is built from the forge, not from `html_url`.
-    /// Empty on any malformed shape (GitHub error bodies are JSON objects).
+    /// ref is `headBranch` **and whose head repository is this repo** — the
+    /// same fork-collision guard the Forgejo parser applies, so a dropped or
+    /// ignored `?head=` filter can never surface a fork's PR. The URL is built
+    /// from the forge, not from `html_url`. Empty on any malformed shape
+    /// (GitHub error bodies are JSON objects).
     static func parseGitHubPullRequests(_ data: Data, forge: ForgeRepo,
                                         headBranch: String) -> [PullRequest] {
         struct Entry: Decodable {
             let number: Int
             let title: String?
             let head: Head?
-            struct Head: Decodable { let ref: String? }
+            struct Head: Decodable {
+                let ref: String?
+                let repo: Repo?
+                struct Repo: Decodable { let full_name: String? }
+            }
         }
+        let expected = "\(forge.owner)/\(forge.repo)".lowercased()
         guard let entries = try? JSONDecoder().decode([Entry].self, from: data) else { return [] }
         return entries.compactMap { entry in
-            guard entry.head?.ref == headBranch else { return nil }
+            guard entry.head?.ref == headBranch,
+                  entry.head?.repo?.full_name?.lowercased() == expected else { return nil }
             return PullRequest(number: entry.number, title: entry.title ?? "",
                                url: forge.pullRequestURL(number: entry.number))
         }
@@ -186,7 +195,11 @@ final class PullRequestFinder {
     }
 
     /// Parses a GitLab v4 `GET /projects/…/merge_requests` array, verifying
-    /// `source_branch` client-side. The web URL uses the project-scoped `iid`,
+    /// `source_branch` **and that the source project is this project** — the
+    /// list includes MRs from forks targeting this repo, and the fork-collision
+    /// guard mirrors the Forgejo parser's. Lenient when the project ids are
+    /// absent, so an unexpected shape degrades to a branch-name match instead
+    /// of dropping valid hits. The web URL uses the project-scoped `iid`,
     /// **not** the global `id`. Empty on any malformed shape.
     static func parseGitLabMergeRequests(_ data: Data, forge: ForgeRepo,
                                          headBranch: String) -> [PullRequest] {
@@ -194,10 +207,16 @@ final class PullRequestFinder {
             let iid: Int
             let title: String?
             let source_branch: String?
+            let source_project_id: Int?
+            let target_project_id: Int?
         }
         guard let entries = try? JSONDecoder().decode([Entry].self, from: data) else { return [] }
         return entries.compactMap { entry in
             guard entry.source_branch == headBranch else { return nil }
+            if let source = entry.source_project_id, let target = entry.target_project_id,
+                source != target {
+                return nil
+            }
             return PullRequest(number: entry.iid, title: entry.title ?? "",
                                url: forge.assumingGitLab().pullRequestURL(number: entry.iid))
         }
