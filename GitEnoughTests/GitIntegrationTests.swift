@@ -182,6 +182,53 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertEqual(content, "edited after staging\n")
     }
 
+    func testDiscardRemovesBothStagedAndUnstagedEdits() throws {
+        try write("one\nstaged\n", to: "a.txt")
+        try client.stage(paths: ["a.txt"])
+        try write("one\nstaged\nunstaged\n", to: "a.txt")
+
+        try client.discard(paths: ["a.txt"])
+        let status = try client.status()
+        XCTAssertFalse(status.isDirty)
+        let content = try String(contentsOf: repoURL.appendingPathComponent("a.txt"), encoding: .utf8)
+        XCTAssertEqual(content, "one\n")
+    }
+
+    func testDiscardMixedBatchOfStagedNewAndTrackedModified() throws {
+        // One call, two kinds of paths: the tracked file is restored to HEAD,
+        // the staged-new file survives as untracked (the ls-files split).
+        try write("one\nchanged\n", to: "a.txt")
+        try client.stage(paths: ["a.txt"])
+        try write("new\n", to: "b-new.txt")
+        try client.stage(paths: ["b-new.txt"])
+
+        try client.discard(paths: ["a.txt", "b-new.txt"])
+        let status = try client.status()
+        XCTAssertTrue(status.staged.isEmpty)
+        XCTAssertEqual(status.unstaged.map(\.path), ["b-new.txt"])
+        let restored = try String(contentsOf: repoURL.appendingPathComponent("a.txt"), encoding: .utf8)
+        XCTAssertEqual(restored, "one\n")
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: repoURL.appendingPathComponent("b-new.txt").path))
+    }
+
+    func testDiscardTreatsGlobCharactersInFilenamesLiterally() throws {
+        try write("star\n", to: "a*.txt")
+        try write("plain\n", to: "abc.txt")
+        try client.stage(paths: ["a*.txt", "abc.txt"])
+        try client.commit(message: "Add oddly named files")
+
+        try write("star changed\n", to: "a*.txt")
+        try write("plain changed\n", to: "abc.txt")
+        try client.discard(paths: ["a*.txt"])
+
+        // Only the literal file is reverted; the glob sibling keeps its edit.
+        let reverted = try String(contentsOf: repoURL.appendingPathComponent("a*.txt"), encoding: .utf8)
+        XCTAssertEqual(reverted, "star\n")
+        let untouched = try String(contentsOf: repoURL.appendingPathComponent("abc.txt"), encoding: .utf8)
+        XCTAssertEqual(untouched, "plain changed\n")
+    }
+
     func testDiffRoundTrip() throws {
         try write("one\nchanged\n", to: "a.txt")
         let diff = try client.diff(path: "a.txt", staged: false)

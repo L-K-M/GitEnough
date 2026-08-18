@@ -190,6 +190,10 @@ final class GitClient {
     /// discarding just unstages (the files stay on disk as untracked).
     func discard(paths: [String]) throws {
         guard !paths.isEmpty else { return }
+        // Git pathspecs glob by default: a file literally named "a*.txt" would
+        // make these commands also match unrelated tracked files (abc.txt…).
+        // Force literal matching everywhere a real path is passed.
+        let literalSpecs = paths.map { ":(literal)" + $0 }
         // Check for an unborn HEAD explicitly instead of inferring it from a
         // `reset` failure: a blanket catch would turn a genuine reset error
         // (corrupt ref, unwritable index) into an unintended `rm --cached`,
@@ -202,14 +206,14 @@ final class GitClient {
             // can only unstage. --cached never touches worktree files; -f just
             // bypasses the safety check that refuses staged-new files that
             // were edited after staging.
-            try shell.runChecked(["-C", worktree.path, "rm", "--cached", "-r", "-f", "--ignore-unmatch", "--"] + paths, in: nil)
+            try shell.runChecked(["-C", worktree.path, "rm", "--cached", "-r", "-f", "--ignore-unmatch", "--"] + literalSpecs, in: nil)
             return
         }
-        try shell.runChecked(["-C", worktree.path, "reset", "-q", "HEAD", "--"] + paths, in: nil)
-        let tracked = try shell.runChecked(["-C", worktree.path, "ls-files", "-z", "--"] + paths, in: nil).stdout
+        try shell.runChecked(["-C", worktree.path, "reset", "-q", "HEAD", "--"] + literalSpecs, in: nil)
+        let tracked = try shell.runChecked(["-C", worktree.path, "ls-files", "-z", "--"] + literalSpecs, in: nil).stdout
         let stillTracked = tracked.components(separatedBy: "\0").filter { !$0.isEmpty }
         if !stillTracked.isEmpty {
-            try shell.runChecked(["-C", worktree.path, "checkout", "--"] + stillTracked, in: nil)
+            try shell.runChecked(["-C", worktree.path, "checkout", "--"] + stillTracked.map { ":(literal)" + $0 }, in: nil)
         }
     }
 
