@@ -205,8 +205,12 @@ final class RepoViewModel: ObservableObject, Identifiable {
 
     func push() { perform("Pushing…") { try $0.push(setUpstream: false) } }
 
-    /// Push -u origin HEAD for a branch with no upstream yet.
-    func publishBranch() { perform("Publishing branch…") { try $0.push(setUpstream: true) } }
+    /// Push -u <remote> HEAD for a branch with no upstream yet. Uses the first
+    /// configured remote — which is not necessarily named "origin".
+    func publishBranch() {
+        let remote = remotes.first?.name ?? "origin"
+        perform("Publishing branch…") { try $0.push(setUpstream: true, remote: remote) }
+    }
 
     // MARK: Branches
 
