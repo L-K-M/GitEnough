@@ -184,6 +184,26 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertEqual(after.map(\.hash), before.map(\.hash))
     }
 
+    func testSyntheticToolRefsAreExcludedFromHistory() throws {
+        // A commit reachable ONLY through a filter-branch-style backup ref and a
+        // bisect ref must not leak into the graph.
+        try run(["checkout", "-b", "scratch"])
+        try write("scratch\n", to: "scratch.txt")
+        try run(["add", "scratch.txt"])
+        try run(["commit", "-m", "Scratch commit"])
+        let scratchHash = try GitShell.shared.runChecked(
+            ["-C", repoURL.path, "rev-parse", "HEAD"], in: nil).stdout
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        try run(["checkout", "main"])
+        try run(["branch", "-D", "scratch"])
+        try run(["update-ref", "refs/original/refs/heads/scratch", scratchHash])
+        try run(["update-ref", "refs/bisect/bad", scratchHash])
+
+        let commits = try client.log(limit: 50)
+        XCTAssertEqual(commits.count, 4)
+        XCTAssertFalse(commits.contains { $0.hash == scratchHash })
+    }
+
     func testMergeConflictDetectionAndOursResolution() throws {
         // Create a conflicting change on a second branch.
         try run(["checkout", "-b", "conflicter"])

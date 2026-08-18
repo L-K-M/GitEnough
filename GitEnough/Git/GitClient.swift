@@ -88,12 +88,16 @@ final class GitClient {
         let f = GitParsers.fieldSep
         let r = GitParsers.recordSep
         let format = "%H\(f)%P\(f)%an\(f)%ae\(f)%aI\(f)%D\(f)%s\(r)"
-        // --exclude=refs/stash (must precede --all, whose ref set it filters):
-        // --all is every ref under refs/ (plus HEAD), so the stash refs/stash points
-        // at leaks its two synthetic "WIP on…"/"index on …" commits into the graph
-        // as permanent-looking lanes (older stashes live in refs/stash's reflog,
-        // which --all does not traverse).
-        var args = ["-C", worktree.path, "log", "--exclude=refs/stash", "--all",
+        // --exclude (each must precede --all, whose ref set it filters): --all is
+        // every ref under refs/ (plus HEAD), which leaks synthetic tool refs into
+        // the graph as permanent-looking lanes: the stash's "WIP on…"/"index on …"
+        // commits (older stashes live in refs/stash's reflog, which --all does not
+        // traverse), filter-branch backups, bisect state, prefetched commits, and
+        // notes trees. None of them are history the user wants to see.
+        var args = ["-C", worktree.path, "log",
+                    "--exclude=refs/stash", "--exclude=refs/original/*",
+                    "--exclude=refs/bisect/*", "--exclude=refs/prefetch/*",
+                    "--exclude=refs/notes/*", "--all",
                     "--topo-order", "--date-order",
                     "--pretty=tformat:\(format)",
                     "--max-count=\(limit)"]
