@@ -55,10 +55,18 @@ struct MergeTool: Identifiable, Hashable {
     /// ~9 executables plus ~9 app bundles per conflicted-file row (on the main
     /// thread) made the conflict list stutter. `rescan()` refreshes after the
     /// user installs a tool (Settings → Merge Tools).
+    ///
+    /// Main-thread only: detection touches NSWorkspace, and both writers
+    /// (lazy init, rescan) and readers (views) live on the main thread.
     private(set) static var installed: [MergeTool] = detectInstalled()
+
+    /// Posted on the main thread whenever `installed` changes, so open
+    /// conflict rows refresh instead of showing stale tool availability.
+    static let didChangeNotification = Notification.Name("MergeToolInstalledDidChange")
 
     static func rescan() {
         installed = detectInstalled()
+        NotificationCenter.default.post(name: didChangeNotification, object: nil)
     }
 
     var isInstalled: Bool {
