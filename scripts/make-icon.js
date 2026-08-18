@@ -1,9 +1,12 @@
 #!/usr/bin/env node
-// Generates the GitEnough app icon set (classic macOS slots, 16…1024 px).
-// Pure Node: rasterizes a simple "branch graph" glyph over a vertical gradient
-// with 2x supersampling, then encodes PNGs via zlib. No dependencies.
+// Generates the GitEnough app icon set (classic macOS slots, 16…1024 px)
+// from the master artwork in media-sources/icon.png.
+// Pure Node: PNG decode (zlib inflate + unfilter), exact area-average
+// downscaling, PNG encode. No dependencies.
 //
-// Usage: node scripts/make-icon.js   → writes GitEnough/Resources/Assets.xcassets/AppIcon.appiconset/
+// Usage: node scripts/make-icon.js
+//   reads  media-sources/icon.png
+//   writes GitEnough/Resources/Assets.xcassets/AppIcon.appiconset/
 
 const fs = require("fs");
 const path = require("path");
@@ -51,121 +54,101 @@ function encodePNG(width, height, rgba) {
   ]);
 }
 
-// --- Rasterizer (float RGBA canvas, drawn at 2x then downsampled) ------------
-function makeCanvas(size) {
-  return { size, px: new Float32Array(size * size * 4) };
-}
-function blend(c, x, y, r, g, b, a) {
-  if (x < 0 || y < 0 || x >= c.size || y >= c.size) return;
-  const i = (y * c.size + x) * 4;
-  const na = a + c.px[i + 3] * (1 - a);
-  if (na <= 0) return;
-  c.px[i] = (r * a + c.px[i] * c.px[i + 3] * (1 - a)) / na;
-  c.px[i + 1] = (g * a + c.px[i + 1] * c.px[i + 3] * (1 - a)) / na;
-  c.px[i + 2] = (b * a + c.px[i + 2] * c.px[i + 3] * (1 - a)) / na;
-  c.px[i + 3] = na;
-}
-function fillRect(c, x0, y0, x1, y1, colorFn) {
-  for (let y = Math.max(0, Math.floor(y0)); y < Math.min(c.size, Math.ceil(y1)); y++)
-    for (let x = Math.max(0, Math.floor(x0)); x < Math.min(c.size, Math.ceil(x1)); x++) {
-      const [r, g, b, a] = colorFn(x / c.size, y / c.size);
-      blend(c, x, y, r, g, b, a);
-    }
-}
-// distance from point to segment
-function segDist(px, py, x0, y0, x1, y1) {
-  const dx = x1 - x0, dy = y1 - y0;
-  const t = Math.max(0, Math.min(1, ((px - x0) * dx + (py - y0) * dy) / (dx * dx + dy * dy)));
-  const cx = x0 + t * dx, cy = y0 + t * dy;
-  return Math.hypot(px - cx, py - cy);
-}
-function strokeSeg(c, x0, y0, x1, y1, w, col) {
-  const minX = Math.floor(Math.min(x0, x1) - w), maxX = Math.ceil(Math.max(x0, x1) + w);
-  const minY = Math.floor(Math.min(y0, y1) - w), maxY = Math.ceil(Math.max(y0, y1) + w);
-  for (let y = Math.max(0, minY); y < Math.min(c.size, maxY); y++)
-    for (let x = Math.max(0, minX); x < Math.min(c.size, maxX); x++) {
-      const d = segDist(x + 0.5, y + 0.5, x0, y0, x1, y1);
-      const a = Math.max(0, Math.min(1, w - d));
-      if (a > 0) blend(c, x, y, col[0], col[1], col[2], col[3] * a);
-    }
-}
-function strokeQuadratic(c, x0, y0, cx1, cy1, x1, y1, w, col) {
-  const steps = Math.ceil(Math.hypot(x1 - x0, y1 - y0) / (w * 0.5)) + 8;
-  let px = x0, py = y0;
-  for (let i = 1; i <= steps; i++) {
-    const t = i / steps, mt = 1 - t;
-    const x = mt * mt * x0 + 2 * mt * t * cx1 + t * t * x1;
-    const y = mt * mt * y0 + 2 * mt * t * cy1 + t * t * y1;
-    strokeSeg(c, px, py, x, y, w, col);
-    px = x; py = y;
+// --- PNG decoder (8-bit RGB/RGBA, non-interlaced) -----------------------------
+function decodePNG(buf) {
+  if (buf.readUInt32BE(0) !== 0x89504e47) throw new Error("not a PNG");
+  let pos = 8, width = 0, height = 0, bitDepth = 0, colorType = 0;
+  const idat = [];
+  while (pos < buf.length) {
+    const len = buf.readUInt32BE(pos);
+    const type = buf.toString("ascii", pos + 4, pos + 8);
+    const data = buf.subarray(pos + 8, pos + 8 + len);
+    if (type === "IHDR") {
+      width = data.readUInt32BE(0);
+      height = data.readUInt32BE(4);
+      bitDepth = data[8];
+      colorType = data[9];
+      if (data[12] !== 0) throw new Error("interlaced PNGs not supported");
+    } else if (type === "IDAT") {
+      idat.push(data);
+    } else if (type === "IEND") break;
+    pos += 12 + len;
   }
-}
-function fillCircle(c, cx, cy, r, col) {
-  for (let y = Math.max(0, Math.floor(cy - r - 1)); y < Math.min(c.size, Math.ceil(cy + r + 1)); y++)
-    for (let x = Math.max(0, Math.floor(cx - r - 1)); x < Math.min(c.size, Math.ceil(cx + r + 1)); x++) {
-      const d = Math.hypot(x + 0.5 - cx, y + 0.5 - cy);
-      const a = Math.max(0, Math.min(1, r - d));
-      if (a > 0) blend(c, x, y, col[0], col[1], col[2], col[3] * a);
+  if (bitDepth !== 8 || (colorType !== 2 && colorType !== 6))
+    throw new Error(`unsupported PNG: bitDepth ${bitDepth}, colorType ${colorType}`);
+  const bpp = colorType === 6 ? 4 : 3;
+  const raw = zlib.inflateSync(Buffer.concat(idat));
+  const stride = width * bpp;
+  const out = Buffer.alloc(width * height * 4);
+  const prev = Buffer.alloc(stride);
+  let src = 0;
+  for (let y = 0; y < height; y++) {
+    const filter = raw[src++];
+    const line = raw.subarray(src, src + stride);
+    src += stride;
+    for (let x = 0; x < stride; x++) {
+      const a = x >= bpp ? line[x - bpp] : 0; // left (already unfiltered)
+      const b = prev[x]; // up
+      const c = x >= bpp ? prev[x - bpp] : 0; // up-left
+      let v = line[x];
+      if (filter === 1) v = (v + a) & 0xff;
+      else if (filter === 2) v = (v + b) & 0xff;
+      else if (filter === 3) v = (v + ((a + b) >> 1)) & 0xff;
+      else if (filter === 4) {
+        const p = a + b - c;
+        const pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c);
+        v = (v + (pa <= pb && pa <= pc ? a : pb <= pc ? b : c)) & 0xff;
+      } else if (filter !== 0) throw new Error(`bad filter ${filter}`);
+      line[x] = v; // unfilter in place; safe, we read left-to-right
     }
+    line.copy(prev);
+    for (let x = 0; x < width; x++) {
+      const s = x * bpp, d = (y * width + x) * 4;
+      out[d] = line[s];
+      out[d + 1] = line[s + 1];
+      out[d + 2] = line[s + 2];
+      out[d + 3] = bpp === 4 ? line[s + 3] : 255;
+    }
+  }
+  return { width, height, rgba: out };
 }
 
-// --- The icon ----------------------------------------------------------------
-function render(pixelSize) {
-  const S = pixelSize * 2; // supersample
-  const c = makeCanvas(S);
-  // background: vertical gradient, deep indigo → violet
-  const top = [0.259, 0.278, 0.812], bottom = [0.478, 0.247, 0.886];
-  fillRect(c, 0, 0, S, S, (fx, fy) => {
-    const t = fy;
-    return [top[0] + (bottom[0] - top[0]) * t, top[1] + (bottom[1] - top[1]) * t,
-            top[2] + (bottom[2] - top[2]) * t, 1];
-  });
-  // subtle radial light from top-left
-  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
-    const d = Math.hypot(x - S * 0.25, y - S * 0.18) / (S * 1.1);
-    const a = Math.max(0, 0.22 * (1 - d));
-    blend(c, x, y, 1, 1, 1, a * 0.5);
-  }
-
-  const u = S / 1024; // design units
-  const white = [1, 1, 1, 1];
-  const accent = [0.996, 0.765, 0.353, 1]; // warm amber branch
-  const lineW = 34 * u, dotR = 52 * u;
-
-  const x0 = 380 * u, x1 = 660 * u;           // main lane, branch lane
-  const yTop = 218 * u, yMid = 512 * u, yBot = 806 * u, yJoin = 660 * u;
-
-  // branch lane: leaves main at yJoin, curves right, runs up to yMid
-  strokeSeg(c, x1, yMid, x1, yJoin - 60 * u, lineW, accent);
-  strokeQuadratic(c, x1, yJoin - 60 * u, x1, yJoin, x0 + 60 * u, yJoin, lineW, accent);
-  strokeSeg(c, x0 + 60 * u, yJoin, x0, yJoin, lineW, accent);
-  // main lane
-  strokeSeg(c, x0, yTop, x0, yBot, lineW, white);
-  // nodes
-  fillCircle(c, x0, yTop, dotR, white);
-  fillCircle(c, x1, yMid, dotR, accent);
-  fillCircle(c, x0, yBot, dotR, white);
-  // small junction dot where branch leaves main
-  fillCircle(c, x0, yJoin, dotR * 0.62, [0.9, 0.9, 1, 1]);
-
-  // downsample 2x
-  const out = Buffer.alloc(pixelSize * pixelSize * 4);
-  for (let y = 0; y < pixelSize; y++) for (let x = 0; x < pixelSize; x++) {
-    let r = 0, g = 0, b = 0, a = 0;
-    for (let dy = 0; dy < 2; dy++) for (let dx = 0; dx < 2; dx++) {
-      const i = ((y * 2 + dy) * S + (x * 2 + dx)) * 4;
-      r += c.px[i]; g += c.px[i + 1]; b += c.px[i + 2]; a += c.px[i + 3];
+// --- Area-average downscale (exact box filter) --------------------------------
+function resize(src, dstSize) {
+  const { width: sw, height: sh, rgba } = src;
+  const scaleX = sw / dstSize, scaleY = sh / dstSize;
+  const out = Buffer.alloc(dstSize * dstSize * 4);
+  for (let dy = 0; dy < dstSize; dy++) {
+    const y0 = dy * scaleY, y1 = y0 + scaleY;
+    const sy0 = Math.floor(y0), sy1 = Math.min(sh - 1, Math.floor(y1));
+    for (let dx = 0; dx < dstSize; dx++) {
+      const x0 = dx * scaleX, x1 = x0 + scaleX;
+      const sx0 = Math.floor(x0), sx1 = Math.min(sw - 1, Math.floor(x1));
+      let r = 0, g = 0, b = 0, a = 0;
+      for (let sy = sy0; sy <= sy1; sy++) {
+        const wy = Math.min(y1, sy + 1) - Math.max(y0, sy);
+        for (let sx = sx0; sx <= sx1; sx++) {
+          const w = wy * (Math.min(x1, sx + 1) - Math.max(x0, sx));
+          const i = (sy * sw + sx) * 4;
+          r += rgba[i] * w; g += rgba[i + 1] * w; b += rgba[i + 2] * w; a += rgba[i + 3] * w;
+        }
+      }
+      const area = scaleX * scaleY;
+      const o = (dy * dstSize + dx) * 4;
+      out[o] = Math.round(r / area);
+      out[o + 1] = Math.round(g / area);
+      out[o + 2] = Math.round(b / area);
+      out[o + 3] = Math.round(a / area);
     }
-    const o = (y * pixelSize + x) * 4;
-    out[o] = Math.round((r / 4) * 255);
-    out[o + 1] = Math.round((g / 4) * 255);
-    out[o + 2] = Math.round((b / 4) * 255);
-    out[o + 3] = Math.round((a / 4) * 255);
   }
-  return encodePNG(pixelSize, pixelSize, out);
+  return out;
 }
 
 // --- Write the appiconset ------------------------------------------------------
+const srcPath = path.join(__dirname, "..", "media-sources", "icon.png");
+const master = decodePNG(fs.readFileSync(srcPath));
+console.log(`decoded ${path.relative(process.cwd(), srcPath)}: ${master.width}x${master.height}`);
+
 const slots = [
   ["16x16", "1x", 16], ["16x16", "2x", 32],
   ["32x32", "1x", 32], ["32x32", "2x", 64],
@@ -177,8 +160,8 @@ const outDir = path.join(__dirname, "..", "GitEnough", "Resources", "Assets.xcas
 fs.mkdirSync(outDir, { recursive: true });
 const images = [];
 for (const [size, scale, px] of slots) {
-  const name = `icon_${size.replace("x", "x")}_${scale}.png`;
-  fs.writeFileSync(path.join(outDir, name), render(px));
+  const name = `icon_${size}_${scale}.png`;
+  fs.writeFileSync(path.join(outDir, name), encodePNG(px, px, resize(master, px)));
   images.push({ filename: name, idiom: "mac", scale, size });
   console.log("rendered", name, px + "px");
 }
