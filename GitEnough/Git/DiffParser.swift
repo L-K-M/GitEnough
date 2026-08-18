@@ -126,7 +126,16 @@ enum DiffParser {
         func span(of tokens: [(text: Substring, range: Range<String.Index>)],
                   from: Int, to: Int) -> [Range<String.Index>] {
             guard from < to else { return [] }
-            return [tokens[from].range.lowerBound..<tokens[to - 1].range.upperBound]
+            // Shrink whitespace-only tokens off the span's edges: when one side
+            // runs out of middle tokens first, the trim loop stops early and the
+            // other side's span would otherwise swallow the separating space
+            // ("brave " instead of "brave").
+            var first = from
+            var last = to
+            while first < last, tokens[first].text.allSatisfy(\.isWhitespace) { first += 1 }
+            while last > first, tokens[last - 1].text.allSatisfy(\.isWhitespace) { last -= 1 }
+            guard first < last else { return [] }
+            return [tokens[first].range.lowerBound..<tokens[last - 1].range.upperBound]
         }
         return (span(of: oldTokens, from: start, to: oldEnd),
                 span(of: newTokens, from: start, to: newEnd))
