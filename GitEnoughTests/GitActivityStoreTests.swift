@@ -39,7 +39,9 @@ final class GitActivityStoreTests: XCTestCase {
     private func drain(_ store: GitActivityStore) {
         store.flushForTesting()
         let done = expectation(description: "publish delivered")
-        DispatchQueue.global().asyncAfter(deadline: .now() + 0.1) { done.fulfill() }
+        // Main queue is FIFO: this runs after any publish already enqueued
+        // by the flush above, so `items` is current when wait() returns.
+        DispatchQueue.main.async { done.fulfill() }
         wait(for: [done], timeout: 2)
     }
 

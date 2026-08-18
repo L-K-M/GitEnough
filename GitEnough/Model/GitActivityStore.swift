@@ -13,11 +13,10 @@ final class GitActivityStore: ObservableObject {
 
     /// One recorded invocation plus the repo it belonged to.
     ///
-    /// Persisted as one JSON object per line. When this shape changes, bump
-    /// `schemaVersion` and migrate in `loadFromDiskLocked` — every line is
-    /// decoded with `try?`, so without a migration an incompatible change
-    /// silently discards the whole history.
-    struct Item: Identifiable, Equatable, Codable {
+    /// Persisted as one JSON object per line with an explicit schema version —
+    /// every line is decoded with `try?`, so a shape change without a matching
+    /// `loadFromDiskLocked` migration would silently discard the whole history.
+    struct Item: Identifiable, Equatable {
         /// Persisted schema version — bump when the on-disk shape changes.
         static let schemaVersion = 1
 
@@ -26,6 +25,35 @@ final class GitActivityStore: ObservableObject {
         let repoPath: String
 
         var id: UUID { entry.id }
+    }
+
+    // Codable lives in an extension so the memberwise initializer (used by
+    // `record` and tests) stays synthesized.
+extension GitActivityStore.Item: Codable {
+        private enum CodingKeys: String, CodingKey {
+            case schemaVersion, entry, repoName, repoPath
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            let version = try container.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 1
+            guard version == Self.schemaVersion else {
+                throw DecodingError.dataCorrupted(.init(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "Unknown activity-history schema version \(version)"))
+            }
+            entry = try container.decode(GitActivityLog.Entry.self, forKey: .entry)
+            repoName = try container.decode(String.self, forKey: .repoName)
+            repoPath = try container.decode(String.self, forKey: .repoPath)
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(Self.schemaVersion, forKey: .schemaVersion)
+            try container.encode(entry, forKey: .entry)
+            try container.encode(repoName, forKey: .repoName)
+            try container.encode(repoPath, forKey: .repoPath)
+        }
     }
 
     /// All known items, oldest first (running commands included).

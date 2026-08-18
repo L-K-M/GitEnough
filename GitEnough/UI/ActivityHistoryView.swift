@@ -45,7 +45,7 @@ struct ActivityHistoryView: View {
                 .listStyle(.plain)
             }
             if let selected = selection,
-               let item = store.items.first(where: { $0.id == selected }) {
+               let item = filtered.first(where: { $0.id == selected }) {
                 Divider()
                 detail(for: item)
             }
@@ -81,6 +81,7 @@ struct ActivityHistoryView: View {
             ) {
                 Button("Clear History", role: .destructive) {
                     selection = nil
+                    repoFilter = nil
                     store.clear()
                 }
             }
@@ -165,12 +166,14 @@ struct ActivityHistoryView: View {
                 Spacer()
                 Button {
                     NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString("git \(item.entry.command)", forType: .string)
+                    // Scoped to its repo so the pasted command runs from any cwd.
+                    NSPasteboard.general.setString("git -C '\(item.repoPath)' \(item.entry.command)",
+                                                   forType: .string)
                 } label: {
                     Label("Copy", systemImage: "doc.on.doc")
                 }
                 .controlSize(.small)
-                .help("Copy the command to the clipboard")
+                .help("Copy the command (scoped to its repository) to the clipboard")
             }
             Text(detailSubtitle(for: item))
                 .font(.caption)
