@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 /// All state and operations for one open repository.
@@ -213,6 +214,63 @@ final class RepoViewModel: ObservableObject, Identifiable {
 
     /// Push -u origin HEAD for a branch with no upstream yet.
     func publishBranch() { perform("Publishing branch…") { try $0.push(setUpstream: true) } }
+
+    // MARK: Pull request
+
+    /// True while the forge is being asked whether the current branch has an
+    /// open pull request (drives the toolbar button's busy state).
+    @Published private(set) var isResolvingPullRequest = false
+
+    /// Opens the current branch's pull request on the forge website (GitHub,
+    /// GitLab, Forgejo/Gitea): the PR itself when one is open for the branch,
+    /// else the forge's "create a pull request" page. The lookup is an
+    /// unauthenticated best-effort API call; when it can't tell — private repo,
+    /// offline, unknown forge — the create page is opened, which shows an
+    /// "already has a pull request" banner once the browser is signed in.
+    func openPullRequest() {
+        guard !isResolvingPullRequest else { return }
+        guard let branch = status.head else {
+            errorMessage = "Can't open a pull request: HEAD is detached — check out a branch first."
+            return
+        }
+        guard let remote = preferredRemote() else {
+            errorMessage = "Can't open a pull request: the repository has no remotes."
+            return
+        }
+        guard let forge = ForgeRepo.parse(remoteURL: remote.url) else {
+            errorMessage = "The remote “\(remote.name)” (\(remote.url)) doesn't point at a forge website, so there is no pull-request page to open."
+            return
+        }
+        isResolvingPullRequest = true
+        errorMessage = nil
+        // The remote's default branch (the PR base) comes from git, so it goes
+        // through the serial queue like every other git read; the network
+        // lookup runs off it — only URLSession, no process to block on.
+        let fallbackBase = branches.contains { !$0.isRemote && $0.name == "master" } ? "master" : "main"
+        queue.async { [weak self] in
+            let base = self?.client.remoteDefaultBranch(remote: remote.name) ?? fallbackBase
+            Task { [weak self] in
+                let pullRequest = await PullRequestFinder.shared
+                    .findOpenPullRequest(for: forge, headBranch: branch)
+                let url = pullRequest?.url ?? forge.newPullRequestURL(base: base, head: branch)
+                await MainActor.run { [weak self] in
+                    self?.isResolvingPullRequest = false
+                    NSWorkspace.shared.open(url)
+                }
+            }
+        }
+    }
+
+    /// The remote a pull request would live on: the branch's upstream remote
+    /// when one is configured, else "origin", else the first configured remote.
+    private func preferredRemote() -> Remote? {
+        if let upstream = status.upstream,
+           let remoteName = upstream.split(separator: "/").first.map(String.init),
+           let remote = remotes.first(where: { $0.name == remoteName }) {
+            return remote
+        }
+        return remotes.first { $0.name == "origin" } ?? remotes.first
+    }
 
     // MARK: Branches
 

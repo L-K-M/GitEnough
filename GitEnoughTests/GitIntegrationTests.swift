@@ -198,6 +198,19 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertEqual(content, "from main\n")
     }
 
+    func testRemoteDefaultBranch() throws {
+        // No remote yet — nothing to read.
+        XCTAssertNil(client.remoteDefaultBranch(remote: "origin"))
+
+        // Establish refs/remotes/origin/HEAD exactly like clone/fetch would.
+        try run(["remote", "add", "origin", "https://example.com/acme/widget.git"])
+        try run(["update-ref", "refs/remotes/origin/main", "refs/heads/main"])
+        try run(["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"])
+
+        XCTAssertEqual(client.remoteDefaultBranch(remote: "origin"), "main")
+        XCTAssertNil(client.remoteDefaultBranch(remote: "upstream"))
+    }
+
     func testValidationHelpers() throws {
         XCTAssertTrue(GitClient.isRepository(at: repoURL))
         // git reports the physical path; temporaryDirectory may sit behind the

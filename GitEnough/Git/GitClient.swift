@@ -80,6 +80,20 @@ final class GitClient {
         return GitParsers.parseRemotes(result.stdout)
     }
 
+    /// The remote's default branch (its HEAD): `refs/remotes/origin/HEAD` →
+    /// "main". The symref is established by clone and maintained by recent
+    /// fetches; nil when git hasn't set it yet — callers then fall back to
+    /// "main"/"master" guessing. Used as the base branch of a new pull request.
+    func remoteDefaultBranch(remote: String) -> String? {
+        guard let result = try? shell.run(
+            ["-C", worktree.path, "--no-optional-locks",
+             "symbolic-ref", "--short", "refs/remotes/\(remote)/HEAD"], in: nil),
+            result.exitCode == 0 else { return nil }
+        let short = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard short.hasPrefix("\(remote)/") else { return nil }
+        return String(short.dropFirst(remote.count + 1))
+    }
+
     // MARK: - History
 
     /// Newest-first, topologically ordered commits across all refs — the input to
