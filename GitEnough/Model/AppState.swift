@@ -68,6 +68,9 @@ final class AppState: ObservableObject {
     func viewModel(for repo: Repository) -> RepoViewModel {
         if let existing = viewModels[repo.path] { return existing }
         let vm = RepoViewModel(repo: repo)
+        vm.onStatusChange = { [weak self] summary in
+            self?.store.summaries[repo.path] = summary
+        }
         viewModels[repo.path] = vm
         vm.start()
         return vm
@@ -116,13 +119,7 @@ final class AppState: ObservableObject {
                 }
                 let client = GitClient(worktree: repo.url)
                 if let status = try? client.status() {
-                    result[repo.path] = RepoSummary(
-                        branch: status.head ?? status.headHash.map { String($0.prefix(7)) },
-                        isDirty: status.isDirty,
-                        ahead: status.ahead,
-                        behind: status.behind,
-                        isValid: true
-                    )
+                    result[repo.path] = RepoSummary(status: status)
                 } else {
                     result[repo.path] = RepoSummary(branch: nil, isDirty: false,
                                                   ahead: 0, behind: 0, isValid: false)
