@@ -139,6 +139,8 @@ struct ChangesView: View {
                         selectionIsStaged = true
                     } onAction: {
                         viewModel.unstage([file])
+                    } onIgnore: {
+                        // Staged files are tracked; ignore only applies to untracked.
                     } onDiscard: {
                         fileToDiscard = file
                     }
@@ -166,6 +168,8 @@ struct ChangesView: View {
                         selectionIsStaged = false
                     } onAction: {
                         viewModel.stage([file])
+                    } onIgnore: {
+                        viewModel.ignore(file)
                     } onDiscard: {
                         fileToDiscard = file
                     }
@@ -317,6 +321,7 @@ private struct FileRow: View {
     let actionHelp: String
     let onSelect: () -> Void
     let onAction: () -> Void
+    let onIgnore: () -> Void
     let onDiscard: () -> Void
 
     var body: some View {
@@ -342,6 +347,9 @@ private struct FileRow: View {
         .contextMenu {
             Button(action: onAction) {
                 Label(actionHelp, systemImage: actionIcon)
+            }
+            if file.isUntracked {
+                Button("Ignore in .gitignore", action: onIgnore)
             }
             Divider()
             if FileManager.default.fileExists(

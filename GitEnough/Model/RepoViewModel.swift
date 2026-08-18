@@ -423,6 +423,41 @@ final class RepoViewModel: ObservableObject, Identifiable {
         perform("Unstaging…", includeHistory: false) { try $0.unstage(paths: changes.map(\.path)) }
     }
 
+    /// Adds an untracked file's path to the repo's root `.gitignore` (creating
+    /// the file if needed). A plain file append, not a git command — the
+    /// post-op snapshot picks up the change and the row disappears.
+    func ignore(_ change: FileChange) {
+        // gitignore doesn't affect tracked files — ignoring one would be a
+        // silent no-op, so refuse it here like the UI does.
+        guard change.isUntracked else { return }
+        perform("Updating .gitignore…", includeHistory: false) { client in
+            // A broader existing pattern (*.log, build/) already covers it.
+            guard !client.isIgnored(path: change.path) else { return }
+            let url = client.worktree.appendingPathComponent(".gitignore")
+            // Only a genuinely missing file maps to empty: a *read* failure
+            // (e.g. non-UTF-8 bytes) must throw rather than let the write
+            // below clobber the existing file with a single line.
+            let fileExists = FileManager.default.fileExists(atPath: url.path)
+            let existing = fileExists
+                ? try String(contentsOf: url, encoding: .utf8)
+                : ""
+            let updated = GitIgnore.appending(change.path, to: existing)
+            guard updated != existing else { return }
+            if fileExists {
+                // Append through the existing file (following symlinks, and
+                // preserving permissions/ownership) rather than replacing it
+                // atomically. `appending` only ever appends, so the new bytes
+                // are exactly the difference.
+                let handle = try FileHandle(forWritingTo: url)
+                try handle.seekToEnd()
+                try handle.write(contentsOf: Data(updated.dropFirst(existing.count).utf8))
+                try handle.close()
+            } else {
+                try updated.write(to: url, atomically: true, encoding: .utf8)
+            }
+        }
+    }
+
     /// Tracked paths are restored via git; untracked paths are moved to the Trash
     /// (recoverable, unlike a hard delete).
     func discard(_ changes: [FileChange]) {
