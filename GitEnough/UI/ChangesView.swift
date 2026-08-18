@@ -391,7 +391,10 @@ private struct ConflictRow: View {
 
     let path: String
     @ObservedObject var viewModel: RepoViewModel
-    @State private var tools: [MergeTool] = MergeTool.detectInstalled()
+
+    /// Read live (not cached in @State) so a Rescan in Settings is reflected
+    /// here without any invalidation plumbing.
+    private var tools: [MergeTool] { MergeTool.installed }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
