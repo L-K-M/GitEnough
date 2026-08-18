@@ -2,11 +2,12 @@
 
 A living, shovel-ready backlog for GitEnough: every entry below is a concrete,
 self-contained task with suggested approach and test plan, ready for an LLM (or
-human) to pick up. This document consolidates the full codebase review (`glm.md`,
-kept on the review branch as the unedited record) with everything learned while
-implementing the first wave of fixes. **Maintenance rule:** when an entry ships,
-delete it here (the git history preserves it); when a new issue is found, add it
-with the same level of concreteness.
+human) to pick up. This document consolidates two independent full-codebase
+reviews (`glm.md` and `kimi.md`, each kept on its review branch as the unedited
+record) with everything learned while implementing the first waves of fixes.
+**Maintenance rule:** when an entry ships, delete it here (the git history
+preserves it); when a new issue is found, add it with the same level of
+concreteness.
 
 Effort: **S** ≤ ~30 min · **M** half a day · **L** multi-day.
 
@@ -20,22 +21,22 @@ before starting anything overlapping:
 | PR | Covers |
 |----|--------|
 | #4 | Stash & synthetic tool refs (refs/original, bisect, prefetch, notes, replace, rewritten) excluded from the graph + decorations |
-| #5 | Rebase/cherry-pick/revert conflict detection, banner, Continue/Abort, visible conflicts (+ #11, an independent lighter version) |
+| #5 | Rebase/cherry-pick/revert conflict detection, banner, Continue/Abort, visible conflicts (+ #11, an independent lighter version that also adds Skip and `git am` exclusion) |
 | #6 | Publish to the actually-configured remote (prefers origin), model-level guard |
 | #7 | Repo validation off the main thread; drop-failure alert (+ #20 partially, drop-error alert) |
 | #8 | Sidebar summaries refreshed concurrently (windowed TaskGroup); live summary updates via onStatusChange (on main) |
-| #9 | Discard of staged changes (was a silent no-op — `checkout --` only restores the worktree) |
+| #9 | Discard of staged changes (was a silent no-op — `checkout --` only restores the worktree); `:(literal)` pathspecs |
 | #10 | History search/filter: subject/author/email/hash/decorations, subset lane re-layout (+ #13, lighter duplicate) |
 | #12 | Diff parsing memoized out of `DiffView.body` |
 | #14 | Word-level (intraline) diff highlighting |
 | #15 | Commit-box guardrails: 72-char subject counter, amend-after-push warning |
 | #16 | Stale selection fixes: repo switch remount (`\.id`), selection follows files across stage/unstage |
-| #17 | Create tags from the history context menu (annotated/lightweight) |
+| #17 | Create tags from the history context menu (annotated/lightweight; leading-dash names rejected) |
 | #18 | Show in Finder / Copy Path / Open in External Editor on file rows |
 | #19 | git version in Settings fetched off-main, cached per appearance |
-| #20 | ISO8601 formatter race, merge-tool probe caching, drop-error alert |
+| #20 | ISO8601 formatter race, merge-tool probe caching, drop-error alert, New Window command removed |
 | #21 | Graph lines attach to row-center dots, sidebar filter fix, logical filters, full-height selection |
-| #22 | "Ignore in .gitignore" context menu for untracked files |
+| #22 | "Ignore in .gitignore" context menu for untracked files (literal escaping, `check-ignore` short-circuit) |
 | #23 | Auto-fetch setting (never/5/15/30/60 min, off by default) |
 
 Verified non-issue, kept for the record: **graph width never includes trailing
@@ -88,6 +89,29 @@ Test: integration — bare remote + detached HEAD, assert the UI path is guarded
 `HistoryView` builds a full hash array on every body evaluation just to detect
 "selection vanished". **Fix:** `firstIndex(where:)` for just the selected hash,
 or compare a cheap derived value (count + first/last hash). Micro, but free.
+
+### B14 · Cherry-pick / revert of a merge commit fails cryptically — S
+`git cherry-pick <merge>` needs `--mainline 1`; today the user gets git's raw
+"is a merge but no -m option was given" in the error banner.
+**Fix:** in `HistoryView.commitContextMenu`, when `commit.isMerge`, either pass
+`-m 1` (add a `mainline` parameter to `GitClient.cherryPick`/`revert`) or gate
+the menu items behind a confirmation that explains the parent choice.
+Test: integration — merge commit, cherry-pick onto a side branch, assert the
+resulting tree matches the merge's first-parent diff.
+
+### B15 · `/usr/bin/git` CLT stub can false-positive the availability check — S
+Without the Xcode CLT, `/usr/bin/git` exists and is "executable" — it's a shim
+that pops a GUI install dialog when invoked. `GitShell.findGit` treats it as
+available, and the first real invocation may block on that dialog instead of
+failing fast. **Fix:** probe with a short-timeout `git --version` at launch, or
+at least document the limitation next to `findGit`.
+
+### B16 · GPG pinentry can hang commits — S
+`GIT_TERMINAL_PROMPT=0` does not suppress GPG's GUI pinentry, so users with
+`commit.gpgsign=true` can see commits block until the dialog times out.
+**Fix:** detect the hang class in the error path and surface a hint ("commit
+signing prompted for a passphrase"), or a Settings troubleshooting note. Do NOT
+silently disable signing (`-c commit.gpgsign=false` only behind a user toggle).
 
 ---
 
@@ -149,6 +173,20 @@ fall back to a full reload on mismatch). Consider `--topo-order` only for the
 visible page. Test: GraphLayout equivalence of append-layout vs full layout
 (the algorithm must produce identical lanes for a prefix-stable input; property
 test with random DAGs).
+
+### G9 · `RepoViewModel` is the riskiest untested code (+ small races) — M
+The async/queue choreography has no tests, and three small issues compound it:
+(1) `perform` sets `isBusy = false` when the *first* of two queued ops finishes
+(spinner flicker — use an operation counter); (2) `Snapshot` reads the
+main-thread `@Published canLoadMoreHistory` from the repo queue when
+`includeHistory == false` (benign Int race — capture locally); (3)
+`AppState.viewModel(for:)` is called inside `ContentView.body` and from menu
+evaluation, so VMs are created and git work starts as a view-body side effect
+(derive a `selectedViewModel` from `selectedRepository` + explicit start).
+**Fix:** introduce a test seam (injectable `GitShell`/`GitClient`) and cover the
+perform → snapshot → apply contract, then fix 1–3 with tests watching them.
+Also: consolidate duplicated formatting helpers (`RelativeDateText`,
+`Remote.displayHost`, sidebar path abbreviation) into one `Formatters` file.
 
 ---
 
@@ -249,6 +287,49 @@ submodules in status, "Update Submodules" (`submodule update --init --recursive`
 in the Repository menu, and don't offer stage/discard on submodule paths (or
 handle them via `submodule` subcommands).
 
+### M17 · Unpushed-commit markers in history — S
+Show which commits `push` would send at a glance: one
+`git rev-list @{upstream}..HEAD` in the snapshot → hollow dot or "↑" on those
+rows in `HistoryView`. High information density for one extra read-only call.
+Test: integration with a bare remote — ahead by 2, assert exactly those two
+hashes are flagged; unpushed flag clears after push.
+
+### M18 · Pull rescue for dirty trees (autostash) — S
+`git pull` with a dirty tree fails with git's raw message. Offer "Stash, pull,
+pop" as a one-click recovery in the error path, or make
+`pull --rebase --autostash` a Settings option (one flag). Pairs naturally with a
+split-button Pull menu (Pull / Pull (Rebase) / Pull (Autostash)) in the toolbar
+instead of today's Settings-only toggle.
+
+### M19 · Hunk / line-level staging — L
+The power feature (`git add -p` semantics via `git apply --cached` with a
+constructed patch). Hunk checkboxes in `DiffView`, patch reassembly in a pure,
+exhaustively tested type (hunk headers must be rewritten when lines are
+deselected). Large but transformative for the Changes tab.
+
+### M20 · Remote management UI — S/M
+Beyond #6 (publish to the configured remote): add/remove remotes
+(`git remote add/rm`), view their URLs, push to a non-origin remote. Natural
+home: a Remotes section in the Branches tab + a remote picker on Publish.
+Test: integration with two bare remotes.
+
+### M21 · "Ignore Locally" via `.git/info/exclude` — S
+Follow-up to #22: companion context action that appends to `.git/info/exclude`
+instead of the shared `.gitignore` — for personal scratch files that mustn't be
+committed to the shared ignore file. Reuses the `GitIgnore` helper verbatim;
+only the target path differs (resolve via `client.gitDir()`).
+Test: integration — ignored file disappears from status without touching
+`.gitignore`.
+
+### M22 · Per-repo commit-draft persistence — S
+The draft message survives tab switches but not app restarts or repo switches.
+Persist per repo in UserDefaults (keyed by repo path), restore in
+`RepoViewModel.init`, clear on successful commit (the existing onSuccess hook).
+
+### M23 · Spell checking in the commit box — S
+SwiftUI's `TextEditor` doesn't spell-check by default; commit messages deserve
+squiggles. One modifier; verify it doesn't fight the 72-char counter layout.
+
 ---
 
 ## Visual & layout
@@ -300,6 +381,11 @@ The graph Canvas is opaque to VoiceOver; rows/chips lack labels. Add
 `.accessibilityElement(children: .combine)` with "commit <subject> by <author>,
 <relative date>, refs: …" on rows; give RefChip an explicit label; give the
 graph an accessibility summary ("history graph, N commits").
+
+### V13 · Empty diff pane flashes during load — S
+Selecting a file briefly shows the "No diff" empty state until the diff arrives,
+even though `isLoadingDiff` exists on the view model. Show a spinner while
+loading; keep the empty state for the truly-empty case only.
 
 ---
 
@@ -436,6 +522,33 @@ Direct-manipulation cherry-pick/rebase: drag commit C onto branch row B →
 menu "Cherry-pick C onto B / Rebase B onto C". Draggable rows + existing git
 plumbing. Very demo-worthy; guard the drag target to local branches.
 
+### Q13 · Gravatar avatars in history — S
+`Insecure.MD5(lowercased email)` (CryptoKit) →
+`gravatar.com/avatar/<hash>?d=identicon&s=32` in a 16 pt circle beside the
+author in each history row. One `AsyncImage`, Settings opt-out. Instantly
+humanizes the log; zero dependencies.
+
+### Q14 · "Explain this commit" (AI) — S/M
+Detail-pane button → send the commit's patch (capped, like the commit-message
+flow) to the configured LLM → plain-English summary sheet. Reuses
+`CommitMessageGenerator` plumbing with a different system prompt. Great for
+archaeology in unfamiliar repos.
+
+### Q15 · AI-assisted conflict resolution — M/L
+Send a conflicted file's hunks to the LLM → proposed merged content in a
+preview sheet (accept / edit / discard). Ambitious but on-brand; pair with Q7's
+ghost preview so the user can judge the suggestion.
+
+### Q16 · "Fetched N min ago" in the status bar — S
+Persist last-fetch time per repo (UserDefaults), render next to the remote
+host. Pairs with auto-fetch (#23): makes staleness visible instead of
+surprising.
+
+### Q17 · Commit-subject autocomplete from history — S
+Offer recent repo subjects as autocomplete/suggestions while typing in the
+commit box (repo-local, no network). Subtle, surprisingly handy for repetitive
+chores ("Bump …", "Fix typo …").
+
 ---
 
 ## Suggested next pickups (highest value first)
@@ -444,9 +557,12 @@ plumbing. Very demo-worthy; guard the drag target to local branches.
 2. **P1** lazy per-row graph rendering (top perf item; builds on #21)
 3. **M2** blame view (last missing classic view)
 4. **M3** squash merge (everyday parity)
-5. **M5** force-with-lease push (safety)
-6. **U1/U2** keyboard navigation + shortcuts (feel)
-7. **V1/V3** diff gutter + split/whitespace toggles (review quality)
-8. **Q1** reflog undo (differentiator)
-9. **Q2** command palette (differentiator; unlocks everything else)
-10. **M15** minimal interactive rebase (flagship feature)
+5. **M17** unpushed-commit markers (one rev-list call, big clarity win)
+6. **M18** pull autostash rescue (small, removes a common raw-error dead end)
+7. **M5** force-with-lease push (safety)
+8. **U1/U2** keyboard navigation + shortcuts (feel)
+9. **V1/V3** diff gutter + split/whitespace toggles (review quality)
+10. **Q1** reflog undo (differentiator)
+11. **Q2** command palette (differentiator; unlocks everything else)
+12. **M15** minimal interactive rebase (flagship feature)
+13. **Q13/Q14** gravatar avatars + "Explain this commit" (cheap delight)
