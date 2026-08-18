@@ -14,7 +14,9 @@ final class GitClient {
     /// When set, every git invocation this client makes is recorded (begin,
     /// finish, exit code, stderr tail) so the UI can show what is running right
     /// now and what ran before. Owned by the repo's view model; nil in tests
-    /// and one-off clients means no recording.
+    /// and one-off clients means no recording. Assign exactly once, before
+    /// the first command runs — reads happen on background queues without
+    /// locking.
     var activityLog: GitActivityLog?
 
     init(worktree: URL, shell: GitShell = .shared) {

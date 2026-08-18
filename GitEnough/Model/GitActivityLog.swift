@@ -13,7 +13,9 @@ import Foundation
 final class GitActivityLog {
 
     /// One git invocation. Stdin content (commit messages via `commit -F -`)
-    /// is deliberately NOT captured — only argv and a stderr tail.
+    /// is deliberately NOT captured — only argv and a stderr tail. Note that
+    /// free text passed as an argument (e.g. `stash push -m <message>`) IS
+    /// part of argv and therefore appears in `command`.
     struct Entry: Identifiable, Equatable {
         let id: UUID
         /// The command as displayed, e.g. `commit -F -` or `fetch --prune --all`
@@ -26,6 +28,7 @@ final class GitActivityLog {
         private(set) var stderrTail: String?
 
         var isRunning: Bool { finishedAt == nil }
+        /// False while the entry is still running — check `isRunning` first.
         var succeeded: Bool { exitCode == 0 }
     }
 
