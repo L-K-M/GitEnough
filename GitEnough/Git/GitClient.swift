@@ -240,6 +240,20 @@ final class GitClient {
         try shell.runChecked(["-C", worktree.path, "branch", "-m", old, new], in: nil)
     }
 
+    // MARK: - Tags
+
+    /// Creates a tag pointing at `hash`. With a non-empty message the tag is
+    /// annotated (`-a -m`), otherwise lightweight. `git tag` validates the
+    /// refname itself, so invalid names surface as git errors.
+    func createTag(name: String, message: String?, at hash: String) throws {
+        var args = ["-C", worktree.path, "tag"]
+        if let message, !message.isEmpty {
+            args.append(contentsOf: ["-a", "-m", message])
+        }
+        args.append(contentsOf: [name, hash])
+        try shell.runChecked(args, in: nil)
+    }
+
     // MARK: - Merging
 
     func merge(_ branch: String) throws {
