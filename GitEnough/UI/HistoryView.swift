@@ -17,6 +17,9 @@ struct HistoryView: View {
     @State private var commitForNewBranch: Commit?
     @State private var commitToCheckout: Commit?
     @State private var commitToReset: Commit?
+    @State private var commitToTag: Commit?
+    @State private var tagName = ""
+    @State private var tagMessage = ""
 
     private var isFiltering: Bool { !activeFilter.isEmpty }
 
@@ -73,6 +76,9 @@ struct HistoryView: View {
         }
         .sheet(item: $commitForNewBranch) { commit in
             newBranchSheet(for: commit)
+        }
+        .sheet(item: $commitToTag) { commit in
+            newTagSheet(for: commit)
         }
         .confirmationDialog("Check out \(commitToCheckout?.shortHash ?? "")?",
                             isPresented: checkoutConfirmationPresented,
@@ -233,6 +239,11 @@ struct HistoryView: View {
             branchNameForNewBranch = ""
             commitForNewBranch = commit
         }
+        Button("Tag This Commit…") {
+            tagName = ""
+            tagMessage = ""
+            commitToTag = commit
+        }
         Button("Check Out Commit…") {
             commitToCheckout = commit
         }
@@ -272,6 +283,42 @@ struct HistoryView: View {
                 }
                 .keyboardShortcut(.defaultAction)
                 .disabled(branchNameForNewBranch.trimmingCharacters(in: .whitespaces).isEmpty)
+                .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(20)
+    }
+
+    private func newTagSheet(for commit: Commit) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Tag \(commit.shortHash)")
+                .font(.headline)
+            Text(commit.subject)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+            TextField("Tag name", text: $tagName)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 300)
+            TextField("Message (optional — makes an annotated tag)", text: $tagMessage, axis: .vertical)
+                .textFieldStyle(.roundedBorder)
+                .lineLimit(1...5)
+                .frame(width: 300)
+            HStack {
+                Spacer()
+                Button("Cancel") { commitToTag = nil }
+                    .keyboardShortcut(.cancelAction)
+                Button("Create Tag") {
+                    let message = tagMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+                    viewModel.createTag(
+                        named: tagName.trimmingCharacters(in: .whitespaces),
+                        message: message.isEmpty ? nil : message,
+                        at: commit.hash)
+                    commitToTag = nil
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(tagName.trimmingCharacters(in: .whitespaces).isEmpty
+                          || tagName.trimmingCharacters(in: .whitespaces).hasPrefix("-"))
                 .buttonStyle(.borderedProminent)
             }
         }

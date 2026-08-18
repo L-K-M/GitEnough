@@ -467,6 +467,10 @@ final class RepoViewModel: ObservableObject, Identifiable {
         perform("Creating branch…") { try $0.createBranch(name, at: hash, checkout: false) }
     }
 
+    func createTag(named name: String, message: String?, at hash: String) {
+        perform("Creating tag…") { try $0.createTag(name: name, message: message, at: hash) }
+    }
+
     func checkoutCommit(_ hash: String) {
         perform("Checking out commit…") { try $0.checkout(branch: hash) }
     }

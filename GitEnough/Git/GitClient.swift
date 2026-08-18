@@ -275,6 +275,11 @@ final class GitClient {
     // MARK: - Branches
 
     func createBranch(_ name: String, at startPoint: String? = nil, checkout: Bool) throws {
+        // Same option-injection guard as createTag: a leading-dash name must
+        // never reach git in option position.
+        guard !name.hasPrefix("-") else {
+            throw GitError(message: "Branch names must not start with “-”.", exitCode: -1)
+        }
         var args = ["-C", worktree.path]
         args.append(checkout ? "checkout" : "branch")
         if checkout { args.append("-b") }
@@ -301,6 +306,25 @@ final class GitClient {
 
     func renameBranch(old: String, new: String) throws {
         try shell.runChecked(["-C", worktree.path, "branch", "-m", old, new], in: nil)
+    }
+
+    // MARK: - Tags
+
+    /// Creates a tag pointing at `hash`. With a non-empty message the tag is
+    /// annotated (`-a -m`), otherwise lightweight. `git tag` validates the
+    /// refname itself, so invalid names surface as git errors.
+    func createTag(name: String, message: String?, at hash: String) throws {
+        // A name in option position could be parsed as a git flag (`-f` would
+        // force-move an existing tag) — reject it before git ever sees it.
+        guard !name.hasPrefix("-") else {
+            throw GitError(message: "Tag names must not start with “-”.", exitCode: -1)
+        }
+        var args = ["-C", worktree.path, "tag"]
+        if let message, !message.isEmpty {
+            args.append(contentsOf: ["-a", "-m", message])
+        }
+        args.append(contentsOf: [name, hash])
+        try shell.runChecked(args, in: nil)
     }
 
     // MARK: - Merging
