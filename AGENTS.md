@@ -41,10 +41,11 @@ xcodebuild -project GitEnough.xcodeproj -scheme GitEnough -destination 'platform
   GitParsers (pure, tested), DiffParser, models.
 - `GitEnough/Graph/` — GraphLayout: the lane-assignment algorithm for the
   history graph (pure, tested). Input must be newest-first topo-ordered.
-- `GitEnough/Model/` — RepoStore (sidebar list, persistence), AppState
-  (selection, view-model cache), RepoViewModel (per-repo state + ops; all git
-  calls on one serial DispatchQueue per repo), RepoWatcher (cheap .git mtime
-  polling).
+- `GitEnough/Model/` — RepoStore (sidebar list, persistence, discovery
+  exclusions), AppState (selection, view-model cache, watch-folder scans),
+  RepoViewModel (per-repo state + ops; all git calls on one serial DispatchQueue
+  per repo), RepoWatcher (cheap .git mtime polling), RepoDiscovery (watch-folder
+  filesystem scan).
 - `GitEnough/AI/` — LLMConfiguration, CommitMessageGenerator, KeychainStore.
 - `GitEnough/Tools/` — MergeTool detection (git mergetool integration).
 - `GitEnough/UI/` — SwiftUI views. `GraphMetrics` ties the graph Canvas and the
@@ -75,6 +76,9 @@ xcodebuild -project GitEnough.xcodeproj -scheme GitEnough -destination 'platform
 
 - `GitParsersTests` — porcelain v2, log, refs, stash, name-status, quoted paths.
 - `GraphLayoutTests` — linear, diamond merge, octopus, convergence, lane reuse.
+- `RepoDiscoveryTests` / `RepoStoreTests` — watch-folder scanning (depth,
+  hidden/package dirs, repo boundaries, visited cap) and the "removal sticks"
+  exclusion contract.
 - `GitIntegrationTests` — builds a real repo in a temp dir and drives
   GitClient end to end (staging, merging, conflicts, stash). Runs in CI on
   macos-14 where git exists.

@@ -14,6 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidBecomeActive(_ notification: Notification) {
         appState?.refreshSummaries()
+        appState?.scanDiscoveryFolder()
         if let repo = appState?.selectedRepository, let state = appState {
             state.viewModel(for: repo).refresh(includeHistory: true)
         }

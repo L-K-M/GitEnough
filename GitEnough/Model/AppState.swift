@@ -31,6 +31,12 @@ final class AppState: ObservableObject {
 
     private var viewModels: [String: RepoViewModel] = [:]
 
+    /// UserDefaults key for the watch folder (Settings → General → Repository
+    /// discovery). Shared with SettingsView's @AppStorage.
+    static let discoveryFolderKey = "discoveryFolder"
+
+    private var discoveryTimer: Timer?
+
     /// The view model for the currently selected repository, if any.
     var activeViewModel: RepoViewModel? {
         guard let repo = selectedRepository else { return nil }
@@ -42,6 +48,16 @@ final class AppState: ObservableObject {
         if selectedRepoPath == nil {
             selectedRepoPath = store.repositories.first?.path
         }
+        // Watch-folder discovery: cheap file-system scan, no git invocation.
+        let timer = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
+            self?.scanDiscoveryFolder()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        discoveryTimer = timer
+    }
+
+    deinit {
+        discoveryTimer?.invalidate()
     }
 
     var selectedRepository: Repository? {
@@ -113,6 +129,29 @@ final class AppState: ObservableObject {
             }
             DispatchQueue.main.async {
                 self?.store.summaries = result
+            }
+        }
+    }
+
+    // MARK: - Watch-folder discovery
+
+    /// Scans the configured watch folder (Settings → General) on a background
+    /// queue and adds any new repositories it finds to the sidebar. Runs on a
+    /// minute timer, on app activation, on launch, and right after the folder is
+    /// changed in Settings. No-op when no folder is configured.
+    func scanDiscoveryFolder() {
+        let folder = UserDefaults.standard.string(forKey: Self.discoveryFolderKey) ?? ""
+        guard !folder.isEmpty else { return }
+        let root = URL(fileURLWithPath: (folder as NSString).expandingTildeInPath)
+        guard FileManager.default.fileExists(atPath: root.path) else { return }
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let found = RepoDiscovery.findRepositories(in: root)
+            guard !found.isEmpty else { return }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if self.store.addDiscovered(found) > 0 {
+                    self.refreshSummaries()
+                }
             }
         }
     }

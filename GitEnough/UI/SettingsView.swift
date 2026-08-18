@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 /// Settings (⌘,): general git behavior, the AI commit-message provider, and the
 /// detected external merge tools.
@@ -13,7 +14,7 @@ struct SettingsView: View {
             ToolsSettingsView()
                 .tabItem { Label("Merge Tools", systemImage: "wrench.and.screwdriver") }
         }
-        .frame(width: 480, height: 320)
+        .frame(width: 480, height: 360)
     }
 }
 
@@ -22,6 +23,8 @@ struct SettingsView: View {
 private struct GeneralSettingsView: View {
 
     @AppStorage("pullRebase") private var pullRebase = false
+    @AppStorage(AppState.discoveryFolderKey) private var discoveryFolder = ""
+    @EnvironmentObject var appState: AppState
 
     var body: some View {
         Form {
@@ -31,6 +34,26 @@ private struct GeneralSettingsView: View {
             }
             .pickerStyle(.radioGroup)
 
+            Section("Repository discovery") {
+                HStack {
+                    Label {
+                        Text(discoveryFolder.isEmpty ? "No watch folder" : abbreviate(discoveryFolder))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    } icon: {
+                        Image(systemName: "folder.badge.gearshape")
+                    }
+                    Spacer()
+                    Button("Choose…") { chooseDiscoveryFolder() }
+                    Button("Scan Now") { appState.scanDiscoveryFolder() }
+                    Button("Clear") { discoveryFolder = "" }
+                        .disabled(discoveryFolder.isEmpty)
+                }
+                Text("Repositories found directly inside the watch folder — or one folder deep — are added to the sidebar automatically, about once a minute. Repositories you remove from the sidebar stay removed.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             LabeledContent("git") {
                 Text(GitClient.version() ?? "not found")
                     .foregroundStyle(.secondary)
@@ -38,6 +61,27 @@ private struct GeneralSettingsView: View {
         }
         .formStyle(.grouped)
         .padding()
+    }
+
+    private func chooseDiscoveryFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Watch"
+        if panel.runModal() == .OK, let url = panel.url {
+            discoveryFolder = url.path
+            // Pick up whatever is in there right away rather than on the next tick.
+            appState.scanDiscoveryFolder()
+        }
+    }
+
+    private func abbreviate(_ path: String) -> String {
+        let home = NSHomeDirectory()
+        if path.hasPrefix(home) {
+            return "~" + path.dropFirst(home.count)
+        }
+        return path
     }
 }
 
