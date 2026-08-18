@@ -166,8 +166,10 @@ struct ActivityHistoryView: View {
                 Spacer()
                 Button {
                     NSPasteboard.general.clearContents()
-                    // Scoped to its repo so the pasted command runs from any cwd.
-                    NSPasteboard.general.setString("git -C '\(item.repoPath)' \(item.entry.command)",
+                    // Scoped to its repo so the pasted command runs from any cwd;
+                    // shell-escaped ('\'' style) so paths with quotes survive.
+                    let escapedPath = item.repoPath.replacingOccurrences(of: "'", with: "'\\''")
+                    NSPasteboard.general.setString("git -C '\(escapedPath)' \(item.entry.command)",
                                                    forType: .string)
                 } label: {
                     Label("Copy", systemImage: "doc.on.doc")

@@ -88,7 +88,7 @@ final class GitActivityStoreTests: XCTestCase {
         XCTAssertEqual(reloaded.items.map(\.entry.command), ["done-command"])
     }
 
-    func testCapacityKeepsNewestAndCompactsFile() throws {
+    func testCapacityKeepsNewestInMemoryAndOnReload() throws {
         let store = makeStore(capacity: 3)
         for i in 0..<5 {
             store.record(.finished(entry("cmd\(i)")), repoName: "A", repoPath: "/a")
