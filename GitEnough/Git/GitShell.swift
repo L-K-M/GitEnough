@@ -48,6 +48,107 @@ final class GitShell {
         gitURL = Self.findGit()
     }
 
+    /// Environment handed to every git child process. Built once — the PATH
+    /// lookup hits the filesystem and re-running it for every git call would
+    /// waste I/O. Tradeoff: tools installed after the first git command in a
+    /// session stay invisible to hooks until the app relaunches. `static let`
+    /// gives us thread-safe lazy initialization.
+    private static let childEnvironment: [String: String] = {
+        var env = ProcessInfo.processInfo.environment
+        // Apps launched from Finder inherit launchd's bare PATH
+        // (/usr/bin:/bin:/usr/sbin:/sbin), so git hooks that call node/npm/npx
+        // (husky, lint-staged, …) die with "command not found". Append the
+        // usual tool locations that actually exist on disk — purely additive;
+        // an inherited PATH (e.g. when launched from Terminal) always wins.
+        let home = NSHomeDirectory()
+        let fm = FileManager.default
+        let nvmRoot = home + "/.nvm/versions/node"
+        env["PATH"] = augmentedPATH(
+            base: env["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin",
+            home: home,
+            directoryExists: { fm.fileExists(atPath: $0) },
+            nvmVersionDirs: { (try? fm.contentsOfDirectory(atPath: nvmRoot)) ?? [] },
+            fileContents: { try? String(contentsOfFile: $0, encoding: .utf8) })
+        // Never let git block on a terminal credential/passphrase prompt — fail
+        // fast instead and surface the error. HTTPS credentials still resolve
+        // non-interactively via the osxkeychain helper; SSH via ssh-agent.
+        env["GIT_TERMINAL_PROMPT"] = "0"
+        env["GIT_ASKPASS"] = "/usr/bin/true"
+        env["SSH_ASKPASS"] = "/usr/bin/true"
+        // Without a TTY ssh may ignore SSH_ASKPASS and probe /dev/tty instead;
+        // force makes the fail-fast override deterministic (OpenSSH 8.4+).
+        env["SSH_ASKPASS_REQUIRE"] = "force"
+        env["LC_ALL"] = "en_US.UTF-8"
+        // Keep hooks and editor invocations from opening an interactive editor.
+        env["GIT_EDITOR"] = "/usr/bin/true"
+        return env
+    }()
+
+    /// `base` PATH plus every well-known tool location that exists on disk, so
+    /// git hooks can find node/npm/npx even under launchd's minimal PATH.
+    /// Pure: filesystem access arrives through the closures so tests stub it.
+    static func augmentedPATH(base: String,
+                              home: String,
+                              directoryExists: (String) -> Bool,
+                              nvmVersionDirs: () -> [String],
+                              fileContents: (String) -> String?) -> String {
+        var extras = [
+            "/opt/homebrew/bin",            // Homebrew on Apple Silicon
+            "/usr/local/bin",               // Homebrew on Intel / node installer
+            home + "/.local/bin",
+            home + "/.volta/bin",
+            home + "/.asdf/shims",
+            home + "/.local/share/mise/shims",
+            home + "/.bun/bin",
+            home + "/.deno/bin",
+            home + "/Library/pnpm",
+            home + "/.local/share/pnpm",
+            home + "/.yarn/bin",
+        ]
+        if let nvmBin = bestNvmBin(home: home, versionDirs: nvmVersionDirs(),
+                                   fileContents: fileContents) {
+            extras.append(nvmBin)
+        }
+        let existing = Set(base.split(separator: ":").map(String.init))
+        let additions = extras.filter { directoryExists($0) && !existing.contains($0) }
+        return additions.isEmpty ? base : base + ":" + additions.joined(separator: ":")
+    }
+
+    /// The `bin` directory of the nvm-installed node the user most likely
+    /// expects: their `default` alias when it resolves to an installed version
+    /// ("node"/"lts/*" aliases just mean "latest"), else the highest installed
+    /// version. Hooks only need *a* working npm, so any of these is fine.
+    private static func bestNvmBin(home: String,
+                                   versionDirs: [String],
+                                   fileContents: (String) -> String?) -> String? {
+        let root = home + "/.nvm/versions/node"
+        let installed = versionDirs.filter { $0.hasPrefix("v") && $0.contains(".") }
+        guard !installed.isEmpty else { return nil }
+        if let alias = fileContents(home + "/.nvm/alias/default")?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !alias.isEmpty, alias != "node", !alias.hasPrefix("lts") {
+            let want = alias.hasPrefix("v") ? alias : "v" + alias
+            let matches = installed.filter { $0 == want || $0.hasPrefix(want + ".") }
+            if let best = matches.max(by: isVersionOlder) {
+                return root + "/" + best + "/bin"
+            }
+        }
+        return installed.max(by: isVersionOlder).map { root + "/" + $0 + "/bin" }
+    }
+
+    /// Numeric version ordering ("v9.1.0" < "v10.0.0") for nvm directory names —
+    /// a plain string sort would rank v9 above v10.
+    private static func isVersionOlder(_ a: String, _ b: String) -> Bool {
+        let pa = a.dropFirst().split(separator: ".").map { Int($0) ?? 0 }
+        let pb = b.dropFirst().split(separator: ".").map { Int($0) ?? 0 }
+        for i in 0..<max(pa.count, pb.count) {
+            let x = i < pa.count ? pa[i] : 0
+            let y = i < pb.count ? pb[i] : 0
+            if x != y { return x < y }
+        }
+        return false
+    }
+
     private static func findGit() -> URL? {
         let candidates = [
             "/usr/bin/git",                 // Xcode CLT shim (always present on macOS with CLT)
@@ -75,17 +176,7 @@ final class GitShell {
         if let directory {
             process.currentDirectoryURL = directory
         }
-        // Never let git block on a terminal credential/passphrase prompt — fail
-        // fast instead and surface the error. HTTPS credentials still resolve
-        // non-interactively via the osxkeychain helper; SSH via ssh-agent.
-        var environment = ProcessInfo.processInfo.environment
-        environment["GIT_TERMINAL_PROMPT"] = "0"
-        environment["GIT_ASKPASS"] = "/usr/bin/true"
-        environment["SSH_ASKPASS"] = "/usr/bin/true"
-        environment["LC_ALL"] = "en_US.UTF-8"
-        // Keep hooks and editor invocations from opening an interactive editor.
-        environment["GIT_EDITOR"] = "/usr/bin/true"
-        process.environment = environment
+        process.environment = GitShell.childEnvironment
         process.arguments = args
 
         let outPipe = Pipe()
@@ -156,13 +247,7 @@ final class GitShell {
         if let directory {
             process.currentDirectoryURL = directory
         }
-        var environment = ProcessInfo.processInfo.environment
-        environment["GIT_TERMINAL_PROMPT"] = "0"
-        environment["GIT_ASKPASS"] = "/usr/bin/true"
-        environment["SSH_ASKPASS"] = "/usr/bin/true"
-        environment["LC_ALL"] = "en_US.UTF-8"
-        environment["GIT_EDITOR"] = "/usr/bin/true"
-        process.environment = environment
+        process.environment = GitShell.childEnvironment
         process.arguments = args
 
         let outPipe = Pipe()
