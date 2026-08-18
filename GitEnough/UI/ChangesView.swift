@@ -15,6 +15,20 @@ struct ChangesView: View {
     private var conflicts: [FileChange] { viewModel.status.conflicted }
     private var mergeInProgress: Bool { viewModel.mergeState.isMerging }
 
+    /// Length of the message's first line — the git subject. 72 is the
+    /// traditional wrap limit (and GitHub's truncation point).
+    private var subjectLength: Int {
+        viewModel.draftCommitMessage.components(separatedBy: "\n").first?.count ?? 0
+    }
+
+    /// Amending a commit that the upstream already contains rewrites public
+    /// history (upstream set, nothing ahead → HEAD is reachable from upstream).
+    private var amendRewritesPushedCommit: Bool {
+        viewModel.amendLastCommit
+            && viewModel.status.upstream != nil
+            && viewModel.status.ahead == 0
+    }
+
     var body: some View {
         HSplitView {
             VStack(spacing: 0) {
@@ -165,6 +179,13 @@ struct ChangesView: View {
                     .lineLimit(3)
             }
 
+            if amendRewritesPushedCommit {
+                Label("The last commit is already pushed — amending rewrites public history.",
+                      systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+
             HStack(spacing: 8) {
                 Button {
                     viewModel.generateCommitMessage()
@@ -178,6 +199,14 @@ struct ChangesView: View {
                 }
                 .disabled(viewModel.isGeneratingMessage || viewModel.status.staged.isEmpty)
                 .help("Write the commit message with the configured LLM (Settings → AI)")
+
+                if !viewModel.draftCommitMessage.isEmpty {
+                    Text("\(subjectLength)/72")
+                        .font(.caption)
+                        .monospacedDigit()
+                        .foregroundStyle(subjectLength > 72 ? .orange : .secondary)
+                        .help("Subject line length — keep it at or under 72 characters")
+                }
 
                 Spacer()
 
