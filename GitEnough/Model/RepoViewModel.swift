@@ -324,6 +324,21 @@ final class RepoViewModel: ObservableObject, Identifiable {
         perform("Unstaging…", includeHistory: false) { try $0.unstage(paths: changes.map(\.path)) }
     }
 
+    /// Adds an untracked file's path to the repo's root `.gitignore` (creating
+    /// the file if needed). A plain file append, not a git command — the
+    /// post-op snapshot picks up the change and the row disappears.
+    func ignore(_ change: FileChange) {
+        perform("Updating .gitignore…", includeHistory: false) { _ in
+            let url = self.repo.url.appendingPathComponent(".gitignore")
+            let existing = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+            let lines = existing.components(separatedBy: "\n")
+            guard !lines.contains(change.path), !lines.contains("/" + change.path) else { return }
+            let separator = existing.isEmpty || existing.hasSuffix("\n") ? "" : "\n"
+            let updated = existing + separator + "/" + change.path + "\n"
+            try updated.write(to: url, atomically: true, encoding: .utf8)
+        }
+    }
+
     /// Tracked paths are restored via git; untracked paths are moved to the Trash
     /// (recoverable, unlike a hard delete).
     func discard(_ changes: [FileChange]) {
