@@ -43,6 +43,17 @@ final class RepoViewModel: ObservableObject, Identifiable {
     @Published private(set) var activity: String?
     @Published var errorMessage: String?
 
+    /// Rolling log of the git commands this repo has run (newest last). Powers
+    /// the status-bar "what is it doing" readout and the activity popover.
+    let activityLog = GitActivityLog()
+    @Published private(set) var activityEntries: [GitActivityLog.Entry] = []
+
+    /// The git command running right now, if any (at most one — the queue is
+    /// serial; the merge tool is the one off-queue exception).
+    var runningActivityEntry: GitActivityLog.Entry? {
+        activityEntries.last(where: { $0.isRunning })
+    }
+
     /// Non-blocking indicator while an external merge tool is open. Unlike
     /// `isBusy` this never occupies the serial repo queue: the tool can stay open
     /// as long as the user needs, and Ours/Theirs/Mark Resolved keep working.
@@ -68,6 +79,10 @@ final class RepoViewModel: ObservableObject, Identifiable {
         self.queue = DispatchQueue(label: "gitenough.repo.\(repo.name)", qos: .userInitiated)
         self.historyLimit = historyLimit
         self.queue.setSpecific(key: queueKey, value: 1)
+        client.activityLog = activityLog
+        activityLog.onChange = { [weak self] entries in
+            DispatchQueue.main.async { self?.activityEntries = entries }
+        }
     }
 
     deinit {
