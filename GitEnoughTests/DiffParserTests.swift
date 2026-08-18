@@ -88,7 +88,7 @@ index 1234567..89abcde 100644
         // A deletion run with no additions following it (a pure removal) must
         // stay plain — there is nothing to pair with.
         let diff = """
-@@ -1,3 +1,2 @@
+@@ -1,3 +1,3 @@
  context line
 -remove me
  more context
