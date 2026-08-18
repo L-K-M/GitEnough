@@ -50,7 +50,11 @@ struct ChangesView: View {
                 selectionIsStaged = true
                 selectedFile = status.staged.first { $0.path == selected.path } ?? selected
             default:
-                break // still in its list (or in both — partially staged file)
+                // Still in its list (or in both — partially staged file).
+                // Refresh the cached value so status-column changes don't leave
+                // it stale; assigning an equal value is a no-op (no reload).
+                let current = selectionIsStaged ? status.staged : status.unstaged
+                selectedFile = current.first { $0.path == selected.path } ?? selected
             }
         }
         .confirmationDialog("Discard changes?",
