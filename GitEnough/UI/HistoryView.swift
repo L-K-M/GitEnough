@@ -199,8 +199,9 @@ struct HistoryView: View {
             TextField("Tag name", text: $tagName)
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 300)
-            TextField("Message (optional — makes an annotated tag)", text: $tagMessage)
+            TextField("Message (optional — makes an annotated tag)", text: $tagMessage, axis: .vertical)
                 .textFieldStyle(.roundedBorder)
+                .lineLimit(1...5)
                 .frame(width: 300)
             HStack {
                 Spacer()
@@ -215,7 +216,8 @@ struct HistoryView: View {
                     commitToTag = nil
                 }
                 .keyboardShortcut(.defaultAction)
-                .disabled(tagName.trimmingCharacters(in: .whitespaces).isEmpty)
+                .disabled(tagName.trimmingCharacters(in: .whitespaces).isEmpty
+                          || tagName.trimmingCharacters(in: .whitespaces).hasPrefix("-"))
                 .buttonStyle(.borderedProminent)
             }
         }

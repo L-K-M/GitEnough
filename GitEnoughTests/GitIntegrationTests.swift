@@ -208,6 +208,21 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertTrue(tags.contains("v2.0-beta"))
         // Invalid refnames surface as git errors, not silent success.
         XCTAssertThrowsError(try client.createTag(name: "not a tag", message: nil, at: head))
+        // Existing tags must not be silently moved (no implicit -f).
+        XCTAssertThrowsError(try client.createTag(name: "v1.0", message: nil, at: head))
+        // Leading-dash names are rejected before git can parse them as options.
+        XCTAssertThrowsError(try client.createTag(name: "-f", message: nil, at: head))
+        // The annotated tag actually carries its message.
+        let annotation = try GitShell.shared.runChecked(
+            ["-C", repoURL.path, "for-each-ref", "refs/tags/v2.0-beta",
+             "--format=%(contents:subject)"], in: nil)
+        XCTAssertEqual(annotation.stdout.trimmingCharacters(in: .whitespacesAndNewlines),
+                       "Second release")
+        // And the lightweight one has no annotation object.
+        let lightweight = try GitShell.shared.runChecked(
+            ["-C", repoURL.path, "for-each-ref", "refs/tags/v1.0", "--format=%(objecttype)"], in: nil)
+        XCTAssertEqual(lightweight.stdout.trimmingCharacters(in: .whitespacesAndNewlines),
+                       "commit")
     }
 
     func testValidationHelpers() throws {
