@@ -264,7 +264,14 @@ private struct AISettingsView: View {
 
 private struct ToolsSettingsView: View {
 
-    @State private var tools: [MergeTool] = MergeTool.installed
+    /// Bumped by the rescan notification so body re-reads MergeTool.installed —
+    /// same live-read pattern as the conflict rows.
+    @State private var toolsGeneration = 0
+
+    private var tools: [MergeTool] {
+        _ = toolsGeneration
+        return MergeTool.installed
+    }
 
     var body: some View {
         Form {
@@ -286,11 +293,13 @@ private struct ToolsSettingsView: View {
                     .foregroundStyle(.secondary)
                 Button("Rescan") {
                     MergeTool.rescan()
-                    tools = MergeTool.installed
                 }
             }
         }
         .formStyle(.grouped)
         .padding()
+        .onReceive(NotificationCenter.default.publisher(for: MergeTool.didChangeNotification)) { _ in
+            toolsGeneration += 1
+        }
     }
 }

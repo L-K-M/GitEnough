@@ -65,6 +65,7 @@ struct MergeTool: Identifiable, Hashable {
     static let didChangeNotification = Notification.Name("MergeToolInstalledDidChange")
 
     static func rescan() {
+        dispatchPrecondition(condition: .onQueue(.main))
         installed = detectInstalled()
         NotificationCenter.default.post(name: didChangeNotification, object: nil)
     }

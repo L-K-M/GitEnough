@@ -10,9 +10,12 @@ struct GitEnoughApp: App {
     @StateObject private var appState = AppState()
 
     init() {
-        // Warm the merge-tool cache here (main thread, ~18 cheap probes) so
-        // the first conflict row doesn't pay the one-time detection hitch.
-        _ = MergeTool.installed
+        // Warm the merge-tool cache right after launch (main thread, ~18
+        // cheap probes) so neither the first frame nor the first conflict
+        // row pays the one-time detection cost.
+        DispatchQueue.main.async {
+            _ = MergeTool.installed
+        }
     }
 
     var body: some Scene {
