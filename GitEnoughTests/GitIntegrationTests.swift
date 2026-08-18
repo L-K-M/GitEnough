@@ -175,10 +175,15 @@ final class GitIntegrationTests: XCTestCase {
         try client.stashPush(message: "wip", includeUntracked: false)
 
         // The graph must show the four real commits — not the stash's synthetic
-        // "WIP on main…" commits, which --all would otherwise include via refs/stash.
+        // commits ("On <branch>: …" with a custom message, or "WIP on <branch>:
+        // …" without one, plus the "index on …" parent), which --all would
+        // otherwise include via refs/stash.
         let commits = try client.log(limit: 50)
         XCTAssertEqual(commits.count, 4)
-        XCTAssertFalse(commits.contains { $0.subject.contains("WIP on") })
+        XCTAssertFalse(commits.contains {
+            $0.subject.hasPrefix("On ") || $0.subject.hasPrefix("WIP on ")
+                || $0.subject.hasPrefix("index on ")
+        })
         XCTAssertEqual(Set(commits.map(\.hash)).count, 4)
     }
 

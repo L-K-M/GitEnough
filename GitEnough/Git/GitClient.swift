@@ -89,8 +89,10 @@ final class GitClient {
         let r = GitParsers.recordSep
         let format = "%H\(f)%P\(f)%an\(f)%ae\(f)%aI\(f)%D\(f)%s\(r)"
         // --exclude=refs/stash (must precede --all, whose ref set it filters):
-        // --all is every ref under refs/, which would drop each stash's two
-        // synthetic "WIP on…" commits into the graph as permanent-looking lanes.
+        // --all is every ref under refs/ (plus HEAD), so the stash refs/stash points
+        // at leaks its two synthetic "WIP on…"/"index on …" commits into the graph
+        // as permanent-looking lanes (older stashes live in refs/stash's reflog,
+        // which --all does not traverse).
         var args = ["-C", worktree.path, "log", "--exclude=refs/stash", "--all",
                     "--topo-order", "--date-order",
                     "--pretty=tformat:\(format)",
