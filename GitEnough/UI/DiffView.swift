@@ -2,25 +2,49 @@ import SwiftUI
 import AppKit
 
 /// Renders a unified diff as colored, monospaced, horizontally scrollable lines.
+///
+/// The parse is memoized in view state: the view model publishes fresh
+/// snapshots every few seconds while the repo is dirty, and each publish
+/// rebuilds this view — parsing up to 4,000 diff lines inline in `body` on
+/// every one of those evaluations is the main scroll-stutter source in the
+/// app. We parse once per diff string instead.
 struct DiffView: View {
 
     let diff: String
 
+    @State private var parsedLines: [DiffLine]
+    @State private var parsedDiff: String
+
+    init(diff: String) {
+        self.diff = diff
+        _parsedDiff = State(initialValue: diff)
+        _parsedLines = State(initialValue: DiffParser.parse(diff))
+    }
+
     var body: some View {
-        if diff.isEmpty {
-            EmptyPane(systemImage: "doc.text.magnifyingglass",
-                      title: "No diff",
-                      subtitle: "Select a file to see its changes.")
-        } else {
-            ScrollView([.horizontal, .vertical]) {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(Array(DiffParser.parse(diff).enumerated()), id: \.offset) { _, line in
-                        DiffLineView(line: line)
+        Group {
+            if diff.isEmpty {
+                EmptyPane(systemImage: "doc.text.magnifyingglass",
+                          title: "No diff",
+                          subtitle: "Select a file to see its changes.")
+            } else {
+                ScrollView([.horizontal, .vertical]) {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(Array(parsedLines.enumerated()), id: \.offset) { _, line in
+                            DiffLineView(line: line)
+                        }
                     }
+                    .padding(.vertical, 6)
                 }
-                .padding(.vertical, 6)
+                .background(Color(nsColor: .textBackgroundColor))
             }
-            .background(Color(nsColor: .textBackgroundColor))
+        }
+        .onChange(of: diff) { _, newDiff in
+            // Only re-parse when the diff actually changed, not on every
+            // unrelated snapshot publish.
+            guard newDiff != parsedDiff else { return }
+            parsedDiff = newDiff
+            parsedLines = DiffParser.parse(newDiff)
         }
     }
 }
