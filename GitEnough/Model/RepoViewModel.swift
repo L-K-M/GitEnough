@@ -213,8 +213,11 @@ final class RepoViewModel: ObservableObject, Identifiable {
     }
 
     /// Push -u <publishRemoteName> HEAD for a branch with no upstream yet — which
-    /// is not necessarily a remote named "origin".
+    /// is not necessarily a remote named "origin". Guarded: with no remotes at
+    /// all there is nothing to publish to (the Publish button hides, but no call
+    /// path should be able to push to a fabricated "origin").
     func publishBranch() {
+        guard !remotes.isEmpty else { return }
         let remote = publishRemoteName
         perform("Publishing branch…") { try $0.push(setUpstream: true, remote: remote) }
     }
