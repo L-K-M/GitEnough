@@ -84,7 +84,7 @@ final class PullRequestFinder {
 
     /// GET returning the body only for HTTP 200. Sends a User-Agent — the
     /// GitHub API rejects requests without one. No per-request timeout: the
-    /// session's 10 s request timeout applies.
+    /// session's 5 s request timeout applies.
     private func get(_ url: URL) async -> Data? {
         var request = URLRequest(url: url)
         request.setValue("GitEnough", forHTTPHeaderField: "User-Agent")
@@ -120,10 +120,9 @@ final class PullRequestFinder {
     /// the lookups here. GitLab identifies a project by its full path with
     /// every "/" percent-encoded as %2F (nested groups included).
     static func gitLabLookupURL(_ forge: ForgeRepo, headBranch: String) -> URL? {
-        let project = "\(forge.owner)/\(forge.repo)"
-            .addingPercentEncoding(withAllowedCharacters: CharacterSet.alphanumerics
-                .union(CharacterSet(charactersIn: "-._~")))
-        guard let project else { return nil }
+        // owner/repo are already percent-encoded by ForgeRepo.parse — only the
+        // "/" separators need %2F; re-encoding would turn %C3 into %25C3.
+        let project = "\(forge.owner)/\(forge.repo)".replacingOccurrences(of: "/", with: "%2F")
         return URL(string: forge.origin.absoluteString
             + "/api/v4/projects/\(project)/merge_requests?state=opened"
             + "&source_branch=\(encodeQuery(headBranch))")
