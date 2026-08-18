@@ -42,6 +42,13 @@ Desktop never gave you: a proper **IntelliJ-style branch/merge graph** and
   it if the markers are gone.
 - **Branches & stash.** Switch by double-click, create/rename/delete/merge from
   the context menu, tracking-checkouts for remote branches, stash apply/pop/drop.
+- **Pull requests.** The toolbar button or ⌥⌘P opens the current branch's pull
+  request on **GitHub**, **GitLab** or **Forgejo/Gitea** in your browser — or,
+  when none is open yet, the forge's create-a-PR page. The lookup is an
+  unauthenticated best-effort API call (no tokens involved); for private repos
+  the create page is opened, where the forge shows an "already has a pull
+  request" banner once you're signed in. Self-hosted remotes are auto-detected
+  (Forgejo/Gitea's API is probed first, then GitLab's).
 
 Under the hood GitEnough shells out to **your own git** (no libgit2, no bundled
 fork): it behaves exactly like the command line you already know, respects your

@@ -66,7 +66,8 @@ struct RepoDetailView: View {
                 .frame(width: 280)
             }
             ToolbarItemGroup(placement: .primaryAction) {
-                if viewModel.isBusy || viewModel.mergeToolActivity != nil {
+                if viewModel.isBusy || viewModel.mergeToolActivity != nil
+                    || viewModel.isResolvingPullRequest {
                     ProgressView()
                         .controlSize(.small)
                         .padding(.horizontal, 8)
@@ -104,6 +105,16 @@ struct RepoDetailView: View {
                     .disabled(viewModel.isBusy || viewModel.remotes.isEmpty)
                     .help("Push (⇧⌘P)")
                 }
+
+                Button {
+                    viewModel.openPullRequest()
+                } label: {
+                    Label(viewModel.isResolvingPullRequest ? "Opening…" : "Pull Request",
+                          systemImage: "arrow.triangle.pull")
+                }
+                .disabled(viewModel.isBusy || viewModel.isResolvingPullRequest
+                          || viewModel.remotes.isEmpty || viewModel.status.head == nil)
+                .help("Open the current branch's pull request on the forge website (GitHub, Forgejo/Gitea, GitLab), or the page to create one (⌥⌘P)")
             }
         }
         .sheet(isPresented: $appState.showingNewBranch) {

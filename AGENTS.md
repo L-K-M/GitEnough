@@ -41,6 +41,12 @@ xcodebuild -project GitEnough.xcodeproj -scheme GitEnough -destination 'platform
   GitParsers (pure, tested), DiffParser, models.
 - `GitEnough/Graph/` — GraphLayout: the lane-assignment algorithm for the
   history graph (pure, tested). Input must be newest-first topo-ordered.
+- `GitEnough/Forge/` — forge integration for the "Open Pull Request…" command:
+  ForgeRepo (remote URL → website URL shapes, pure, tested) and
+  PullRequestFinder (unauthenticated "which PR is open for this branch?" API
+  lookup — GitHub, GitLab v4, and Forgejo/Gitea; unknown hosts get Forgejo then
+  GitLab probes, everything else falls back to opening the forge's compare
+  page). No forge tokens, ever.
 - `GitEnough/Model/` — RepoStore (sidebar list, persistence, discovery
   exclusions), AppState (selection, view-model cache, watch-folder scans),
   RepoViewModel (per-repo state + ops; all git calls on one serial DispatchQueue
@@ -80,6 +86,8 @@ xcodebuild -project GitEnough.xcodeproj -scheme GitEnough -destination 'platform
 
 - `GitParsersTests` — porcelain v2, log, refs, stash, name-status, quoted paths.
 - `GraphLayoutTests` — linear, diamond merge, octopus, convergence, lane reuse.
+- `ForgeRepoTests` / `PullRequestFinderTests` — remote-URL parsing and the
+  per-forge website/API URL shapes (GitHub, Forgejo/Gitea, GitLab, generic).
 - `RepoDiscoveryTests` / `RepoStoreTests` — watch-folder scanning (depth,
   hidden/package dirs, repo boundaries, visited cap) and the "removal sticks"
   exclusion contract.

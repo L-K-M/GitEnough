@@ -31,6 +31,10 @@ struct AppCommands: Commands {
                 .keyboardShortcut("p", modifiers: [.shift, .command])
                 .disabled(active == nil)
 
+            Button("Open Pull Request…") { active?.openPullRequest() }
+                .keyboardShortcut("p", modifiers: [.option, .command])
+                .disabled(active == nil)
+
             Divider()
 
             Button("New Branch…") { appState.showingNewBranch = true }
