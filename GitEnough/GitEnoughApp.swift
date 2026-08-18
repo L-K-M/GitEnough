@@ -9,6 +9,12 @@ struct GitEnoughApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var appState = AppState()
 
+    init() {
+        // Warm the merge-tool cache here (main thread, ~18 cheap probes) so
+        // the first conflict row doesn't pay the one-time detection hitch.
+        _ = MergeTool.installed
+    }
+
     var body: some Scene {
         WindowGroup("GitEnough") {
             ContentView()
