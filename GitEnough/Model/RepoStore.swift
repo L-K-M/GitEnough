@@ -10,9 +10,13 @@ struct Repository: Identifiable, Hashable, Codable {
     var id: String { path }
     var url: URL { URL(fileURLWithPath: path) }
 
+    init(path: String, name: String) {
+        self.path = path
+        self.name = name
+    }
+
     init(url: URL) {
-        self.path = url.path
-        self.name = url.lastPathComponent
+        self.init(path: url.path, name: url.lastPathComponent)
     }
 }
 
