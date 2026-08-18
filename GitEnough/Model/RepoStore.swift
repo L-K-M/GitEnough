@@ -40,6 +40,26 @@ enum SidebarSortOrder: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+/// Which repositories the sidebar shows (persisted in UserDefaults). Unlike the
+/// text filter, these look at live repo state, so they're "logical" filters.
+enum SidebarFilter: String, CaseIterable, Identifiable {
+    case all = "All Repositories"
+    case dirty = "Uncommitted Changes"
+    case unpushed = "Unpushed Commits"
+    case incoming = "Incoming Commits"
+
+    var id: String { rawValue }
+
+    func matches(_ summary: RepoSummary) -> Bool {
+        switch self {
+        case .all: return true
+        case .dirty: return summary.isDirty
+        case .unpushed: return summary.ahead > 0
+        case .incoming: return summary.behind > 0
+        }
+    }
+}
+
 /// The sidebar's list of repositories: add, remove, reorder, persist, plus the
 /// "removal sticks" bookkeeping for watch-folder discovery (paths the user
 /// removed are never auto-re-added).

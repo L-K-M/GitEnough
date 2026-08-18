@@ -72,29 +72,35 @@ struct GraphCanvasView: View {
 
     // MARK: - Segments
 
+    /// All segment endpoints are node points (row center lines). Consecutive
+    /// verticals tile seamlessly center-to-center, a lane terminating at a node
+    /// is drawn all the way INTO the dot (no half-row gap above the first commit
+    /// after a branch point), and no stub pokes above the topmost row's node.
     private func drawSegment(_ segment: GraphLayout.Segment,
                              in context: inout GraphicsContext) {
         let rowH = GraphMetrics.rowHeight
         var path = Path()
         switch segment.kind {
         case .vertical:
-            path.move(to: CGPoint(x: x(segment.fromColumn), y: CGFloat(segment.fromRow) * rowH))
-            path.addLine(to: CGPoint(x: x(segment.toColumn), y: CGFloat(segment.toRow) * rowH))
+            path.move(to: nodePoint(row: segment.fromRow, column: segment.fromColumn))
+            path.addLine(to: nodePoint(row: segment.toRow, column: segment.toColumn))
         case .branchOut:
-            // From the merge node diagonally down into the newborn lane.
+            // From the merge node diagonally down into the newborn lane, ending
+            // on the next row's center line — exactly where the lane's vertical
+            // (or the branch tip's dot) picks it up.
             let start = nodePoint(row: segment.fromRow, column: segment.fromColumn)
-            let end = CGPoint(x: x(segment.toColumn), y: CGFloat(segment.toRow) * rowH)
+            let end = nodePoint(row: segment.toRow, column: segment.toColumn)
             path.move(to: start)
             path.addCurve(to: end,
                           control1: CGPoint(x: start.x, y: start.y + rowH * 0.55),
                           control2: CGPoint(x: end.x, y: end.y - rowH * 0.55))
         case .joinExisting:
-            // A node/lane merging into a lane that passes through this row. Both
-            // variants land on the target lane at the row's bottom edge — the
-            // point where the lane's vertical continues — so the connection is
-            // always visibly made.
+            // A node/lane merging into a lane that passes through this row. The
+            // curve lands on the target lane at the next row's center line — a
+            // point the lane's vertical always passes through (and the merging
+            // parent's dot itself when it sits directly below).
             let start = nodePoint(row: segment.fromRow, column: segment.fromColumn)
-            let end = CGPoint(x: x(segment.toColumn), y: CGFloat(segment.toRow) * rowH + rowH)
+            let end = nodePoint(row: segment.toRow, column: segment.toColumn)
             path.move(to: start)
             if segment.fromColumn < segment.toColumn {
                 // Merge node joining a lane to its right: smooth S, continuing

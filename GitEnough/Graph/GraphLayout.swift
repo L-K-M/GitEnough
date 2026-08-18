@@ -4,9 +4,12 @@ import Foundation
 /// the model behind the IntelliJ-style branch/merge graph.
 ///
 /// Coordinate space: a commit at `row` r and `column` c is drawn at
-/// (c * laneWidth + laneWidth/2, r * rowHeight + rowHeight/2). Segments connect
-/// consecutive rows (vertical lines), bend diagonally one row down (new branch
-/// fan-out), or run within a single row (a lane merging into a node).
+/// (c * laneWidth + laneWidth/2, r * rowHeight + rowHeight/2), and every segment
+/// endpoint sits on such a row center line: segments connect consecutive rows
+/// (vertical lines), bend diagonally one row down (new branch fan-out), or hook
+/// one row down into a passing lane (a lane folding into another). Endpoints on
+/// center lines are what make every line visibly attach — either to a dot or to
+/// the segment continuing it.
 struct GraphLayout: Equatable {
 
     /// A commit node's placement.
@@ -21,7 +24,7 @@ struct GraphLayout: Equatable {
         enum Kind: Equatable {
             case vertical     // lane continues straight down to the next row
             case branchOut    // a new lane curves down-right out of a merge node
-            case joinExisting // a node/lane merges into a lane that passes this row
+            case joinExisting // a node/lane merges into a passing lane one row down
         }
         let fromRow: Int
         let fromColumn: Int
@@ -115,7 +118,7 @@ struct GraphLayout: Equatable {
                     // First parent already has a lane (it is the second parent of a
                     // merge further up): fold this lane into it.
                     layout.segments.append(Segment(fromRow: row, fromColumn: column,
-                                                   toRow: row, toColumn: existing,
+                                                   toRow: row + 1, toColumn: existing,
                                                    colorIndex: laneColors[column],
                                                    kind: .joinExisting))
                     lanes[column] = nil
@@ -125,7 +128,7 @@ struct GraphLayout: Equatable {
                 for parent in commit.parents.dropFirst() {
                     if let existing = lanes.indices.first(where: { $0 != column && lanes[$0] == parent }) {
                         layout.segments.append(Segment(fromRow: row, fromColumn: column,
-                                                       toRow: row, toColumn: existing,
+                                                       toRow: row + 1, toColumn: existing,
                                                        colorIndex: laneColors[existing],
                                                        kind: .joinExisting))
                     } else {
