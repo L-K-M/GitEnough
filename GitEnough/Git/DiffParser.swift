@@ -133,7 +133,9 @@ enum DiffParser {
     }
 
     /// Maximal runs of non-whitespace, and runs of whitespace, each as one token.
-    private static func wordTokens<S: StringProtocol>(of line: S)
+    /// Takes the content substring (the line minus its +/- prefix), whose indices
+    /// map straight back onto the original line.
+    private static func wordTokens(of line: Substring)
         -> [(text: Substring, range: Range<String.Index>)] {
         var tokens: [(text: Substring, range: Range<String.Index>)] = []
         var index = line.startIndex
