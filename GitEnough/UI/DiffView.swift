@@ -22,6 +22,12 @@ struct DiffView: View {
     }
 
     var body: some View {
+        // The @State cache lags a diff change by one evaluation (the onChange
+        // write applies afterwards), so read through it: render a direct parse
+        // whenever the cache doesn't match `diff`. Unchanged re-evaluations
+        // (the every-few-seconds snapshot publishes) never re-parse, and a
+        // changed diff never flashes the previous file's lines.
+        let lines = diff == parsedDiff ? parsedLines : DiffParser.parse(diff)
         Group {
             if diff.isEmpty {
                 EmptyPane(systemImage: "doc.text.magnifyingglass",
@@ -30,7 +36,7 @@ struct DiffView: View {
             } else {
                 ScrollView([.horizontal, .vertical]) {
                     LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(Array(parsedLines.enumerated()), id: \.offset) { _, line in
+                        ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
                             DiffLineView(line: line)
                         }
                     }
@@ -40,8 +46,6 @@ struct DiffView: View {
             }
         }
         .onChange(of: diff) { _, newDiff in
-            // Only re-parse when the diff actually changed, not on every
-            // unrelated snapshot publish.
             guard newDiff != parsedDiff else { return }
             parsedDiff = newDiff
             parsedLines = DiffParser.parse(newDiff)
