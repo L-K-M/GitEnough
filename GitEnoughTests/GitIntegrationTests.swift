@@ -210,8 +210,9 @@ final class GitIntegrationTests: XCTestCase {
 
         try client.push(setUpstream: true, remote: "work")
 
-        let main = try client.branches().first { $0.name == "main" }
-        XCTAssertEqual(main?.upstream, "work/main")
+        let main = try XCTUnwrap(client.branches().first { $0.name == "main" },
+                                 "expected default branch 'main'")
+        XCTAssertEqual(main.upstream, "work/main")
     }
 
     func testValidationHelpers() throws {
