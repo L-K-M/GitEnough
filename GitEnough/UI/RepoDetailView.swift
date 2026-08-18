@@ -188,7 +188,8 @@ struct RepoDetailView: View {
 
     /// Shown while a rebase is stopped on conflicts (e.g. a pull --rebase that
     /// hit a conflict). Committing directly would derail the rebase, so the
-    /// only offered actions are Continue / Abort.
+    /// only offered actions are Continue, Skip (drop the replayed commit),
+    /// and Abort.
     private var rebaseBanner: some View {
         HStack(spacing: 10) {
             Image(systemName: "arrow.triangle.2.circlepath")

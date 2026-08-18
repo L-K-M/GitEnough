@@ -237,6 +237,10 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertThrowsError(try GitShell.shared.runChecked(["rebase", "main"], in: repoURL))
         XCTAssertTrue(client.rebaseInProgress())
 
+        // Continuing with open conflicts must fail — resolve first.
+        XCTAssertThrowsError(try client.rebaseContinue())
+        XCTAssertTrue(client.rebaseInProgress())
+
         // During a rebase, "theirs" is the commit being replayed.
         try client.resolveConflict(path: "a.txt", ours: false)
         try client.rebaseContinue()

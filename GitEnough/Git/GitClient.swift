@@ -38,20 +38,22 @@ final class GitClient {
     }
 
     /// The `.git` directory (a file for linked worktrees — resolved by git).
-    /// Cached: the absolute git dir is fixed for a worktree's lifetime, and
-    /// this feeds per-refresh state checks (rebase detection), so it must not
-    /// spawn a process every time.
-    private lazy var resolvedGitDir: URL? = {
+    /// Cached *on success only*: the absolute git dir is fixed for a
+    /// worktree's lifetime and this feeds per-refresh state checks (rebase
+    /// detection), but a transient failure (unmounted volume, busy lock)
+    /// must not be latched as a permanent nil.
+    private var cachedGitDir: URL?
+
+    func gitDir() -> URL? {
+        if let cachedGitDir { return cachedGitDir }
         guard let result = try? shell.run(
             ["-C", worktree.path, "rev-parse", "--absolute-git-dir"], in: nil),
             result.exitCode == 0 else { return nil }
         let path = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !path.isEmpty else { return nil }
-        return URL(fileURLWithPath: path)
-    }()
-
-    func gitDir() -> URL? {
-        resolvedGitDir
+        let url = URL(fileURLWithPath: path)
+        cachedGitDir = url
+        return url
     }
 
     static func version() -> String? {
