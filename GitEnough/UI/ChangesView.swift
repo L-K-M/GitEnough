@@ -16,20 +16,24 @@ struct ChangesView: View {
     private var conflicts: [FileChange] { viewModel.status.conflicted }
     private var mergeInProgress: Bool { viewModel.mergeState.isMerging }
 
-    /// Length of the message's first line — the git subject. 72 is the
-    /// traditional wrap limit (and GitHub's truncation point). Splitting on
-    /// the full newline character set keeps pasted CRLF text from inflating
-    /// the count.
+    /// The subject-line soft limit: git's traditional wrap point and
+    /// GitHub's truncation point.
+    private static let subjectLimit = 72
+
+    /// Length of the message's first line — the git subject. Splitting on the
+    /// full newline character set keeps pasted CRLF text from inflating the
+    /// count. Counting grapheme clusters (not bytes) matches how the limit
+    /// reads to a human typing non-ASCII text.
     private var subjectLength: Int {
         viewModel.draftCommitMessage.components(separatedBy: .newlines).first?.count ?? 0
     }
 
     /// Amending a commit that the upstream already contains rewrites public
     /// history (upstream set, nothing ahead → HEAD is reachable from upstream).
+    /// The predicate lives on the view model so the warning and the
+    /// confirmation gate share one testable source.
     private var amendRewritesPushedCommit: Bool {
-        viewModel.amendLastCommit
-            && viewModel.status.upstream != nil
-            && viewModel.status.ahead == 0
+        viewModel.amendWouldRewritePushedCommit
     }
 
     var body: some View {
@@ -214,11 +218,12 @@ struct ChangesView: View {
                 .help("Write the commit message with the configured LLM (Settings → AI)")
 
                 if !viewModel.draftCommitMessage.isEmpty {
-                    Text("\(subjectLength)/72")
+                    Text("\(subjectLength)/\(Self.subjectLimit)")
                         .font(.caption)
                         .monospacedDigit()
-                        .foregroundStyle(subjectLength > 72 ? .orange : .secondary)
-                        .help("Subject line length — keep it at or under 72 characters")
+                        .foregroundStyle(subjectLength > Self.subjectLimit ? .orange : .secondary)
+                        .help("Subject line length — keep it at or under \(Self.subjectLimit) characters")
+                        .accessibilityLabel("Subject line length \(subjectLength) of \(Self.subjectLimit)")
                 }
 
                 Spacer()

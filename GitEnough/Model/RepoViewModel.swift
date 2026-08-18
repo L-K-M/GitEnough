@@ -56,6 +56,13 @@ final class RepoViewModel: ObservableObject, Identifiable {
     @Published private(set) var isGeneratingMessage = false
     @Published var messageGenerationError: String?
 
+    /// True when amending would rewrite a commit the upstream already has
+    /// (upstream set, nothing ahead → HEAD is reachable from upstream) —
+    /// i.e. when the UI should warn and confirm before committing.
+    var amendWouldRewritePushedCommit: Bool {
+        amendLastCommit && status.upstream != nil && status.ahead == 0
+    }
+
     init(repo: Repository, historyLimit: Int = RepoViewModel.historyPageSize) {
         self.repo = repo
         self.client = GitClient(worktree: repo.url)
