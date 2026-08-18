@@ -38,14 +38,24 @@ struct SidebarView: View {
     private var visibleRepositories: [Repository] {
         var repos = store.repositories
         if sidebarFilter != .all {
-            repos = repos.filter { sidebarFilter.matches(store.summaries[$0.path] ?? .unknown) }
+            // Summaries load asynchronously; a repo whose state hasn't loaded yet
+            // stays visible rather than flashing an empty sidebar on launch (the
+            // filter is persisted, so this hits every cold start).
+            repos = repos.filter { repo in
+                guard let summary = store.summaries[repo.path] else { return true }
+                return sidebarFilter.matches(summary)
+            }
         }
         if !filterText.isEmpty {
-            // Name only: every repo in a shared parent folder (~/Documents/GitHub/…)
-            // contains the same path fragments, so matching the path makes the
-            // filter useless exactly when you have many repos.
+            // Name always matches; the path only when the query looks like a path
+            // — otherwise a shared parent folder (~/Documents/GitHub/…) makes every
+            // plain word match everything, while "work/api" still disambiguates
+            // same-named repos.
             let needle = filterText.lowercased()
-            repos = repos.filter { $0.name.lowercased().contains(needle) }
+            repos = repos.filter {
+                $0.name.lowercased().contains(needle)
+                    || (needle.contains("/") && $0.path.lowercased().contains(needle))
+            }
         }
         switch sortOrder {
         case .manual:

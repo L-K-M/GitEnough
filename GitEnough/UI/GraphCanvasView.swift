@@ -50,6 +50,10 @@ struct GraphCanvasView: View {
             }
         }
         .frame(width: width, height: height)
+        // Segments legitimately run half a row past the last node (toRow ==
+        // commitCount) so truncated history reads as "continues below"; clip the
+        // overshoot exactly at the canvas's bottom edge.
+        .clipped()
     }
 
     // MARK: - Colors
