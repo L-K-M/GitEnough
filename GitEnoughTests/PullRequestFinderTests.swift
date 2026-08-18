@@ -23,7 +23,8 @@ final class PullRequestFinderTests: XCTestCase {
 
     func testGitHubLookupURLEncodesBranch() throws {
         let url = try XCTUnwrap(PullRequestFinder.gitHubLookupURL(github, headBranch: "feature x"))
-        XCTAssertTrue(url.absoluteString.hasSuffix("head=acme:feature%20x"))
+        XCTAssertEqual(url.absoluteString,
+                       "https://api.github.com/repos/acme/widget/pulls?state=open&head=acme:feature%20x")
     }
 
     func testForgejoLookupURL() throws {

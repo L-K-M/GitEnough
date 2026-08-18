@@ -47,7 +47,8 @@ Desktop never gave you: a proper **IntelliJ-style branch/merge graph** and
   when none is open yet, the forge's create-a-PR page. The lookup is an
   unauthenticated best-effort API call (no tokens involved); for private repos
   the create page is opened, where the forge shows an "already has a pull
-  request" banner once you're signed in.
+  request" banner once you're signed in. Self-hosted remotes are auto-detected
+  (Forgejo/Gitea's API is probed first, then GitLab's).
 
 Under the hood GitEnough shells out to **your own git** (no libgit2, no bundled
 fork): it behaves exactly like the command line you already know, respects your
