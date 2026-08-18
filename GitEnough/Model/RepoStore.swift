@@ -87,24 +87,21 @@ final class RepoStore: ObservableObject {
         UserDefaults.standard.set(Array(excludedPaths), forKey: excludedKey)
     }
 
-    /// Adds the repo containing `url` (any depth inside a worktree resolves to the
-    /// worktree root). Returns the repo, or nil when the folder isn't a git repo.
-    /// A manual add also cancels a previous removal (discovery may re-offer it).
+    /// Registers an already-validated repository (validation — the git calls —
+    /// is the caller's job and must happen off the main thread; see
+    /// AppState.addRepository). A manual add also cancels a previous removal
+    /// (discovery may re-offer it).
     @discardableResult
-    func add(url: URL) -> Repository? {
-        guard GitClient.isRepository(at: url),
-              let topLevel = GitClient.topLevel(of: url) else { return nil }
-        let repo = Repository(url: topLevel)
+    func register(_ repo: Repository) -> Repository {
         if !repositories.contains(repo) {
             repositories.append(repo)
             persist()
         }
-        if excludedPaths.remove(topLevel.path) != nil {
+        if excludedPaths.remove(repo.path) != nil {
             persistExclusions()
         }
-        return repositories.first { $0 == repo }
+        return repositories.first { $0 == repo } ?? repo
     }
-
     /// Adds already-validated repository URLs found by folder discovery. Skips
     /// paths the user removed earlier (removal sticks) and existing entries.
     /// Returns how many repos were actually added.
