@@ -175,11 +175,30 @@ final class GitClient {
         }
     }
 
-    /// Reverts worktree changes for tracked paths. Untracked paths must be handled
-    /// by the caller (they need a file move to the Trash, not a git command).
+    /// Reverts tracked paths to their HEAD state — both the index and the
+    /// worktree. Untracked paths must be handled by the caller (they need a file
+    /// move to the Trash, not a git command).
+    ///
+    /// A plain `git checkout -- <path>` only restores the worktree from the
+    /// index, so for a file whose changes are *staged* it silently discards
+    /// nothing. Instead: unstage first (`reset` — on an unborn HEAD there is
+    /// nothing to restore against, so `rm --cached` is the equivalent), then
+    /// restore the worktree for the paths that are still tracked afterwards.
+    /// A staged *new* file has no HEAD state to restore; it ends up untracked
+    /// with its content kept, rather than being destroyed.
     func discard(paths: [String]) throws {
         guard !paths.isEmpty else { return }
-        try shell.runChecked(["-C", worktree.path, "checkout", "--"] + paths, in: nil)
+        do {
+            try shell.runChecked(["-C", worktree.path, "reset", "-q", "HEAD", "--"] + paths, in: nil)
+        } catch {
+            try shell.runChecked(["-C", worktree.path, "rm", "--cached", "-r", "--ignore-unmatch", "--"] + paths, in: nil)
+            return
+        }
+        let tracked = try shell.runChecked(["-C", worktree.path, "ls-files", "-z", "--"] + paths, in: nil).stdout
+        let stillTracked = tracked.components(separatedBy: "\0").filter { !$0.isEmpty }
+        if !stillTracked.isEmpty {
+            try shell.runChecked(["-C", worktree.path, "checkout", "--"] + stillTracked, in: nil)
+        }
     }
 
     func commit(message: String, amend: Bool = false) throws {

@@ -116,6 +116,48 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertFalse(status.isDirty)
     }
 
+    func testDiscardRemovesStagedChanges() throws {
+        try write("one\ndiscarded\n", to: "a.txt")
+        try client.stage(paths: ["a.txt"])
+        var status = try client.status()
+        XCTAssertEqual(status.staged.map(\.path), ["a.txt"])
+        XCTAssertTrue(status.unstaged.isEmpty)
+
+        // Discarding from the Staged section must drop the staged content too —
+        // a bare `checkout --` would only restore the worktree from the index.
+        try client.discard(paths: ["a.txt"])
+        status = try client.status()
+        XCTAssertFalse(status.isDirty)
+        let content = try String(contentsOf: repoURL.appendingPathComponent("a.txt"), encoding: .utf8)
+        XCTAssertEqual(content, "one\n")
+    }
+
+    func testDiscardStagedNewFileKeepsItAsUntracked() throws {
+        // A staged *new* file has no HEAD state to restore. Discarding it must
+        // not destroy the content — it becomes untracked again (Trash is one
+        // deliberate step away from there).
+        try write("brand new\n", to: "staged-new.txt")
+        try client.stage(paths: ["staged-new.txt"])
+        try client.discard(paths: ["staged-new.txt"])
+        let status = try client.status()
+        XCTAssertTrue(status.staged.isEmpty)
+        XCTAssertEqual(status.unstaged.map(\.path), ["staged-new.txt"])
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: repoURL.appendingPathComponent("staged-new.txt").path))
+    }
+
+    func testDiscardStagedDeletionRestoresTheFile() throws {
+        try run(["rm", "-q", "a.txt"])
+        var status = try client.status()
+        XCTAssertEqual(status.staged.map(\.path), ["a.txt"])
+
+        try client.discard(paths: ["a.txt"])
+        status = try client.status()
+        XCTAssertFalse(status.isDirty)
+        let content = try String(contentsOf: repoURL.appendingPathComponent("a.txt"), encoding: .utf8)
+        XCTAssertEqual(content, "one\n")
+    }
+
     func testDiffRoundTrip() throws {
         try write("one\nchanged\n", to: "a.txt")
         let diff = try client.diff(path: "a.txt", staged: false)
