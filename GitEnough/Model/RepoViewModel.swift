@@ -35,7 +35,7 @@ final class RepoViewModel: ObservableObject, Identifiable {
     @Published private(set) var commits: [Commit] = []
     @Published private(set) var layout: GraphLayout = .empty
     @Published private(set) var stash: [StashEntry] = []
-    @Published private(set) var mergeState = MergeState(isMerging: false, mergingRef: nil,
+    @Published private(set) var mergeState = MergeState(operation: nil, operationLabel: nil,
                                                         conflictedFiles: [])
     @Published private(set) var canLoadMoreHistory = false
 
@@ -117,10 +117,12 @@ final class RepoViewModel: ObservableObject, Identifiable {
         let branches = (try? client.branches()) ?? []
         let remotes = (try? client.remotes()) ?? []
         let stash = (try? client.stashList()) ?? []
-        let mergeHead = (try? client.mergeHead()) ?? nil
+        let operation = client.inProgressOperation()
+        var operationLabel: String?
+        if let operation { operationLabel = client.operationLabel(for: operation) }
         let mergeState = MergeState(
-            isMerging: mergeHead != nil,
-            mergingRef: mergeHead != nil ? client.mergeMessageLabel() : nil,
+            operation: operation,
+            operationLabel: operationLabel,
             conflictedFiles: (try? client.conflictedPaths()) ?? []
         )
         var commits: [Commit]?
@@ -337,9 +339,38 @@ final class RepoViewModel: ObservableObject, Identifiable {
 
     // MARK: Merge / conflicts
 
-    func mergeAbort() { perform("Aborting merge…") { try $0.mergeAbort() } }
+    /// Continues whichever sequencer operation is in progress (merge commit,
+    /// rebase, cherry-pick, or revert) — the banner's primary action.
+    func continueOperation() {
+        switch mergeState.operation {
+        case nil:
+            break
+        case .merge:
+            perform("Committing merge…") { try $0.mergeContinue() }
+        case .rebase:
+            perform("Continuing rebase…") { try $0.rebaseContinue() }
+        case .cherryPick:
+            perform("Continuing cherry-pick…") { try $0.cherryPickContinue() }
+        case .revert:
+            perform("Continuing revert…") { try $0.revertContinue() }
+        }
+    }
 
-    func mergeContinue() { perform("Committing merge…") { try $0.mergeContinue() } }
+    /// Aborts whichever sequencer operation is in progress.
+    func abortOperation() {
+        switch mergeState.operation {
+        case nil:
+            break
+        case .merge:
+            perform("Aborting merge…") { try $0.mergeAbort() }
+        case .rebase:
+            perform("Aborting rebase…") { try $0.rebaseAbort() }
+        case .cherryPick:
+            perform("Aborting cherry-pick…") { try $0.cherryPickAbort() }
+        case .revert:
+            perform("Aborting revert…") { try $0.revertAbort() }
+        }
+    }
 
     /// Opens the external merge tool for one conflicted file. The tool process
     /// (e.g. FileMerge via opendiff) can stay open for minutes, so it must NOT

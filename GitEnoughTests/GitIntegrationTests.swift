@@ -436,6 +436,75 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertFalse(client.isIgnored(path: "notes.txt"))
     }
 
+    // MARK: - Rebase / cherry-pick conflicts
+
+    /// Creates a branch whose next commit on a.txt conflicts with main's next
+    /// commit, leaving both branches in place.
+    private func makeConflictingBranch(_ name: String) throws {
+        try run(["checkout", "-b", name])
+        try write("from \(name)\n", to: "a.txt")
+        try run(["add", "a.txt"])
+        try run(["commit", "-m", "Change a on \(name)"])
+        try run(["checkout", "main"])
+        try write("from main\n", to: "a.txt")
+        try run(["add", "a.txt"])
+        try run(["commit", "-m", "Change a on main"])
+    }
+
+    func testRebaseConflictDetectionResolutionAndContinue() throws {
+        try makeConflictingBranch("conflicter")
+        XCTAssertNil(client.inProgressOperation())
+
+        // Rebasing main onto conflicter conflicts on a.txt. During a rebase git
+        // writes rebase-merge/ but NOT MERGE_HEAD — exactly the state that
+        // merge-only detection used to miss.
+        XCTAssertThrowsError(try run(["rebase", "conflicter"]))
+        XCTAssertEqual(client.inProgressOperation(), .rebase)
+        XCTAssertEqual(try client.conflictedPaths(), ["a.txt"])
+        XCTAssertFalse(try client.status().conflicted.isEmpty)
+        XCTAssertEqual(client.operationLabel(for: .rebase), "Rebasing main")
+
+        // Ours during a rebase is the new base (conflicter); theirs is main's
+        // commit being replayed.
+        try client.resolveConflict(path: "a.txt", ours: true)
+        try client.rebaseContinue()
+
+        XCTAssertNil(client.inProgressOperation())
+        let content = try String(contentsOf: repoURL.appendingPathComponent("a.txt"), encoding: .utf8)
+        XCTAssertEqual(content, "from conflicter\n")
+        XCTAssertFalse(try client.status().isDirty)
+    }
+
+    func testRebaseAbortRestoresState() throws {
+        try makeConflictingBranch("conflicter")
+        XCTAssertThrowsError(try run(["rebase", "conflicter"]))
+        XCTAssertEqual(client.inProgressOperation(), .rebase)
+
+        try client.rebaseAbort()
+
+        XCTAssertNil(client.inProgressOperation())
+        let content = try String(contentsOf: repoURL.appendingPathComponent("a.txt"), encoding: .utf8)
+        XCTAssertEqual(content, "from main\n")
+        XCTAssertFalse(try client.status().isDirty)
+    }
+
+    func testCherryPickConflictDetectionAndAbort() throws {
+        try makeConflictingBranch("picker")
+        let hash = try GitShell.shared.runChecked(["rev-parse", "picker"], in: repoURL).stdout
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        XCTAssertThrowsError(try client.cherryPick(hash))
+        XCTAssertEqual(client.inProgressOperation(), .cherryPick)
+        XCTAssertEqual(try client.conflictedPaths(), ["a.txt"])
+
+        try client.cherryPickAbort()
+
+        XCTAssertNil(client.inProgressOperation())
+        let content = try String(contentsOf: repoURL.appendingPathComponent("a.txt"), encoding: .utf8)
+        XCTAssertEqual(content, "from main\n")
+        XCTAssertFalse(try client.status().isDirty)
+    }
+
     func testValidationHelpers() throws {
         XCTAssertTrue(GitClient.isRepository(at: repoURL))
         // git reports the physical path; temporaryDirectory may sit behind the

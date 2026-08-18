@@ -169,9 +169,32 @@ struct CommitDetail: Equatable {
     var files: [CommitFile]
 }
 
-/// The state of an in-progress merge, for the conflict-resolution UI.
+/// Which sequencer operation git currently has in progress.
+enum InProgressOperation: Equatable {
+    case merge
+    case rebase
+    case cherryPick
+    case revert
+
+    /// Noun for banners and buttons ("Merge", "Rebase", …).
+    var noun: String {
+        switch self {
+        case .merge: return "Merge"
+        case .rebase: return "Rebase"
+        case .cherryPick: return "Cherry-pick"
+        case .revert: return "Revert"
+        }
+    }
+}
+
+/// The state of an in-progress sequencer operation (merge, rebase, cherry-pick,
+/// revert), for the conflict-resolution UI.
 struct MergeState: Equatable {
-    var isMerging: Bool
-    var mergingRef: String?     // name from MERGE_MSG's first line, if available
+    var operation: InProgressOperation?
+    /// Human label, e.g. "Merge branch 'feature'" or "Rebasing main".
+    var operationLabel: String?
     var conflictedFiles: [String]
+
+    var isInProgress: Bool { operation != nil }
+    var isResolvingConflicts: Bool { !conflictedFiles.isEmpty }
 }
