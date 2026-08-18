@@ -13,7 +13,12 @@ struct ChangesView: View {
     @State private var showingStashSheet = false
 
     private var conflicts: [FileChange] { viewModel.status.conflicted }
-    private var mergeInProgress: Bool { viewModel.mergeState.isMerging }
+    /// Conflict resolution shows for merges *and* rebases — unmerged paths only
+    /// ever appear in `status.conflicted`, so gating on merges alone would hide
+    /// them entirely during a rebase.
+    private var mergeInProgress: Bool {
+        viewModel.mergeState.isMerging || viewModel.mergeState.rebaseInProgress
+    }
 
     var body: some View {
         HSplitView {

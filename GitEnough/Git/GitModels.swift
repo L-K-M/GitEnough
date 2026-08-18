@@ -174,4 +174,8 @@ struct MergeState: Equatable {
     var isMerging: Bool
     var mergingRef: String?     // name from MERGE_MSG's first line, if available
     var conflictedFiles: [String]
+    /// A rebase stopped on conflicts (rebase-merge / rebase-apply in the git
+    /// dir). Needs its own banner: `git commit` mid-rebase is the wrong tool —
+    /// `git rebase --continue` / `--abort` are.
+    var rebaseInProgress: Bool = false
 }

@@ -108,7 +108,8 @@ final class RepoViewModel: ObservableObject, Identifiable {
         let mergeState = MergeState(
             isMerging: mergeHead != nil,
             mergingRef: mergeHead != nil ? client.mergeMessageLabel() : nil,
-            conflictedFiles: (try? client.conflictedPaths()) ?? []
+            conflictedFiles: (try? client.conflictedPaths()) ?? [],
+            rebaseInProgress: client.rebaseInProgress()
         )
         var commits: [Commit]?
         var layout: GraphLayout?
@@ -241,6 +242,14 @@ final class RepoViewModel: ObservableObject, Identifiable {
     func mergeAbort() { perform("Aborting merge…") { try $0.mergeAbort() } }
 
     func mergeContinue() { perform("Committing merge…") { try $0.mergeContinue() } }
+
+    // MARK: Rebase
+
+    /// Continues a rebase whose conflicts were resolved. Fails (with git's own
+    /// message) when conflicts are still open.
+    func rebaseContinue() { perform("Continuing rebase…") { try $0.rebaseContinue() } }
+
+    func rebaseAbort() { perform("Aborting rebase…") { try $0.rebaseAbort() } }
 
     /// Opens the external merge tool for one conflicted file. The tool process
     /// (e.g. FileMerge via opendiff) can stay open for minutes, so it must NOT

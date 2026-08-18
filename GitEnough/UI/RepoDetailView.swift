@@ -22,6 +22,9 @@ struct RepoDetailView: View {
             if viewModel.mergeState.isMerging {
                 mergeBanner
             }
+            if viewModel.mergeState.rebaseInProgress {
+                rebaseBanner
+            }
             if let error = viewModel.errorMessage {
                 ErrorBanner(message: error) {
                     viewModel.errorMessage = nil
@@ -179,6 +182,48 @@ struct RepoDetailView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(Color.orange.opacity(0.12))
+    }
+
+    // MARK: - Rebase banner
+
+    /// Shown while a rebase is stopped on conflicts (e.g. a pull --rebase that
+    /// hit a conflict). Committing directly would derail the rebase, so the
+    /// only offered actions are Continue / Abort.
+    private var rebaseBanner: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "arrow.triangle.2.circlepath")
+                .foregroundStyle(.purple)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Rebase in progress")
+                    .font(.callout)
+                    .fontWeight(.semibold)
+                let conflicts = viewModel.mergeState.conflictedFiles.count
+                Text(conflicts == 0
+                     ? "Conflicts resolved — continue the rebase."
+                     : "\(conflicts) conflicted file\(conflicts == 1 ? "" : "s") to resolve, then continue.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            if !viewModel.mergeState.conflictedFiles.isEmpty,
+               appState.selectedTab != .changes {
+                Button("Resolve Conflicts") {
+                    appState.selectedTab = .changes
+                }
+            }
+            Button("Abort Rebase") {
+                viewModel.rebaseAbort()
+            }
+            .disabled(viewModel.isBusy)
+            Button("Continue Rebase") {
+                viewModel.rebaseContinue()
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(viewModel.isBusy || !viewModel.mergeState.conflictedFiles.isEmpty)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color.purple.opacity(0.12))
     }
 
     // MARK: - Status bar

@@ -275,6 +275,28 @@ final class GitClient {
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    // MARK: - Rebase
+
+    /// True while a rebase is stopped (conflicts or edit) — rebase-merge for the
+    /// merge backend, rebase-apply for the apply backend. The state lives in the
+    /// (worktree-specific) git dir, which `--absolute-git-dir` resolves for us.
+    func rebaseInProgress() -> Bool {
+        guard let gitDir = gitDir() else { return false }
+        let fileManager = FileManager.default
+        return fileManager.fileExists(atPath: gitDir.appendingPathComponent("rebase-merge").path)
+            || fileManager.fileExists(atPath: gitDir.appendingPathComponent("rebase-apply").path)
+    }
+
+    /// Continues a rebase whose conflicts were resolved (staged). GIT_EDITOR is
+    /// pinned to /usr/bin/true by the shell, so this never blocks on an editor.
+    func rebaseContinue() throws {
+        try shell.runChecked(["-C", worktree.path, "rebase", "--continue"], in: nil)
+    }
+
+    func rebaseAbort() throws {
+        try shell.runChecked(["-C", worktree.path, "rebase", "--abort"], in: nil)
+    }
+
     func conflictedPaths() throws -> [String] {
         let result = try shell.runChecked(
             ["-C", worktree.path, "diff", "--name-only", "--diff-filter=U", "-z"], in: nil)

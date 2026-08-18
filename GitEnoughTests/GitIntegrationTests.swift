@@ -198,6 +198,56 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertEqual(content, "from main\n")
     }
 
+    func testRebaseInProgressDetectionAndAbort() throws {
+        try run(["checkout", "-b", "rebaser"])
+        try write("from rebaser\n", to: "a.txt")
+        try run(["add", "a.txt"])
+        try run(["commit", "-m", "Change a on rebaser"])
+        try run(["checkout", "main"])
+        try write("from main\n", to: "a.txt")
+        try run(["add", "a.txt"])
+        try run(["commit", "-m", "Change a on main"])
+        try run(["checkout", "rebaser"])
+
+        XCTAssertFalse(client.rebaseInProgress())
+        XCTAssertThrowsError(try GitShell.shared.runChecked(["rebase", "main"], in: repoURL))
+
+        XCTAssertTrue(client.rebaseInProgress())
+        XCTAssertEqual(try client.conflictedPaths(), ["a.txt"])
+
+        try client.rebaseAbort()
+        XCTAssertFalse(client.rebaseInProgress())
+        let status = try client.status()
+        XCTAssertEqual(status.head, "rebaser")
+        // The abort rewound the replay: a.txt is back to the branch's version.
+        let content = try String(contentsOf: repoURL.appendingPathComponent("a.txt"), encoding: .utf8)
+        XCTAssertEqual(content, "from rebaser\n")
+    }
+
+    func testRebaseContinueAfterResolvingConflicts() throws {
+        try run(["checkout", "-b", "rebaser"])
+        try write("from rebaser\n", to: "a.txt")
+        try run(["add", "a.txt"])
+        try run(["commit", "-m", "Change a on rebaser"])
+        try run(["checkout", "main"])
+        try write("from main\n", to: "a.txt")
+        try run(["add", "a.txt"])
+        try run(["commit", "-m", "Change a on main"])
+        try run(["checkout", "rebaser"])
+        XCTAssertThrowsError(try GitShell.shared.runChecked(["rebase", "main"], in: repoURL))
+        XCTAssertTrue(client.rebaseInProgress())
+
+        // During a rebase, "theirs" is the commit being replayed.
+        try client.resolveConflict(path: "a.txt", ours: false)
+        try client.rebaseContinue()
+
+        XCTAssertFalse(client.rebaseInProgress())
+        let commits = try client.log(limit: 10)
+        XCTAssertEqual(commits.first?.subject, "Change a on rebaser")
+        let content = try String(contentsOf: repoURL.appendingPathComponent("a.txt"), encoding: .utf8)
+        XCTAssertEqual(content, "from rebaser\n")
+    }
+
     func testValidationHelpers() throws {
         XCTAssertTrue(GitClient.isRepository(at: repoURL))
         // git reports the physical path; temporaryDirectory may sit behind the
