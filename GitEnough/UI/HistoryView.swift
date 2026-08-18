@@ -9,14 +9,16 @@ struct HistoryView: View {
 
     @State private var selectedHash: String?
     @State private var filterText = ""
+    /// What actually drives the filter: trimmed, and debounced ~150 ms so a
+    /// fast typer doesn't re-filter thousands of loaded commits per keystroke.
+    @State private var activeFilter = ""
+    @State private var filterDebounceTask: Task<Void, Never>?
     @State private var branchNameForNewBranch = ""
     @State private var commitForNewBranch: Commit?
     @State private var commitToCheckout: Commit?
     @State private var commitToReset: Commit?
 
-    private var isFiltering: Bool {
-        !filterText.trimmingCharacters(in: .whitespaces).isEmpty
-    }
+    private var isFiltering: Bool { !activeFilter.isEmpty }
 
     /// Commits matching the filter (subject / author / hash prefix).
     /// `localizedStandardContains` is Finder-style: case- *and*
@@ -24,10 +26,10 @@ struct HistoryView: View {
     /// loaded pages — "Load older commits…" widens the searchable set.
     private var visibleCommits: [Commit] {
         guard isFiltering else { return viewModel.commits }
-        let needle = filterText.trimmingCharacters(in: .whitespaces).lowercased()
+        let needle = activeFilter.lowercased()
         return viewModel.commits.filter {
-            $0.subject.localizedStandardContains(filterText)
-                || $0.author.localizedStandardContains(filterText)
+            $0.subject.localizedStandardContains(activeFilter)
+                || $0.author.localizedStandardContains(activeFilter)
                 || $0.hash.lowercased().hasPrefix(needle)
         }
     }
@@ -49,6 +51,15 @@ struct HistoryView: View {
         }
         .onChange(of: selectedHash) { _, newValue in
             viewModel.selectCommit(newValue)
+        }
+        .onChange(of: filterText) { _, newValue in
+            filterDebounceTask?.cancel()
+            let trimmed = newValue.trimmingCharacters(in: .whitespaces)
+            filterDebounceTask = Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 150_000_000)
+                guard !Task.isCancelled else { return }
+                activeFilter = trimmed
+            }
         }
         .onChange(of: viewModel.commits.map(\.hash)) { _, hashes in
             // Keep the selection across refreshes; drop it if the commit vanished
@@ -132,7 +143,7 @@ struct HistoryView: View {
                             }
                             if isFiltering && visible.isEmpty {
                                 VStack(spacing: 4) {
-                                    Text("No commits match “\(filterText)”")
+                                    Text("No commits match “\(activeFilter)”")
                                         .font(.callout)
                                     Text("Only the \(viewModel.commits.count) loaded commits are searched — load older commits to search deeper.")
                                         .font(.caption)
@@ -181,6 +192,8 @@ struct HistoryView: View {
                     .accessibilityLabel("\(matchCount) of \(viewModel.commits.count) commits shown")
                 Button {
                     filterText = ""
+                    filterDebounceTask?.cancel()
+                    activeFilter = ""
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundStyle(.secondary)
