@@ -309,7 +309,9 @@ final class GitClient {
         guard let data = try? Data(contentsOf: url) else { return false }
         let text = String(decoding: data, as: UTF8.self)
         for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
-            if line.hasPrefix("<<<<<<<") || line.hasPrefix("=======") || line.hasPrefix(">>>>>>>") {
+            // Only the angle-bracket markers: a bare "=======" line is also a
+            // legitimate Setext heading underline, which would false-positive.
+            if line.hasPrefix("<<<<<<<") || line.hasPrefix(">>>>>>>") {
                 return true
             }
         }

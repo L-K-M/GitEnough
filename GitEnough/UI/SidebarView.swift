@@ -45,8 +45,12 @@ struct SidebarView: View {
                 $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
             }
         case .recentlyOpened:
+            // Stable tie-break by name so never-opened repos don't shuffle.
             repos.sort {
-                (store.lastOpenedAt[$0.path] ?? 0) > (store.lastOpenedAt[$1.path] ?? 0)
+                let lhs = store.lastOpenedAt[$0.path] ?? 0
+                let rhs = store.lastOpenedAt[$1.path] ?? 0
+                if lhs != rhs { return lhs > rhs }
+                return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
             }
         }
         return repos
@@ -55,7 +59,7 @@ struct SidebarView: View {
     var body: some View {
         List(selection: selection) {
             Section {
-                if sortOrder == .manual {
+                if sortOrder == .manual && filterText.isEmpty {
                     ForEach(visibleRepositories) { repo in
                         rowContent(repo)
                     }

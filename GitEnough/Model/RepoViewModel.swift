@@ -261,17 +261,26 @@ final class RepoViewModel: ObservableObject, Identifiable {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self else { return }
             var caught: Error?
-            var autoResolved = false
             do {
                 try self.client.runMergeTool(tool.gitName, path: path)
-                if !self.client.fileHasConflictMarkers(path) {
-                    try self.client.markResolved(path: path)
-                    autoResolved = true
-                }
             } catch {
                 caught = error
             }
+            // Verifying and staging go through the serial repo queue like every
+            // other mutating operation — concurrent `git add`s could otherwise
+            // fight over the index lock.
             self.queue.async {
+                var autoResolved = false
+                if caught == nil {
+                    do {
+                        if !self.client.fileHasConflictMarkers(path) {
+                            try self.client.markResolved(path: path)
+                            autoResolved = true
+                        }
+                    } catch {
+                        caught = error
+                    }
+                }
                 let snapshot = self.collectSnapshot(includeHistory: false)
                 DispatchQueue.main.async {
                     self.apply(snapshot)
