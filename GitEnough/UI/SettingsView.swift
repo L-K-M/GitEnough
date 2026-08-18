@@ -264,7 +264,7 @@ private struct AISettingsView: View {
 
 private struct ToolsSettingsView: View {
 
-    @State private var tools: [MergeTool] = MergeTool.detectInstalled()
+    @State private var tools: [MergeTool] = MergeTool.installed
 
     var body: some View {
         Form {
@@ -285,7 +285,8 @@ private struct ToolsSettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Button("Rescan") {
-                    tools = MergeTool.detectInstalled()
+                    MergeTool.rescan()
+                    tools = MergeTool.installed
                 }
             }
         }

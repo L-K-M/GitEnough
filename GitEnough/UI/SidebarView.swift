@@ -10,6 +10,7 @@ struct SidebarView: View {
     @EnvironmentObject var store: RepoStore
     @AppStorage("sidebarSortOrder") private var sortOrderRaw = SidebarSortOrder.manual.rawValue
     @State private var filterText = ""
+    @State private var dropErrorMessage: String?
 
     private var sortOrder: SidebarSortOrder {
         SidebarSortOrder(rawValue: sortOrderRaw) ?? .manual
@@ -78,6 +79,11 @@ struct SidebarView: View {
         .listStyle(.sidebar)
         .searchable(text: $filterText, placement: .sidebar, prompt: "Filter repositories")
         .onDrop(of: [UTType.fileURL], isTargeted: nil, perform: handleDrop)
+        .alert("Couldn’t Add Repository", isPresented: dropErrorPresented) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(dropErrorMessage ?? "")
+        }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Menu {
@@ -131,6 +137,11 @@ struct SidebarView: View {
             }
     }
 
+    private var dropErrorPresented: Binding<Bool> {
+        Binding(get: { dropErrorMessage != nil },
+                set: { if !$0 { dropErrorMessage = nil } })
+    }
+
     private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
         var accepted = false
         for provider in providers where provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
@@ -144,7 +155,12 @@ struct SidebarView: View {
                 }
                 guard let url else { return }
                 DispatchQueue.main.async {
-                    _ = appState.addRepository(at: url)
+                    // addRepository's failure path only feeds the Add sheet's
+                    // error label — from a drop there is no sheet, so surface
+                    // the failure here instead of swallowing it silently.
+                    if !appState.addRepository(at: url) {
+                        dropErrorMessage = "“\(url.lastPathComponent)” is not inside a git repository."
+                    }
                 }
             }
         }
