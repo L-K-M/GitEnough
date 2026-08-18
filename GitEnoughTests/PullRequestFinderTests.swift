@@ -177,16 +177,17 @@ final class PullRequestFinderTests: XCTestCase {
 
     func testGitLabKindHitsGitLabEndpoint() async {
         let mr = "[{\"iid\": 7, \"title\": \"Add graph\", \"source_branch\": \"add-graph\"}]"
-        var hitGitLab = false
+        let probed: NSMutableArray = []
         MockURLProtocol.handler = { request in
-            hitGitLab = request.url!.absoluteString.contains("/api/v4/")
-            return (MockURLProtocol.ok(request.url!), Data(mr.utf8))
+            let url = request.url!
+            probed.add(url.absoluteString.contains("/api/v1/") ? "forgejo" : "gitlab")
+            return (MockURLProtocol.ok(url), Data(mr.utf8))
         }
         defer { MockURLProtocol.handler = nil }
 
         let pull = await stubbedFinder().findOpenPullRequest(for: gitlab, headBranch: "add-graph")
         XCTAssertEqual(pull?.number, 7)
-        XCTAssertTrue(hitGitLab)
+        XCTAssertEqual(probed as? [String], ["gitlab"])
     }
 
     func testGenericHostTriesForgejoThenGitLab() async {
