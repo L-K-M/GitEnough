@@ -82,8 +82,6 @@ final class GitClient {
 
     // MARK: - History
 
-    /// Newest-first, topologically ordered commits across all refs — the input to
-    /// the graph layout. `skip`/`limit` drive the "Load more" pagination.
     /// Refs that must never seed the history graph nor decorate its commits:
     /// the stash (older stashes live in refs/stash's reflog, which --all does not
     /// traverse), filter-branch backups, bisect state, prefetched commits, notes
@@ -93,11 +91,14 @@ final class GitClient {
                              "refs/prefetch/*", "refs/notes/*", "refs/replace/*",
                              "refs/rewritten/*"]
 
+    /// Newest-first, topologically ordered commits across all refs — the input to
+    /// the graph layout. `skip`/`limit` drive the "Load more" pagination.
     func log(limit: Int, skip: Int = 0) throws -> [Commit] {
         let f = GitParsers.fieldSep
         let r = GitParsers.recordSep
         let format = "%H\(f)%P\(f)%an\(f)%ae\(f)%aI\(f)%D\(f)%s\(r)"
-        // Both --exclude forms must precede --all, whose ref set they filter.
+        // --exclude filters the ref set of the *next* --all, so it must precede
+        // it. --decorate-refs-exclude is position-independent; grouped for clarity.
         var args = ["-C", worktree.path, "log"]
         args += Self.hiddenRefs.map { "--exclude=\($0)" }
         args += ["--all"]
