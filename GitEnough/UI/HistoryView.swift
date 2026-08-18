@@ -14,7 +14,9 @@ struct HistoryView: View {
     @State private var commitToCheckout: Commit?
     @State private var commitToReset: Commit?
 
-    private var isFiltering: Bool { !filterText.isEmpty }
+    private var isFiltering: Bool {
+        !filterText.trimmingCharacters(in: .whitespaces).isEmpty
+    }
 
     /// Commits matching the filter (subject / author / hash prefix).
     /// `localizedStandardContains` is Finder-style: case- *and*
@@ -22,7 +24,7 @@ struct HistoryView: View {
     /// loaded pages — "Load older commits…" widens the searchable set.
     private var visibleCommits: [Commit] {
         guard isFiltering else { return viewModel.commits }
-        let needle = filterText.lowercased()
+        let needle = filterText.trimmingCharacters(in: .whitespaces).lowercased()
         return viewModel.commits.filter {
             $0.subject.localizedStandardContains(filterText)
                 || $0.author.localizedStandardContains(filterText)
@@ -115,7 +117,7 @@ struct HistoryView: View {
                                             selectedRow: selectedRow)
                         }
                         LazyVStack(spacing: 0) {
-                            ForEach(visible) { commit in
+                            ForEach(visible, id: \.id) { commit in
                                 CommitRowView(commit: commit,
                                               isSelected: commit.hash == selectedHash,
                                               isHead: commit.isHead)
@@ -129,11 +131,17 @@ struct HistoryView: View {
                                 }
                             }
                             if isFiltering && visible.isEmpty {
-                                Text("No commits match “\(filterText)”")
-                                    .font(.callout)
-                                    .foregroundStyle(.secondary)
-                                    .frame(maxWidth: .infinity, alignment: .center)
-                                    .padding(.vertical, 24)
+                                VStack(spacing: 4) {
+                                    Text("No commits match “\(filterText)”")
+                                        .font(.callout)
+                                    Text("Only the \(viewModel.commits.count) loaded commits are searched — load older commits to search deeper.")
+                                        .font(.caption)
+                                }
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
+                                .frame(maxWidth: .infinity, alignment: .center)
+                                .padding(.vertical, 24)
+                                .padding(.horizontal, 32)
                             }
                         }
                         .padding(.trailing, 12)
