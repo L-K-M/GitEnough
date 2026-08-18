@@ -26,6 +26,11 @@ private struct GeneralSettingsView: View {
     @AppStorage(AppState.discoveryFolderKey) private var discoveryFolder = ""
     @EnvironmentObject var appState: AppState
 
+    /// Cached: `git --version` shells out synchronously, and calling it in `body`
+    /// spawned a fresh process on every Settings render. Static stored
+    /// properties initialize lazily and exactly once.
+    private static let gitVersion = GitClient.version() ?? "not found"
+
     var body: some View {
         Form {
             Picker("When pulling:", selection: $pullRebase) {
@@ -55,7 +60,7 @@ private struct GeneralSettingsView: View {
             }
 
             LabeledContent("git") {
-                Text(GitClient.version() ?? "not found")
+                Text(Self.gitVersion)
                     .foregroundStyle(.secondary)
             }
         }
