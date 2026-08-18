@@ -98,6 +98,19 @@ final class GitActivityStoreTests: XCTestCase {
         XCTAssertEqual(reloaded.items.map(\.entry.command), ["cmd2", "cmd3", "cmd4"])
     }
 
+    func testClearEmptiesMemoryAndDisk() throws {
+        let store = makeStore()
+        store.record(.finished(entry("push")), repoName: "A", repoPath: "/a")
+        drain(store)
+        XCTAssertEqual(store.items.count, 1)
+        store.clear()
+        drain(store)
+        XCTAssertTrue(store.items.isEmpty)
+        let reloaded = makeStore()
+        reloaded.loadFromDisk()
+        XCTAssertTrue(reloaded.items.isEmpty)
+    }
+
     // MARK: - Filtering
 
     private var sampleItems: [GitActivityStore.Item] {

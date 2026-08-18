@@ -13,6 +13,7 @@ struct ActivityHistoryView: View {
     @State private var failuresOnly = false
     @State private var repoFilter: String? // nil = all repositories
     @State private var selection: UUID?
+    @State private var confirmingClear = false
 
     private var filtered: [GitActivityStore.Item] {
         GitActivityStore.filtered(store.items, query: query,
@@ -69,6 +70,20 @@ struct ActivityHistoryView: View {
             .fixedSize()
             Toggle("Failures only", isOn: $failuresOnly)
                 .toggleStyle(.checkbox)
+            Button("Clear History…") {
+                confirmingClear = true
+            }
+            .disabled(store.items.isEmpty)
+            .confirmationDialog(
+                "Delete the recorded git activity for every repository? This cannot be undone.",
+                isPresented: $confirmingClear,
+                titleVisibility: .visible
+            ) {
+                Button("Clear History", role: .destructive) {
+                    selection = nil
+                    store.clear()
+                }
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)

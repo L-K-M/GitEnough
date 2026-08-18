@@ -12,7 +12,15 @@ import Foundation
 final class GitActivityStore: ObservableObject {
 
     /// One recorded invocation plus the repo it belonged to.
+    ///
+    /// Persisted as one JSON object per line. When this shape changes, bump
+    /// `schemaVersion` and migrate in `loadFromDiskLocked` — every line is
+    /// decoded with `try?`, so without a migration an incompatible change
+    /// silently discards the whole history.
     struct Item: Identifiable, Equatable, Codable {
+        /// Persisted schema version — bump when the on-disk shape changes.
+        static let schemaVersion = 1
+
         let entry: GitActivityLog.Entry
         let repoName: String
         let repoPath: String
@@ -38,7 +46,7 @@ final class GitActivityStore: ObservableObject {
     init(fileURL: URL = GitActivityStore.defaultFileURL, capacity: Int = 1000) {
         self.fileURL = fileURL
         self.capacity = capacity
-        ioQueue.async { [weak self] in self?.loadFromDisk() }
+        ioQueue.async { [weak self] in self?.loadFromDiskLocked() }
     }
 
     /// Records a lifecycle event from a repo's activity log. Called from repo
@@ -65,11 +73,29 @@ final class GitActivityStore: ObservableObject {
         }
     }
 
+    /// Removes all in-memory and on-disk history (the privacy escape hatch —
+    /// argv text and stderr tails persist in plaintext otherwise).
+    func clear() {
+        ioQueue.async { [weak self] in
+            guard let self else { return }
+            self.storage.removeAll()
+            self.uncompactedOverflow = 0
+            try? FileManager.default.removeItem(at: self.fileURL)
+            self.publish()
+        }
+    }
+
     // MARK: - Persistence (ioQueue only)
 
-    /// Synchronous so tests can call it directly; the initializer invokes it
-    /// on ioQueue. Bad lines are skipped, only the newest `capacity` survive.
+    /// Synchronous from the caller's perspective but serialized on ioQueue, so
+    /// tests (and any future caller) can't race the initializer's queued load.
     func loadFromDisk() {
+        ioQueue.sync { self.loadFromDiskLocked() }
+    }
+
+    /// Must run on ioQueue. Bad lines are skipped, only the newest `capacity`
+    /// survive.
+    private func loadFromDiskLocked() {
         guard let data = try? Data(contentsOf: fileURL),
               let text = String(data: data, encoding: .utf8) else { return }
         let decoder = JSONDecoder()
@@ -90,13 +116,14 @@ final class GitActivityStore: ObservableObject {
         line.append(0x0A) // \n
         let directory = fileURL.deletingLastPathComponent()
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        if FileManager.default.fileExists(atPath: fileURL.path),
-           let handle = try? FileHandle(forWritingTo: fileURL) {
+        // Create-only when missing; never truncate an existing file — if it
+        // exists but can't be opened, skip (persistence is best-effort).
+        if !FileManager.default.fileExists(atPath: fileURL.path) {
+            try? line.write(to: fileURL, options: .atomic)
+        } else if let handle = try? FileHandle(forWritingTo: fileURL) {
             defer { try? handle.close() }
             _ = try? handle.seekToEnd()
             try? handle.write(contentsOf: line)
-        } else {
-            try? line.write(to: fileURL)
         }
     }
 
@@ -112,20 +139,30 @@ final class GitActivityStore: ObservableObject {
             .reduce(Data()) { $0 + $1 + Data([0x0A]) }
         let directory = fileURL.deletingLastPathComponent()
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        try? data.write(to: fileURL)
+        // Atomic: a crash mid-rewrite must not leave a truncated history.
+        try? data.write(to: fileURL, options: .atomic)
     }
 
+    /// Appended-since-last-compaction count. Compaction rewrites the whole
+    /// file, so it runs in batches — `loadFromDiskLocked`'s suffix(capacity)
+    /// keeps memory bounded while the file runs slightly over.
+    private var uncompactedOverflow = 0
+
     /// Must run on ioQueue. Drops oldest finished items beyond capacity
-    /// (running items are never dropped); rewrites the file when it shrank.
+    /// (running items are never dropped); compacts the file in batches.
     private func trim() {
         dispatchPrecondition(condition: .onQueue(ioQueue))
-        var droppedFinished = false
+        var dropped = 0
         while storage.count > capacity,
               let victim = storage.firstIndex(where: { !$0.entry.isRunning }) {
             storage.remove(at: victim)
-            droppedFinished = true
+            dropped += 1
         }
-        if droppedFinished { compactDisk() }
+        uncompactedOverflow += dropped
+        if uncompactedOverflow >= 50 {
+            compactDisk()
+            uncompactedOverflow = 0
+        }
     }
 
     private func publish() {
