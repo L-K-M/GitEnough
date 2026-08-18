@@ -53,13 +53,24 @@ enum SidebarSortOrder: String, CaseIterable, Identifiable {
 
 /// Which repositories the sidebar shows (persisted in UserDefaults). Unlike the
 /// text filter, these look at live repo state, so they're "logical" filters.
+/// rawValues are stable persistence keys; displayName is the UI text (free to
+/// change without breaking the persisted setting).
 enum SidebarFilter: String, CaseIterable, Identifiable {
-    case all = "All Repositories"
-    case dirty = "Uncommitted Changes"
-    case unpushed = "Unpushed Commits"
-    case incoming = "Incoming Commits"
+    case all = "all"
+    case dirty = "dirty"
+    case unpushed = "unpushed"
+    case incoming = "incoming"
 
     var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .all: return "All Repositories"
+        case .dirty: return "Uncommitted Changes"
+        case .unpushed: return "Unpushed Commits"
+        case .incoming: return "Incoming Commits"
+        }
+    }
 
     func matches(_ summary: RepoSummary) -> Bool {
         switch self {

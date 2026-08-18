@@ -103,7 +103,7 @@ struct SidebarView: View {
                 Menu {
                     Picker("Show", selection: $filterRaw) {
                         ForEach(SidebarFilter.allCases) { filter in
-                            Text(filter.rawValue).tag(filter.rawValue)
+                            Text(filter.displayName).tag(filter.rawValue)
                         }
                     }
                 } label: {
