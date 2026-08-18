@@ -63,7 +63,13 @@ private struct GeneralSettingsView: View {
             LabeledContent("git") {
                 Text(gitVersion ?? "Checking…")
                     .foregroundStyle(.secondary)
-                    .onAppear { gitVersion = GitClient.version() ?? "not found" }
+                    .task {
+                        // Off the main thread: even one synchronous process
+                        // spawn would beachball Settings briefly.
+                        gitVersion = await Task.detached {
+                            GitClient.version() ?? "not found"
+                        }.value
+                    }
             }
         }
         .formStyle(.grouped)
