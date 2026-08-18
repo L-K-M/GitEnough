@@ -47,6 +47,7 @@ struct RepoDetailView: View {
         .toolbar {
             ToolbarItemGroup(placement: .navigation) {
                 branchPicker
+                    .padding(.leading, 6)
                 Button {
                     newBranchName = ""
                     appState.showingNewBranch = true
@@ -65,10 +66,10 @@ struct RepoDetailView: View {
                 .frame(width: 280)
             }
             ToolbarItemGroup(placement: .primaryAction) {
-                if viewModel.isBusy {
+                if viewModel.isBusy || viewModel.mergeToolActivity != nil {
                     ProgressView()
                         .controlSize(.small)
-                        .padding(.trailing, 4)
+                        .padding(.horizontal, 8)
                 }
                 Button {
                     viewModel.fetch()
@@ -157,7 +158,8 @@ struct RepoDetailView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            if !viewModel.mergeState.conflictedFiles.isEmpty {
+            if !viewModel.mergeState.conflictedFiles.isEmpty,
+               appState.selectedTab != .changes {
                 Button("Resolve Conflicts") {
                     appState.selectedTab = .changes
                 }
@@ -183,7 +185,7 @@ struct RepoDetailView: View {
 
     private var statusBar: some View {
         HStack(spacing: 14) {
-            if let activity = viewModel.activity {
+            if let activity = viewModel.mergeToolActivity ?? viewModel.activity {
                 Label(activity, systemImage: "arrow.clockwise")
                     .foregroundStyle(.secondary)
             }

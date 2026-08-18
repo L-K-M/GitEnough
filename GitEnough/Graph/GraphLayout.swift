@@ -63,12 +63,27 @@ struct GraphLayout: Equatable {
         var nextColor = 0
 
         /// Leftmost free lane, optionally strictly to the right of `column`.
+        /// Used for new branch tips, where reusing any freed lane is fine.
         func freeLane(rightOf column: Int? = nil) -> Int {
             if let column,
                let index = lanes.indices.first(where: { $0 > column && lanes[$0] == nil }) {
                 return index
             }
             if let index = lanes.firstIndex(where: { $0 == nil }) {
+                return index
+            }
+            lanes.append(nil)
+            laneColors.append(0)
+            return lanes.count - 1
+        }
+
+        /// The lane for a merge's non-first parent. Only reuses free lanes
+        /// strictly to the RIGHT of the node — never the node's own column (it
+        /// may have been freed by the first-parent fold moments earlier, which
+        /// would draw a curve into itself) and never a left lane (the fan-out
+        /// would cross the node). Appends a fresh column otherwise.
+        func branchOutLane(rightOf column: Int) -> Int {
+            if let index = lanes.indices.first(where: { $0 > column && lanes[$0] == nil }) {
                 return index
             }
             lanes.append(nil)
@@ -114,7 +129,7 @@ struct GraphLayout: Equatable {
                                                        colorIndex: laneColors[existing],
                                                        kind: .joinExisting))
                     } else {
-                        let lane = freeLane(rightOf: column)
+                        let lane = branchOutLane(rightOf: column)
                         lanes[lane] = parent
                         laneColors[lane] = nextColor
                         nextColor += 1

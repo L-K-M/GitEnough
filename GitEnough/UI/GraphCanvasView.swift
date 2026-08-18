@@ -35,7 +35,14 @@ struct GraphCanvasView: View {
                                   width: width, height: GraphMetrics.rowHeight)
                 context.fill(Path(rect), with: .color(.accentColor.opacity(0.20)))
             }
-            for segment in layout.segments {
+            // Vertical lane segments first: join curves must paint OVER the lane
+            // they connect to — drawing a lane's vertical after the curve that
+            // ends on it overpaints the curve's endpoint, which makes the
+            // connection look severed.
+            for segment in layout.segments where segment.kind == .vertical {
+                drawSegment(segment, in: &context)
+            }
+            for segment in layout.segments where segment.kind != .vertical {
                 drawSegment(segment, in: &context)
             }
             for node in layout.nodes {
@@ -82,27 +89,27 @@ struct GraphCanvasView: View {
                           control1: CGPoint(x: start.x, y: start.y + rowH * 0.55),
                           control2: CGPoint(x: end.x, y: end.y - rowH * 0.55))
         case .joinExisting:
-            // A lane folding into a lane that passes through this row. When the
-            // source lane comes from above (it wasn't a node), the curve starts
-            // at the lane's top edge; otherwise at the node itself.
-            let start: CGPoint
-            if segment.fromRow == segment.toRow {
-                start = nodePoint(row: segment.fromRow, column: segment.fromColumn)
-            } else {
-                start = CGPoint(x: x(segment.fromColumn), y: CGFloat(segment.fromRow) * rowH)
-            }
-            let end: CGPoint
-            if segment.fromRow == segment.toRow, segment.fromColumn < segment.toColumn {
-                // Node joining a lane to its right: meet it at the row's bottom edge.
-                end = CGPoint(x: x(segment.toColumn), y: CGFloat(segment.toRow) * rowH + rowH)
-            } else {
-                // Lane folding into the row's node (from the right, same row).
-                end = nodePoint(row: segment.toRow, column: segment.toColumn)
-            }
+            // A node/lane merging into a lane that passes through this row. Both
+            // variants land on the target lane at the row's bottom edge — the
+            // point where the lane's vertical continues — so the connection is
+            // always visibly made.
+            let start = nodePoint(row: segment.fromRow, column: segment.fromColumn)
+            let end = CGPoint(x: x(segment.toColumn), y: CGFloat(segment.toRow) * rowH + rowH)
             path.move(to: start)
-            path.addCurve(to: end,
-                          control1: CGPoint(x: start.x, y: start.y + rowH * 0.55),
-                          control2: CGPoint(x: end.x, y: end.y - rowH * 0.55))
+            if segment.fromColumn < segment.toColumn {
+                // Merge node joining a lane to its right: smooth S, continuing
+                // the downward flow.
+                path.addCurve(to: end,
+                              control1: CGPoint(x: start.x, y: start.y + rowH * 0.55),
+                              control2: CGPoint(x: end.x, y: end.y - rowH * 0.55))
+            } else {
+                // Lane folding into a lane to its left: sweep down, then hook
+                // into the lane — a clear, perpendicular connection instead of
+                // a tangential graze.
+                path.addCurve(to: end,
+                              control1: CGPoint(x: start.x, y: end.y),
+                              control2: CGPoint(x: start.x + (end.x - start.x) * 0.55, y: end.y))
+            }
         }
         context.stroke(path, with: .color(laneColor(segment.colorIndex)),
                        style: StrokeStyle(lineWidth: 2, lineCap: .round))

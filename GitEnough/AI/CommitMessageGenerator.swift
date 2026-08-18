@@ -122,6 +122,47 @@ final class CommitMessageGenerator {
         return cleaned
     }
 
+    // MARK: - Model listing
+
+    private struct ProviderModel: Decodable { let id: String }
+    private struct ModelsResponse: Decodable { let data: [ProviderModel] }
+
+    /// Parses an OpenAI-compatible `GET /models` response (`{"data":[{"id":…}]}`),
+    /// tolerating any extra fields providers add. Returns sorted model ids, or an
+    /// empty array for payloads in an unexpected shape.
+    static func parseModelsResponse(_ data: Data) -> [String] {
+        guard let response = try? JSONDecoder().decode(ModelsResponse.self, from: data) else {
+            return []
+        }
+        return response.data.map(\.id).sorted()
+    }
+
+    /// Fetches the provider's available models (`GET {base}/models`). Settings
+    /// uses this to offer a picker instead of a free-text model field; on any
+    /// failure the UI falls back to the text field.
+    func fetchModels() async throws -> [String] {
+        guard let apiKey = apiKeyProvider(), !apiKey.isEmpty else {
+            throw GenerationError.noAPIKey
+        }
+        guard let url = configuration.modelsURL else {
+            throw GenerationError.invalidEndpoint
+        }
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = 20
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw GenerationError.malformedResponse
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            let body = String(data: data, encoding: .utf8) ?? ""
+            throw GenerationError.httpError(status: http.statusCode, body: body)
+        }
+        let models = Self.parseModelsResponse(data)
+        guard !models.isEmpty else { throw GenerationError.malformedResponse }
+        return models
+    }
+
     /// Strips the decorations models love to add despite instructions: surrounding
     /// quotes, code fences, leading "Commit message:" labels.
     static func cleanGeneratedMessage(_ raw: String) -> String {

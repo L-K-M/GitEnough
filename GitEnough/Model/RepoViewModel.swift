@@ -37,6 +37,11 @@ final class RepoViewModel: ObservableObject, Identifiable {
     @Published private(set) var activity: String?
     @Published var errorMessage: String?
 
+    /// Non-blocking indicator while an external merge tool is open. Unlike
+    /// `isBusy` this never occupies the serial repo queue: the tool can stay open
+    /// as long as the user needs, and Ours/Theirs/Mark Resolved keep working.
+    @Published private(set) var mergeToolActivity: String?
+
     /// Commit detail pane.
     @Published private(set) var selectedCommitDetail: CommitDetail?
     @Published private(set) var selectedCommitFileDiff: String = ""
@@ -237,12 +242,57 @@ final class RepoViewModel: ObservableObject, Identifiable {
 
     func mergeContinue() { perform("Committing merge…") { try $0.mergeContinue() } }
 
-    /// Opens the external merge tool for one conflicted file. The tool runs as long
-    /// as it's open, so this deliberately occupies the serial queue — the UI shows
-    /// the activity and the refresh afterwards picks up whatever was resolved.
+    /// Opens the external merge tool for one conflicted file. The tool process
+    /// (e.g. FileMerge via opendiff) can stay open for minutes, so it must NOT
+    /// run on the serial repo queue — a blocking call there would jam every
+    /// subsequent repo operation behind it (which is exactly what used to make
+    /// Ours/Theirs/Mark Resolved look dead and the spinner spin forever).
+    ///
+    /// When the tool exits we verify the file ourselves (its exit code / git's
+    /// "was it resolved?" prompt are unreliable headless): no conflict markers
+    /// left → stage it; markers left → tell the user.
     func openMergeTool(_ tool: MergeTool, path: String) {
-        perform("Waiting for \(tool.name)…", includeHistory: false) {
-            try $0.runMergeTool(tool.gitName, path: path)
+        guard mergeToolActivity == nil else {
+            errorMessage = "A merge tool is already open — close it before opening another."
+            return
+        }
+        mergeToolActivity = "Waiting for \(tool.name)…"
+        errorMessage = nil
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self else { return }
+            var caught: Error?
+            do {
+                try self.client.runMergeTool(tool.gitName, path: path)
+            } catch {
+                caught = error
+            }
+            // Verifying and staging go through the serial repo queue like every
+            // other mutating operation — concurrent `git add`s could otherwise
+            // fight over the index lock.
+            self.queue.async {
+                var autoResolved = false
+                if caught == nil {
+                    do {
+                        if !self.client.fileHasConflictMarkers(path) {
+                            try self.client.markResolved(path: path)
+                            autoResolved = true
+                        }
+                    } catch {
+                        caught = error
+                    }
+                }
+                let snapshot = self.collectSnapshot(includeHistory: false)
+                DispatchQueue.main.async {
+                    self.apply(snapshot)
+                    self.mergeToolActivity = nil
+                    if let caught {
+                        self.errorMessage = caught.localizedDescription
+                    } else if !autoResolved,
+                              self.mergeState.conflictedFiles.contains(path) {
+                        self.errorMessage = "\(tool.name) closed but \(path) still contains conflict markers — resolve them and choose “Mark Resolved”."
+                    }
+                }
+            }
         }
     }
 

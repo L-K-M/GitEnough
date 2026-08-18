@@ -96,6 +96,9 @@ private struct AISettingsView: View {
     @State private var statusMessage: String?
     @State private var statusIsError = false
     @State private var isTesting = false
+    @State private var models: [String] = []
+    @State private var isLoadingModels = false
+    @State private var modelsError: String?
 
     init() {
         let config = LLMConfiguration.load()
@@ -103,6 +106,16 @@ private struct AISettingsView: View {
         _baseURL = State(initialValue: config.baseURL)
         _model = State(initialValue: config.model)
         _apiKey = State(initialValue: LLMConfiguration.apiKey ?? "")
+    }
+
+    /// The fetched models, with the current value pinned in case the provider's
+    /// list doesn't contain it (custom/legacy model names stay selectable).
+    private var modelChoices: [String] {
+        var choices = models
+        if !model.isEmpty && !choices.contains(model) {
+            choices.insert(model, at: 0)
+        }
+        return choices
     }
 
     var body: some View {
@@ -115,22 +128,43 @@ private struct AISettingsView: View {
             .onChange(of: provider) { _, newProvider in
                 baseURL = newProvider.defaultBaseURL
                 model = newProvider.defaultModel
+                models = []
+                modelsError = nil
             }
 
             TextField("Base URL", text: $baseURL)
                 .help("An OpenAI-compatible endpoint; /chat/completions is appended.")
 
-            TextField("Model", text: $model)
-
             SecureField("API key", text: $apiKey)
                 .help("Stored in the macOS Keychain, never in plain text.")
+
+            if models.isEmpty {
+                TextField("Model", text: $model)
+                if let modelsError {
+                    Text("Couldn't load the model list (\(modelsError)) — enter the model name manually.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("Enter an API key and choose “Load Models” to pick from the provider's list.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                Picker("Model", selection: $model) {
+                    ForEach(modelChoices, id: \.self) { choice in
+                        Text(choice).tag(choice)
+                    }
+                }
+            }
 
             HStack {
                 Button("Save") { save() }
                     .keyboardShortcut(.defaultAction)
+                Button("Load Models") { loadModels() }
+                    .disabled(isLoadingModels || apiKey.isEmpty)
                 Button("Test Connection") { testConnection() }
                     .disabled(isTesting || apiKey.isEmpty)
-                if isTesting {
+                if isTesting || isLoadingModels {
                     ProgressView()
                         .controlSize(.small)
                 }
@@ -149,6 +183,11 @@ private struct AISettingsView: View {
         }
         .formStyle(.grouped)
         .padding()
+        .onAppear {
+            if models.isEmpty && !apiKey.isEmpty && !baseURL.isEmpty {
+                loadModels()
+            }
+        }
     }
 
     private func save() {
@@ -160,6 +199,34 @@ private struct AISettingsView: View {
         } catch {
             statusIsError = true
             statusMessage = error.localizedDescription
+        }
+    }
+
+    /// Fetches the provider's model list; switches the model field to a picker
+    /// on success, leaves the text field (with a note) on failure.
+    private func loadModels() {
+        save()
+        isLoadingModels = true
+        modelsError = nil
+        let config = LLMConfiguration(provider: provider, baseURL: baseURL, model: model)
+        let generator = CommitMessageGenerator(configuration: config,
+                                               apiKeyProvider: { self.apiKey })
+        Task {
+            do {
+                let fetched = try await generator.fetchModels()
+                await MainActor.run {
+                    models = fetched
+                    isLoadingModels = false
+                    if model.isEmpty, let first = fetched.first {
+                        model = first
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    modelsError = error.localizedDescription
+                    isLoadingModels = false
+                }
+            }
         }
     }
 

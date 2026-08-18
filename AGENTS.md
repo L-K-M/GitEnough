@@ -69,6 +69,10 @@ xcodebuild -project GitEnough.xcodeproj -scheme GitEnough -destination 'platform
   `GIT_EDITOR=true`; commands must fail fast rather than block on prompts.
 - **Serial git access per repo**: all GitClient calls for a repo run on its
   view model's serial queue. Don't call GitClient from the main thread.
+- **Long-running external processes never run on the repo queue**: merge tools
+  (opendiff & co. block until the app quits) run detached on a global queue and
+  refresh on exit. A blocking call on the serial queue jams every repo op
+  behind it.
 - Untracked-file "discard" moves to the Trash (recoverable), never unlink.
 - Don't add dependencies. Don't add telemetry.
 
