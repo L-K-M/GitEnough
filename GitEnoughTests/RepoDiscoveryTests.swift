@@ -7,8 +7,11 @@ final class RepoDiscoveryTests: XCTestCase {
     private var root: URL!
 
     override func setUpWithError() throws {
+        // Canonicalize (temporaryDirectory sits behind /var → /private/var, and
+        // contentsOfDirectory returns physically-resolved child paths).
         root = FileManager.default.temporaryDirectory
             .appendingPathComponent("GitEnoughDiscovery-\(UUID().uuidString)")
+            .resolvingSymlinksInPath()
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     }
 
