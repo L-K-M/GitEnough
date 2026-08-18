@@ -3,7 +3,7 @@ import Foundation
 /// Scans a user-chosen "watch folder" for git repositories so they can be added
 /// to the sidebar automatically (Settings → General → Repository discovery).
 ///
-/// Walks directories breadth-first up to `maxDepth` levels below `root`, skipping
+/// Walks directories depth-first up to `maxDepth` levels below `root`, skipping
 /// hidden folders, macOS user folders and package-manager build trees, and stops
 /// at repository boundaries (a repo's submodules/nested trees are not separate
 /// sidebar entries). Purely file-system based: a directory counts as a repository
@@ -54,8 +54,11 @@ enum RepoDiscovery {
                 visited += 1
                 guard visited < maxVisitedDirectories else { return }
                 if isRepository(child) {
-                    // Repository boundary: record it, don't descend (submodules).
-                    found.append(child)
+                    // Repository boundary: record it (canonicalized, so a
+                    // symlinked watch folder can't produce duplicate sidebar
+                    // entries next to git's own physically-resolved paths), and
+                    // don't descend (submodules).
+                    found.append(child.resolvingSymlinksInPath())
                 } else {
                     let name = child.lastPathComponent
                     // Defensive: skipsHiddenFiles already excludes dot-dirs.
@@ -68,7 +71,7 @@ enum RepoDiscovery {
         guard isDirectory(root) else { return [] }
         // The watch folder itself may be a repository — count it, and still
         // examine its children so sibling repositories aren't missed.
-        if isRepository(root) { found.append(root) }
+        if isRepository(root) { found.append(root.resolvingSymlinksInPath()) }
         examine(root, depth: 0)
         return found
     }
