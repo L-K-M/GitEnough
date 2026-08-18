@@ -211,6 +211,13 @@ final class GitIntegrationTests: XCTestCase {
                        "report[1].txt")
     }
 
+    func testIsIgnoredDetectsBroaderExistingPatterns() throws {
+        try write("*.log\nbuild/\n", to: ".gitignore")
+        XCTAssertTrue(client.isIgnored(path: "error.log"))
+        XCTAssertTrue(client.isIgnored(path: "build/output.bin"))
+        XCTAssertFalse(client.isIgnored(path: "notes.txt"))
+    }
+
     func testValidationHelpers() throws {
         XCTAssertTrue(GitClient.isRepository(at: repoURL))
         // git reports the physical path; temporaryDirectory may sit behind the

@@ -332,16 +332,30 @@ final class RepoViewModel: ObservableObject, Identifiable {
         // silent no-op, so refuse it here like the UI does.
         guard change.isUntracked else { return }
         perform("Updating .gitignore…", includeHistory: false) { client in
+            // A broader existing pattern (*.log, build/) already covers it.
+            guard !client.isIgnored(path: change.path) else { return }
             let url = client.worktree.appendingPathComponent(".gitignore")
             // Only a genuinely missing file maps to empty: a *read* failure
             // (e.g. non-UTF-8 bytes) must throw rather than let the write
             // below clobber the existing file with a single line.
-            let existing = FileManager.default.fileExists(atPath: url.path)
+            let fileExists = FileManager.default.fileExists(atPath: url.path)
+            let existing = fileExists
                 ? try String(contentsOf: url, encoding: .utf8)
                 : ""
             let updated = GitIgnore.appending(change.path, to: existing)
             guard updated != existing else { return }
-            try updated.write(to: url, atomically: true, encoding: .utf8)
+            if fileExists {
+                // Append through the existing file (following symlinks, and
+                // preserving permissions/ownership) rather than replacing it
+                // atomically. `appending` only ever appends, so the new bytes
+                // are exactly the difference.
+                let handle = try FileHandle(forWritingTo: url)
+                try handle.seekToEnd()
+                try handle.write(contentsOf: Data(updated.dropFirst(existing.count).utf8))
+                try handle.close()
+            } else {
+                try updated.write(to: url, atomically: true, encoding: .utf8)
+            }
         }
     }
 

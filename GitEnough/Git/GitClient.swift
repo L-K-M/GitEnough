@@ -153,6 +153,15 @@ final class GitClient {
             ["-C", worktree.path, "diff", "--staged", "--stat", "--no-color"], in: nil).stdout
     }
 
+    /// True when an existing gitignore rule already covers `path`
+    /// (`git check-ignore`), so "Ignore" doesn't pile redundant specific
+    /// entries under a broader pattern like `*.log` or `build/`.
+    func isIgnored(path: String) -> Bool {
+        guard let result = try? shell.run(
+            ["-C", worktree.path, "check-ignore", "-q", "--", path], in: nil) else { return false }
+        return result.exitCode == 0
+    }
+
     // MARK: - Staging
 
     func stage(paths: [String]) throws {

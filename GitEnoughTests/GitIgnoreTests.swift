@@ -15,6 +15,17 @@ final class GitIgnoreTests: XCTestCase {
         XCTAssertEqual(GitIgnore.escape("back\\slash.txt"), "back\\\\slash.txt")
     }
 
+    func testEscapeProtectsLeadingCommentAndNegationMarkers() {
+        // A file literally named "#notes.md" would otherwise produce a
+        // comment line, "!keep.txt" a negation — neither ignores anything.
+        XCTAssertEqual(GitIgnore.escape("#notes.md"), "\\#notes.md")
+        XCTAssertEqual(GitIgnore.escape("!keep.txt"), "\\!keep.txt")
+    }
+
+    func testEscapeProtectsTrailingWhitespace() {
+        XCTAssertEqual(GitIgnore.escape("notes "), "notes \\")
+    }
+
     func testAppendingToEmptyFileAnchorsAtRoot() {
         XCTAssertEqual(GitIgnore.appending("build/output", to: ""),
                        "/build/output\n")
@@ -38,5 +49,27 @@ final class GitIgnoreTests: XCTestCase {
     func testAppendingDetectsDuplicatesInCRLFFiles() {
         let crlf = "/a.txt\r\n/report[1].txt\r\n"
         XCTAssertEqual(GitIgnore.appending("report[1].txt", to: crlf), crlf)
+    }
+
+    func testCommentAndNegationLinesDontSuppressAppends() {
+        // An existing *comment* "#notes.md" must not block ignoring a file
+        // literally named "#notes.md" — comments ignore nothing.
+        let withComment = "#notes.md\n"
+        XCTAssertEqual(GitIgnore.appending("#notes.md", to: withComment),
+                       "#notes.md\n/\\#notes.md\n")
+        let withNegation = "!keep.txt\n"
+        XCTAssertEqual(GitIgnore.appending("!keep.txt", to: withNegation),
+                       "!keep.txt\n/\\!keep.txt\n")
+        // But the escaped forms do count as duplicates.
+        let already = "/\\#notes.md\n"
+        XCTAssertEqual(GitIgnore.appending("#notes.md", to: already), already)
+    }
+
+    func testLeadingWhitespaceLinesDontFalsePositive() {
+        // A pattern with a leading space matches a different name than the
+        // trimmed candidate — it must not count as a duplicate.
+        let existing = " /build/output\n"
+        XCTAssertEqual(GitIgnore.appending("/build/output", to: existing),
+                       " /build/output\n//build/output\n")
     }
 }
