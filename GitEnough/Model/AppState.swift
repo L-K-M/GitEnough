@@ -111,9 +111,8 @@ final class AppState: ObservableObject {
                 let repo = self.store.register(Repository(url: validated))
                 self.select(repo)
                 self.refreshSummaries()
-                if !self.showingAddRepository {
-                    self.addRepositoryError = nil
-                }
+                // Success invalidates any previous failure message, sheet or not.
+                self.addRepositoryError = nil
                 completion?(repo)
             }
         }
