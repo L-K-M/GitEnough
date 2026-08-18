@@ -40,7 +40,9 @@ final class AppState: ObservableObject {
     static let autoFetchMinutesKey = "autoFetchMinutes"
 
     private var discoveryTimer: Timer?
-    private var lastAutoFetch = Date.distantPast
+    /// repo path → last auto-fetch, so switching repos doesn't make a
+    /// never-fetched repo wait out an interval it earned elsewhere.
+    private var lastAutoFetchByRepo: [String: Date] = [:]
 
     /// The view model for the currently selected repository, if any.
     var activeViewModel: RepoViewModel? {
@@ -149,9 +151,12 @@ final class AppState: ObservableObject {
     private func autoFetchIfDue() {
         let minutes = UserDefaults.standard.integer(forKey: Self.autoFetchMinutesKey)
         guard minutes > 0 else { return }
-        guard Date().timeIntervalSince(lastAutoFetch) >= TimeInterval(minutes * 60) else { return }
         guard let viewModel = activeViewModel, !viewModel.isBusy else { return }
-        lastAutoFetch = Date()
+        // Multiply in Double: minutes comes from UserDefaults, where a
+        // corrupted/out-of-range value must not trap on Int overflow.
+        let lastFetch = lastAutoFetchByRepo[viewModel.repo.path] ?? .distantPast
+        guard Date().timeIntervalSince(lastFetch) >= TimeInterval(minutes) * 60 else { return }
+        lastAutoFetchByRepo[viewModel.repo.path] = Date()
         viewModel.fetch()
     }
 
