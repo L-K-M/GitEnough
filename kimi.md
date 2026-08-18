@@ -303,15 +303,30 @@ pairs naturally with auto-fetch.
 
 ## 8. Implementation status (this session)
 
+Nine branches implemented, each put through CI (xcodebuild build + full test
+suite on macos-14) and the Z.AI GLM review loop (2–5 rounds per PR; every
+Major/Minor item either applied or answered with reasoning). **All nine are
+CI-green with 0 outstanding review suggestions (steady state), left open and
+unmerged per instructions.**
+
 | # | Item | Branch | PR | Status |
 |---|------|--------|----|--------|
-| 1.1 | Discard staged changes actually discards | `fix/discard-staged-changes` | — | implementing |
-| 1.2 | Rebase-in-progress detection + banner | `fix/rebase-in-progress` | — | implementing |
-| 2.1 | Diff parse caching | `perf/diff-parse-cache` | — | implementing |
-| 3.1 | History filter | `feat/history-filter` | — | implementing |
-| 3.3 | Commit-box counter + amend warning | `feat/commit-box-polish` | — | implementing |
-| 3.2 | Tag from history | `feat/tag-from-history` | — | implementing |
-| 1.3–1.6 | Small fixes bundle | `fix/small-polish` | — | implementing |
+| 1.1 | Discard staged changes actually discards (+ explicit unborn gate, `-f`, `:(literal)` pathspecs, 7 new tests) | `fix/discard-staged-changes` | #9 | ✅ steady state (3 GLM rounds; one round needed 3 API-timeout retries) |
+| 1.2 | Rebase-in-progress detection + banner (+Skip, `git am` exclusion, cached gitDir behind lock, Commit disabled mid-rebase, 4 tests) | `fix/rebase-in-progress` | #11 | ✅ steady state (3 GLM rounds) |
+| 2.1 | Diff parse caching (read-through memoization) | `perf/diff-parse-cache` | #12 | ✅ steady state (2 GLM rounds) |
+| 3.1 | History filter (diacritic-insensitive, debounced, scroll/state resets, a11y) | `feat/history-filter` | #13 | ✅ steady state (5 GLM rounds) |
+| 3.3 | Commit-box counter + amend-pushed confirmation gate | `feat/commit-box-polish` | #15 | ✅ steady state (2 GLM rounds) |
+| 3.2 | Tag from history (+ leading-dash option-injection guard, multi-line messages) | `feat/tag-from-history` | #17 | ✅ steady state (2 GLM rounds) |
+| 1.3–1.6 | Small fixes bundle (formatter race, merge-tool cache + notification, New Window removed, drop alerts) | `fix/small-polish` | #20 | ✅ steady state (3 GLM rounds) |
+| 3.4 | Ignore in .gitignore (pure `GitIgnore` helper, full literal escaping, symlink-safe appends, `check-ignore` short-circuit, 11 unit tests + integration) | `feat/ignore-file` | #22 | ✅ steady state (2 GLM rounds) |
+| 3.5 | Auto-fetch interval (per-repo timestamps, overflow-safe) | `feat/auto-fetch` | #23 | ✅ steady state (2 GLM rounds) |
+
+The review loop's own follow-ups (pathspec `:(literal)` rollout to the
+remaining commands, cherry-pick/revert sequencer banners, push-tags,
+`.git/info/exclude` ignore-locally, …) plus everything not implemented here
+were consolidated into **ANALYSIS.md on main** (merged with the existing one
+from the parallel GLM review; no information lost, duplicates consolidated).
+That document is the shovel-ready backlog for future work.
 
 Explicitly **not** a bug (checked): `GraphLayout.columnCount` trailing-nil
 "trim" — trailing free lanes were used earlier in history, so the width is
