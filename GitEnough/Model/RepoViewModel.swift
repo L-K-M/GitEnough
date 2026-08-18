@@ -17,6 +17,11 @@ final class RepoViewModel: ObservableObject, Identifiable {
     private var watcher: RepoWatcher?
     private var historyLimit: Int
 
+    /// Called on the main thread after each applied snapshot, so the sidebar
+    /// summary (branch, dirty dot, ahead/behind) tracks repo operations live
+    /// instead of only updating on app activation. Set by AppState.
+    var onStatusChange: ((RepoSummary) -> Void)?
+
     private let queueKey = DispatchSpecificKey<UInt8>()
 
     static let historyPageSize = 300
@@ -136,6 +141,7 @@ final class RepoViewModel: ObservableObject, Identifiable {
         canLoadMoreHistory = snapshot.canLoadMore
         if let commits = snapshot.commits { self.commits = commits }
         if let layout = snapshot.layout { self.layout = layout }
+        onStatusChange?(RepoSummary(status: snapshot.status))
     }
 
     /// Runs a snapshot load on the queue and applies it on main.

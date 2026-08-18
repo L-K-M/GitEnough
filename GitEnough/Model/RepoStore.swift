@@ -31,6 +31,17 @@ struct RepoSummary: Equatable {
     static let unknown = RepoSummary(branch: nil, isDirty: false, ahead: 0, behind: 0, isValid: true)
 }
 
+extension RepoSummary {
+    /// Builds the sidebar summary from a fresh `git status` snapshot. Kept in an
+    /// extension so the memberwise initializer (used by `.unknown` and the
+    /// "invalid repo" placeholder) stays synthesized.
+    init(status: RepoStatus) {
+        self.init(branch: status.head ?? status.headHash.map { String($0.prefix(7)) },
+                  isDirty: status.isDirty, ahead: status.ahead, behind: status.behind,
+                  isValid: true)
+    }
+}
+
 /// How the sidebar orders repositories (persisted in UserDefaults).
 enum SidebarSortOrder: String, CaseIterable, Identifiable {
     case manual = "Manually"
