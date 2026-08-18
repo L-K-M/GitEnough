@@ -7,6 +7,10 @@ Desktop — clone, stage, commit, pull, push, branch, merge — with the two thi
 Desktop never gave you: a proper **IntelliJ-style branch/merge graph** and
 **AI-written commit messages** from your staged diff.
 
+> [!IMPORTANT]
+> LLM Disclosure: GitEnough was built with substantial help from large language models. Much of the code arrived through AI-authored commits and `claude/*` pull-request branches, with agent guidance kept in [`AGENTS.md`](AGENTS.md)
+
+
 ## What it does
 
 - **Two-pane window.** Repositories on the left (with live branch / dirty /
