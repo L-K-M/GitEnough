@@ -20,8 +20,8 @@ struct RepoDetailView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if viewModel.mergeState.isMerging {
-                mergeBanner
+            if viewModel.mergeState.isInProgress {
+                operationBanner
             }
             if let error = viewModel.errorMessage {
                 ErrorBanner(message: error) {
@@ -39,6 +39,14 @@ struct RepoDetailView: View {
                     BranchesView(viewModel: viewModel)
                 }
             }
+            // Re-key the tab content per repository: @State (history selection +
+            // filter, changes selection, …) must not survive a repo switch. It
+            // used to: the old selected commit hash lingered into the new repo's
+            // HistoryView, and when the hash existed in both repos the detail
+            // pane spun forever — selectCommit was never re-run for the new view
+            // model. A remount also resets scroll to the top (HEAD), which is
+            // where you want to land on a fresh repo anyway.
+            .id(repo.path)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             Divider()
@@ -95,8 +103,8 @@ struct RepoDetailView: View {
                     } label: {
                         Label("Publish", systemImage: "arrow.up.to.line")
                     }
-                    .disabled(viewModel.isBusy)
-                    .help("Push and set upstream to origin")
+                    .disabled(viewModel.isBusy || viewModel.remotes.isEmpty)
+                    .help("Push and set upstream to \(viewModel.publishRemoteName)")
                 } else {
                     Button {
                         viewModel.push()
@@ -152,37 +160,40 @@ struct RepoDetailView: View {
         .help("Current branch — click to switch")
     }
 
-    // MARK: - Merge banner
+    // MARK: - Operation banner (merge / rebase / cherry-pick / revert)
 
-    private var mergeBanner: some View {
-        HStack(spacing: 10) {
+    private var operationBanner: some View {
+        let state = viewModel.mergeState
+        let noun = state.operation?.noun ?? "Operation"
+        let title = state.operationLabel ?? "\(noun) in progress"
+        return HStack(spacing: 10) {
             Image(systemName: "arrow.triangle.merge")
                 .foregroundStyle(.orange)
             VStack(alignment: .leading, spacing: 1) {
-                Text(viewModel.mergeState.mergingRef ?? "Merge in progress")
+                Text(title)
                     .font(.callout)
                     .fontWeight(.semibold)
-                let conflicts = viewModel.mergeState.conflictedFiles.count
+                let conflicts = state.conflictedFiles.count
                 Text(conflicts == 0
-                     ? "No conflicts — you can commit the merge."
+                     ? "No conflicts — you can continue."
                      : "\(conflicts) conflicted file\(conflicts == 1 ? "" : "s") to resolve.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            if !viewModel.mergeState.conflictedFiles.isEmpty,
+            if !state.conflictedFiles.isEmpty,
                appState.selectedTab != .changes {
                 Button("Resolve Conflicts") {
                     appState.selectedTab = .changes
                 }
             }
-            Button("Abort Merge") {
-                viewModel.mergeAbort()
+            Button("Abort \(noun)") {
+                viewModel.abortOperation()
             }
             .disabled(viewModel.isBusy)
-            if viewModel.mergeState.conflictedFiles.isEmpty {
-                Button("Commit Merge") {
-                    viewModel.mergeContinue()
+            if state.conflictedFiles.isEmpty {
+                Button(state.operation == .merge ? "Commit Merge" : "Continue \(noun)") {
+                    viewModel.continueOperation()
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(viewModel.isBusy)

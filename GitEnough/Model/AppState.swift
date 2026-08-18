@@ -26,6 +26,10 @@ final class AppState: ObservableObject {
     @Published var showingAddRepository = false
     @Published var addRepositoryError: String?
 
+    /// Why a dropped folder couldn't be added. Unlike the Add sheet, a drop has
+    /// no inline error surface, so ContentView shows this as an alert.
+    @Published var dropAddError: String?
+
     /// New-branch sheet (triggered from the Repository menu, shown by the detail pane).
     @Published var showingNewBranch = false
 
@@ -35,7 +39,14 @@ final class AppState: ObservableObject {
     /// discovery). Shared with SettingsView's @AppStorage.
     static let discoveryFolderKey = "discoveryFolder"
 
+    /// UserDefaults key for the auto-fetch interval in minutes (0 = never).
+    /// Shared with SettingsView's @AppStorage.
+    static let autoFetchMinutesKey = "autoFetchMinutes"
+
     private var discoveryTimer: Timer?
+    /// repo path → last auto-fetch, so switching repos doesn't make a
+    /// never-fetched repo wait out an interval it earned elsewhere.
+    private var lastAutoFetchByRepo: [String: Date] = [:]
 
     /// The view model for the currently selected repository, if any.
     var activeViewModel: RepoViewModel? {
@@ -51,6 +62,7 @@ final class AppState: ObservableObject {
         // Watch-folder discovery: cheap file-system scan, no git invocation.
         let timer = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
             self?.scanDiscoveryFolder()
+            self?.autoFetchIfDue()
         }
         RunLoop.main.add(timer, forMode: .common)
         discoveryTimer = timer
@@ -83,18 +95,48 @@ final class AppState: ObservableObject {
         _ = viewModel(for: repo)
     }
 
-    /// Registers the repository containing `url` and selects it. On failure, sets
-    /// `addRepositoryError` for the sheet to show.
-    @discardableResult
-    func addRepository(at url: URL) -> Bool {
-        if let repo = store.add(url: url) {
-            select(repo)
-            refreshSummaries()
-            addRepositoryError = nil
-            return true
+    /// Registers the repository containing `url` and selects it.
+    ///
+    /// Validation shells out to git (twice), so it runs on a background queue —
+    /// never the main thread; a slow or network volume must not beachball the
+    /// UI while the folder is probed. `completion` runs on the main thread with
+    /// the registered repository, or nil when `url` isn't inside a git repository
+    /// (in which case `addRepositoryError` is set for the sheet to show).
+    func addRepository(at url: URL, completion: ((Repository?) -> Void)? = nil) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let validated = GitClient.isRepository(at: url) ? GitClient.topLevel(of: url) : nil
+            DispatchQueue.main.async { [weak self] in
+                guard let self else {
+                    completion?(nil)
+                    return
+                }
+                guard let validated else {
+                    // The sheet is the only surface that renders this error — the
+                    // drop path reports through dropAddError's alert instead.
+                    if self.showingAddRepository {
+                        self.addRepositoryError = "“\(url.lastPathComponent)” is not inside a git repository."
+                    }
+                    completion?(nil)
+                    return
+                }
+                let repo = self.store.register(Repository(url: validated))
+                self.select(repo)
+                self.refreshSummaries()
+                // Success invalidates any previous failure message, sheet or not.
+                self.addRepositoryError = nil
+                completion?(repo)
+            }
         }
-        addRepositoryError = "“\(url.lastPathComponent)” is not inside a git repository."
-        return false
+    }
+
+    /// Drop-path wrapper around `addRepository`: a drop has no inline error
+    /// surface (the Add sheet isn't open), so failures surface as an alert on
+    /// ContentView instead of failing silently.
+    func addDroppedRepository(at url: URL) {
+        addRepository(at: url) { [weak self] repo in
+            guard repo == nil else { return }
+            self?.dropAddError = "“\(url.lastPathComponent)” is not inside a git repository — nothing was added."
+        }
     }
 
     func remove(_ repo: Repository) {
@@ -106,29 +148,68 @@ final class AppState: ObservableObject {
     }
 
     /// Refreshes the sidebar summaries (branch name, dirty dot, ahead/behind) for
-    /// every registered repo on a background queue.
+    /// every registered repo. Each repo is an independent read-only
+    /// `--no-optional-locks` status query, so they run concurrently (windowed, to
+    /// avoid a process-spawn burst with dozens of repos) instead of one-by-one —
+    /// with 15+ repos a serial pass took seconds on every activation.
     func refreshSummaries() {
         let repos = store.repositories
-        DispatchQueue.global(qos: .utility).async { [weak self] in
-            var result: [String: RepoSummary] = [:]
-            for repo in repos {
-                guard FileManager.default.fileExists(atPath: repo.path) else {
-                    result[repo.path] = RepoSummary(branch: nil, isDirty: false,
-                                                  ahead: 0, behind: 0, isValid: false)
-                    continue
-                }
-                let client = GitClient(worktree: repo.url)
-                if let status = try? client.status() {
-                    result[repo.path] = RepoSummary(status: status)
-                } else {
-                    result[repo.path] = RepoSummary(branch: nil, isDirty: false,
-                                                  ahead: 0, behind: 0, isValid: false)
-                }
-            }
-            DispatchQueue.main.async {
-                self?.store.summaries = result
-            }
+        guard !repos.isEmpty else { return }
+        Task.detached(priority: .utility) { [weak self] in
+            let result = await Self.summaries(for: repos)
+            await MainActor.run { self?.store.summaries = result }
         }
+    }
+
+    /// The per-repo sidebar summaries, computed for up to `maxConcurrent` repos at
+    /// a time. Pure-ish (git reads only); static so tests can drive it directly.
+    static func summaries(for repos: [Repository],
+                          maxConcurrent: Int = 6) async -> [String: RepoSummary] {
+        precondition(maxConcurrent > 0)
+        return await withTaskGroup(of: (String, RepoSummary).self) { group in
+            var iterator = repos.makeIterator()
+            var results: [String: RepoSummary] = [:]
+            results.reserveCapacity(repos.count)
+            func enqueueNext() {
+                guard let repo = iterator.next() else { return }
+                group.addTask { (repo.path, Self.summary(for: repo)) }
+            }
+            for _ in 0..<min(maxConcurrent, repos.count) { enqueueNext() }
+            while let (path, summary) = await group.next() {
+                results[path] = summary
+                enqueueNext()
+            }
+            return results
+        }
+    }
+
+    /// One repo's sidebar summary. A missing folder or a failed status read yields
+    /// an invalid summary rather than an error — the sidebar shows the warning
+    /// triangle instead of pretending everything is fine.
+    private static func summary(for repo: Repository) -> RepoSummary {
+        let invalid = RepoSummary(branch: nil, isDirty: false, ahead: 0, behind: 0, isValid: false)
+        guard FileManager.default.fileExists(atPath: repo.path) else { return invalid }
+        let client = GitClient(worktree: repo.url)
+        guard let status = try? client.status() else { return invalid }
+        return RepoSummary(status: status)
+    }
+
+    // MARK: - Auto-fetch
+
+    /// Fetches the active repository when the Settings → General interval
+    /// (Never / 5 / 15 / 30 / 60 minutes) has elapsed. Shares the one-minute
+    /// discovery timer; skipped while an operation is already running so an
+    /// automatic fetch never queues behind (or double-books) a manual one.
+    private func autoFetchIfDue() {
+        let minutes = UserDefaults.standard.integer(forKey: Self.autoFetchMinutesKey)
+        guard minutes > 0 else { return }
+        guard let viewModel = activeViewModel, !viewModel.isBusy else { return }
+        // Multiply in Double: minutes comes from UserDefaults, where a
+        // corrupted/out-of-range value must not trap on Int overflow.
+        let lastFetch = lastAutoFetchByRepo[viewModel.repo.path] ?? .distantPast
+        guard Date().timeIntervalSince(lastFetch) >= TimeInterval(minutes) * 60 else { return }
+        lastAutoFetchByRepo[viewModel.repo.path] = Date()
+        viewModel.fetch()
     }
 
     // MARK: - Watch-folder discovery

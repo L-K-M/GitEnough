@@ -8,10 +8,34 @@ struct HistoryView: View {
     @ObservedObject var viewModel: RepoViewModel
 
     @State private var selectedHash: String?
+    @State private var filterText = ""
+    /// What actually drives the filter: trimmed, and debounced ~150 ms so a
+    /// fast typer doesn't re-filter thousands of loaded commits per keystroke.
+    @State private var activeFilter = ""
+    @State private var filterDebounceTask: Task<Void, Never>?
     @State private var branchNameForNewBranch = ""
     @State private var commitForNewBranch: Commit?
     @State private var commitToCheckout: Commit?
     @State private var commitToReset: Commit?
+    @State private var commitToTag: Commit?
+    @State private var tagName = ""
+    @State private var tagMessage = ""
+
+    private var isFiltering: Bool { !activeFilter.isEmpty }
+
+    /// Commits matching the filter (subject / author / hash prefix).
+    /// `localizedStandardContains` is Finder-style: case- *and*
+    /// diacritic-insensitive, so "muller" finds "Müller". Only searches the
+    /// loaded pages — "Load older commits…" widens the searchable set.
+    private var visibleCommits: [Commit] {
+        guard isFiltering else { return viewModel.commits }
+        let needle = activeFilter.lowercased()
+        return viewModel.commits.filter {
+            $0.subject.localizedStandardContains(activeFilter)
+                || $0.author.localizedStandardContains(activeFilter)
+                || $0.hash.lowercased().hasPrefix(needle)
+        }
+    }
 
     private var headRow: Int? {
         viewModel.commits.firstIndex { $0.isHead }
@@ -31,6 +55,18 @@ struct HistoryView: View {
         .onChange(of: selectedHash) { _, newValue in
             viewModel.selectCommit(newValue)
         }
+        .onChange(of: filterText) { _, newValue in
+            filterDebounceTask?.cancel()
+            let trimmed = newValue.trimmingCharacters(in: .whitespaces)
+            filterDebounceTask = Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 150_000_000)
+                guard !Task.isCancelled else { return }
+                activeFilter = trimmed
+            }
+        }
+        .onDisappear {
+            filterDebounceTask?.cancel()
+        }
         .onChange(of: viewModel.commits.map(\.hash)) { _, hashes in
             // Keep the selection across refreshes; drop it if the commit vanished
             // (e.g. after a reset --hard).
@@ -40,6 +76,9 @@ struct HistoryView: View {
         }
         .sheet(item: $commitForNewBranch) { commit in
             newBranchSheet(for: commit)
+        }
+        .sheet(item: $commitToTag) { commit in
+            newTagSheet(for: commit)
         }
         .confirmationDialog("Check out \(commitToCheckout?.shortHash ?? "")?",
                             isPresented: checkoutConfirmationPresented,
@@ -80,40 +119,108 @@ struct HistoryView: View {
     // MARK: - List
 
     private var historyList: some View {
-        ScrollView {
-            VStack(spacing: 0) {
-                HStack(alignment: .top, spacing: 0) {
-                    GraphCanvasView(layout: viewModel.layout,
-                                    commitCount: viewModel.commits.count,
-                                    headRow: headRow,
-                                    selectedRow: selectedRow)
-                    LazyVStack(spacing: 0) {
-                        ForEach(Array(viewModel.commits.enumerated()), id: \.element.id) { index, commit in
-                            CommitRowView(commit: commit,
-                                          isSelected: commit.hash == selectedHash,
-                                          isHead: index == headRow)
-                            .frame(height: GraphMetrics.rowHeight)
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                selectedHash = commit.hash
+        // Evaluated once per body evaluation and shared by the list, the
+        // empty-state check, and the filter bar's counter.
+        let visible = visibleCommits
+        return VStack(spacing: 0) {
+            filterBar(matchCount: visible.count)
+            Divider()
+            ScrollView {
+                VStack(spacing: 0) {
+                    HStack(alignment: .top, spacing: 0) {
+                        // The graph only aligns with the full, unfiltered row
+                        // sequence — hide it while filtering.
+                        if !isFiltering {
+                            GraphCanvasView(layout: viewModel.layout,
+                                            commitCount: viewModel.commits.count,
+                                            headRow: headRow,
+                                            selectedRow: selectedRow)
+                        }
+                        LazyVStack(spacing: 0) {
+                            ForEach(visible, id: \.id) { commit in
+                                CommitRowView(commit: commit,
+                                              isSelected: commit.hash == selectedHash,
+                                              isHead: commit.isHead)
+                                .frame(height: GraphMetrics.rowHeight)
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    selectedHash = commit.hash
+                                }
+                                .contextMenu {
+                                    commitContextMenu(commit)
+                                }
                             }
-                            .contextMenu {
-                                commitContextMenu(commit)
+                            if isFiltering && visible.isEmpty {
+                                VStack(spacing: 4) {
+                                    Text("No commits match “\(activeFilter)”")
+                                        .font(.callout)
+                                    Text("Only the \(viewModel.commits.count) loaded commits are searched — load older commits to search deeper.")
+                                        .font(.caption)
+                                }
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
+                                .frame(maxWidth: .infinity, alignment: .center)
+                                .padding(.vertical, 24)
+                                .padding(.horizontal, 32)
                             }
                         }
+                        .padding(.trailing, 12)
                     }
-                    .padding(.trailing, 12)
-                }
-                if viewModel.canLoadMoreHistory {
-                    Button("Load older commits…") {
-                        viewModel.loadMoreHistory()
+                    if viewModel.canLoadMoreHistory {
+                        Button("Load older commits…") {
+                            viewModel.loadMoreHistory()
+                        }
+                        .buttonStyle(.link)
+                        .padding(.vertical, 10)
+                        .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.link)
-                    .padding(.vertical, 10)
-                    .frame(maxWidth: .infinity)
                 }
             }
+            .background(Color(nsColor: .textBackgroundColor))
+            // Reset the scroll offset whenever the (debounced) filter changes —
+            // otherwise a deep scroll position can land the shorter result
+            // list in blank space. Constant ("") while unfiltered.
+            .id(activeFilter)
         }
+    }
+
+    // MARK: - Filter bar
+
+    private func filterBar(matchCount: Int) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "line.3.horizontal.decrease.circle")
+                .foregroundStyle(.secondary)
+            TextField("Filter by subject, author, or hash", text: $filterText)
+                .textFieldStyle(.plain)
+                .autocorrectionDisabled()
+            if isFiltering {
+                Text("\(matchCount) of \(viewModel.commits.count)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize()
+                    .accessibilityLabel("\(matchCount) of \(viewModel.commits.count) commits shown")
+            }
+            // Visible whenever there's text to clear — including
+            // whitespace-only input that doesn't (yet) activate filtering.
+            if !filterText.isEmpty {
+                Button {
+                    filterText = ""
+                    filterDebounceTask?.cancel()
+                    activeFilter = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Clear filter")
+                .accessibilityLabel("Clear filter")
+                // No Esc shortcut here: .cancelAction would capture Esc
+                // window-wide while a filter is active, fighting the sheets
+                // and confirmation dialogs this view also hosts.
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
         .background(Color(nsColor: .textBackgroundColor))
     }
 
@@ -131,6 +238,11 @@ struct HistoryView: View {
         Button("Create Branch Here…") {
             branchNameForNewBranch = ""
             commitForNewBranch = commit
+        }
+        Button("Tag This Commit…") {
+            tagName = ""
+            tagMessage = ""
+            commitToTag = commit
         }
         Button("Check Out Commit…") {
             commitToCheckout = commit
@@ -171,6 +283,42 @@ struct HistoryView: View {
                 }
                 .keyboardShortcut(.defaultAction)
                 .disabled(branchNameForNewBranch.trimmingCharacters(in: .whitespaces).isEmpty)
+                .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(20)
+    }
+
+    private func newTagSheet(for commit: Commit) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Tag \(commit.shortHash)")
+                .font(.headline)
+            Text(commit.subject)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+            TextField("Tag name", text: $tagName)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 300)
+            TextField("Message (optional — makes an annotated tag)", text: $tagMessage, axis: .vertical)
+                .textFieldStyle(.roundedBorder)
+                .lineLimit(1...5)
+                .frame(width: 300)
+            HStack {
+                Spacer()
+                Button("Cancel") { commitToTag = nil }
+                    .keyboardShortcut(.cancelAction)
+                Button("Create Tag") {
+                    let message = tagMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+                    viewModel.createTag(
+                        named: tagName.trimmingCharacters(in: .whitespaces),
+                        message: message.isEmpty ? nil : message,
+                        at: commit.hash)
+                    commitToTag = nil
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(tagName.trimmingCharacters(in: .whitespaces).isEmpty
+                          || tagName.trimmingCharacters(in: .whitespaces).hasPrefix("-"))
                 .buttonStyle(.borderedProminent)
             }
         }

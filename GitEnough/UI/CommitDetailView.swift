@@ -38,6 +38,23 @@ struct CommitDetailView: View {
                                 .lineLimit(1)
                                 .truncationMode(.middle)
                         }
+                        .contextMenu {
+                            Button {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(file.path, forType: .string)
+                            } label: {
+                                Label("Copy Path", systemImage: "doc.on.doc")
+                            }
+                            if FileManager.default.fileExists(
+                                atPath: viewModel.repo.url.appendingPathComponent(file.path).path) {
+                                Button {
+                                    NSWorkspace.shared.activateFileViewerSelecting(
+                                        [viewModel.repo.url.appendingPathComponent(file.path)])
+                                } label: {
+                                    Label("Show in Finder", systemImage: "folder")
+                                }
+                            }
+                        }
                         .tag(file)
                     }
                 }

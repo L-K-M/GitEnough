@@ -35,7 +35,7 @@ final class RepoViewModel: ObservableObject, Identifiable {
     @Published private(set) var commits: [Commit] = []
     @Published private(set) var layout: GraphLayout = .empty
     @Published private(set) var stash: [StashEntry] = []
-    @Published private(set) var mergeState = MergeState(isMerging: false, mergingRef: nil,
+    @Published private(set) var mergeState = MergeState(operation: nil, operationLabel: nil,
                                                         conflictedFiles: [])
     @Published private(set) var canLoadMoreHistory = false
 
@@ -72,6 +72,13 @@ final class RepoViewModel: ObservableObject, Identifiable {
     @Published var amendLastCommit = false
     @Published private(set) var isGeneratingMessage = false
     @Published var messageGenerationError: String?
+
+    /// True when amending would rewrite a commit the upstream already has
+    /// (upstream set, nothing ahead → HEAD is reachable from upstream) —
+    /// i.e. when the UI should warn and confirm before committing.
+    var amendWouldRewritePushedCommit: Bool {
+        amendLastCommit && status.upstream != nil && status.ahead == 0
+    }
 
     init(repo: Repository, historyLimit: Int = RepoViewModel.historyPageSize) {
         self.repo = repo
@@ -125,10 +132,12 @@ final class RepoViewModel: ObservableObject, Identifiable {
         let branches = (try? client.branches()) ?? []
         let remotes = (try? client.remotes()) ?? []
         let stash = (try? client.stashList()) ?? []
-        let mergeHead = (try? client.mergeHead()) ?? nil
+        let operation = client.inProgressOperation()
+        var operationLabel: String?
+        if let operation { operationLabel = client.operationLabel(for: operation) }
         let mergeState = MergeState(
-            isMerging: mergeHead != nil,
-            mergingRef: mergeHead != nil ? client.mergeMessageLabel() : nil,
+            operation: operation,
+            operationLabel: operationLabel,
             conflictedFiles: (try? client.conflictedPaths()) ?? []
         )
         var commits: [Commit]?
@@ -227,8 +236,22 @@ final class RepoViewModel: ObservableObject, Identifiable {
 
     func push() { perform("Pushing…") { try $0.push(setUpstream: false) } }
 
-    /// Push -u origin HEAD for a branch with no upstream yet.
-    func publishBranch() { perform("Publishing branch…") { try $0.push(setUpstream: true) } }
+    /// The remote a branch without an upstream should be published to — "origin"
+    /// when it exists (it's the natural target even alongside other remotes),
+    /// otherwise the first configured remote.
+    var publishRemoteName: String {
+        remotes.first { $0.name == "origin" }?.name ?? remotes.first?.name ?? "origin"
+    }
+
+    /// Push -u <publishRemoteName> HEAD for a branch with no upstream yet — which
+    /// is not necessarily a remote named "origin". Guarded: with no remotes at
+    /// all there is nothing to publish to (the Publish button hides, but no call
+    /// path should be able to push to a fabricated "origin").
+    func publishBranch() {
+        guard !remotes.isEmpty else { return }
+        let remote = publishRemoteName
+        perform("Publishing branch…") { try $0.push(setUpstream: true, remote: remote) }
+    }
 
     // MARK: Pull request
 
@@ -331,9 +354,38 @@ final class RepoViewModel: ObservableObject, Identifiable {
 
     // MARK: Merge / conflicts
 
-    func mergeAbort() { perform("Aborting merge…") { try $0.mergeAbort() } }
+    /// Continues whichever sequencer operation is in progress (merge commit,
+    /// rebase, cherry-pick, or revert) — the banner's primary action.
+    func continueOperation() {
+        switch mergeState.operation {
+        case nil:
+            break
+        case .merge:
+            perform("Committing merge…") { try $0.mergeContinue() }
+        case .rebase:
+            perform("Continuing rebase…") { try $0.rebaseContinue() }
+        case .cherryPick:
+            perform("Continuing cherry-pick…") { try $0.cherryPickContinue() }
+        case .revert:
+            perform("Continuing revert…") { try $0.revertContinue() }
+        }
+    }
 
-    func mergeContinue() { perform("Committing merge…") { try $0.mergeContinue() } }
+    /// Aborts whichever sequencer operation is in progress.
+    func abortOperation() {
+        switch mergeState.operation {
+        case nil:
+            break
+        case .merge:
+            perform("Aborting merge…") { try $0.mergeAbort() }
+        case .rebase:
+            perform("Aborting rebase…") { try $0.rebaseAbort() }
+        case .cherryPick:
+            perform("Aborting cherry-pick…") { try $0.cherryPickAbort() }
+        case .revert:
+            perform("Aborting revert…") { try $0.revertAbort() }
+        }
+    }
 
     /// Opens the external merge tool for one conflicted file. The tool process
     /// (e.g. FileMerge via opendiff) can stay open for minutes, so it must NOT
@@ -417,6 +469,41 @@ final class RepoViewModel: ObservableObject, Identifiable {
         perform("Unstaging…", includeHistory: false) { try $0.unstage(paths: changes.map(\.path)) }
     }
 
+    /// Adds an untracked file's path to the repo's root `.gitignore` (creating
+    /// the file if needed). A plain file append, not a git command — the
+    /// post-op snapshot picks up the change and the row disappears.
+    func ignore(_ change: FileChange) {
+        // gitignore doesn't affect tracked files — ignoring one would be a
+        // silent no-op, so refuse it here like the UI does.
+        guard change.isUntracked else { return }
+        perform("Updating .gitignore…", includeHistory: false) { client in
+            // A broader existing pattern (*.log, build/) already covers it.
+            guard !client.isIgnored(path: change.path) else { return }
+            let url = client.worktree.appendingPathComponent(".gitignore")
+            // Only a genuinely missing file maps to empty: a *read* failure
+            // (e.g. non-UTF-8 bytes) must throw rather than let the write
+            // below clobber the existing file with a single line.
+            let fileExists = FileManager.default.fileExists(atPath: url.path)
+            let existing = fileExists
+                ? try String(contentsOf: url, encoding: .utf8)
+                : ""
+            let updated = GitIgnore.appending(change.path, to: existing)
+            guard updated != existing else { return }
+            if fileExists {
+                // Append through the existing file (following symlinks, and
+                // preserving permissions/ownership) rather than replacing it
+                // atomically. `appending` only ever appends, so the new bytes
+                // are exactly the difference.
+                let handle = try FileHandle(forWritingTo: url)
+                try handle.seekToEnd()
+                try handle.write(contentsOf: Data(updated.dropFirst(existing.count).utf8))
+                try handle.close()
+            } else {
+                try updated.write(to: url, atomically: true, encoding: .utf8)
+            }
+        }
+    }
+
     /// Tracked paths are restored via git; untracked paths are moved to the Trash
     /// (recoverable, unlike a hard delete).
     func discard(_ changes: [FileChange]) {
@@ -459,6 +546,10 @@ final class RepoViewModel: ObservableObject, Identifiable {
 
     func createBranchAtCommit(named name: String, hash: String) {
         perform("Creating branch…") { try $0.createBranch(name, at: hash, checkout: false) }
+    }
+
+    func createTag(named name: String, message: String?, at hash: String) {
+        perform("Creating tag…") { try $0.createTag(name: name, message: message, at: hash) }
     }
 
     func checkoutCommit(_ hash: String) {

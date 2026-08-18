@@ -30,13 +30,34 @@ private struct DiffLineView: View {
     let line: DiffLine
 
     var body: some View {
-        Text(line.text.isEmpty ? " " : line.text)
+        lineText
             .font(.system(size: 11, design: .monospaced))
             .foregroundStyle(foreground)
             .padding(.horizontal, 8)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(background)
             .textSelection(.enabled)
+    }
+
+    /// The line as one (possibly concatenated) Text. Emphasized words — the
+    /// intraline changes computed by the parser — render bold + underlined.
+    private var lineText: Text {
+        let content = line.text.isEmpty ? " " : line.text
+        let ranges = line.emphasizedRanges.sorted { $0.lowerBound < $1.lowerBound }
+        guard !ranges.isEmpty else { return Text(content) }
+        var pieces: [Text] = []
+        var cursor = content.startIndex
+        for range in ranges {
+            if cursor < range.lowerBound {
+                pieces.append(Text(content[cursor..<range.lowerBound]))
+            }
+            pieces.append(Text(content[range]).bold().underline())
+            cursor = range.upperBound
+        }
+        if cursor < content.endIndex {
+            pieces.append(Text(content[cursor...]))
+        }
+        return pieces.reduce(Text(""), +)
     }
 
     private var foreground: Color {

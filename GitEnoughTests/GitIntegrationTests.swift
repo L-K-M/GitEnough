@@ -116,6 +116,119 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertFalse(status.isDirty)
     }
 
+    func testDiscardRemovesStagedChanges() throws {
+        try write("one\ndiscarded\n", to: "a.txt")
+        try client.stage(paths: ["a.txt"])
+        var status = try client.status()
+        XCTAssertEqual(status.staged.map(\.path), ["a.txt"])
+        XCTAssertTrue(status.unstaged.isEmpty)
+
+        // Discarding from the Staged section must drop the staged content too —
+        // a bare `checkout --` would only restore the worktree from the index.
+        try client.discard(paths: ["a.txt"])
+        status = try client.status()
+        XCTAssertFalse(status.isDirty)
+        let content = try String(contentsOf: repoURL.appendingPathComponent("a.txt"), encoding: .utf8)
+        XCTAssertEqual(content, "one\n")
+    }
+
+    func testDiscardStagedNewFileKeepsItAsUntracked() throws {
+        // A staged *new* file has no HEAD state to restore. Discarding it must
+        // not destroy the content — it becomes untracked again (Trash is one
+        // deliberate step away from there).
+        try write("brand new\n", to: "staged-new.txt")
+        try client.stage(paths: ["staged-new.txt"])
+        try client.discard(paths: ["staged-new.txt"])
+        let status = try client.status()
+        XCTAssertTrue(status.staged.isEmpty)
+        XCTAssertEqual(status.unstaged.map(\.path), ["staged-new.txt"])
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: repoURL.appendingPathComponent("staged-new.txt").path))
+    }
+
+    func testDiscardStagedDeletionRestoresTheFile() throws {
+        try run(["rm", "-q", "a.txt"])
+        var status = try client.status()
+        XCTAssertEqual(status.staged.map(\.path), ["a.txt"])
+
+        try client.discard(paths: ["a.txt"])
+        status = try client.status()
+        XCTAssertFalse(status.isDirty)
+        let content = try String(contentsOf: repoURL.appendingPathComponent("a.txt"), encoding: .utf8)
+        XCTAssertEqual(content, "one\n")
+    }
+
+    func testDiscardOnUnbornHEADKeepsEditedStagedFile() throws {
+        // A brand-new repo without commits: discard can only unstage, and must
+        // cope with a file that was edited *after* staging (rm --cached needs
+        // -f for that) — while never touching the worktree file.
+        let unbornURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitEnoughTests-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: unbornURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: unbornURL) }
+        _ = try GitShell.shared.runChecked(["init", "-b", "main"], in: unbornURL)
+        let unborn = GitClient(worktree: unbornURL)
+
+        let file = unbornURL.appendingPathComponent("new.txt")
+        try "first\n".write(to: file, atomically: true, encoding: .utf8)
+        try unborn.stage(paths: ["new.txt"])
+        try "edited after staging\n".write(to: file, atomically: true, encoding: .utf8)
+
+        try unborn.discard(paths: ["new.txt"])
+        let status = try unborn.status()
+        XCTAssertTrue(status.staged.isEmpty)
+        XCTAssertEqual(status.unstaged.map(\.path), ["new.txt"])
+        let content = try String(contentsOf: file, encoding: .utf8)
+        XCTAssertEqual(content, "edited after staging\n")
+    }
+
+    func testDiscardRemovesBothStagedAndUnstagedEdits() throws {
+        try write("one\nstaged\n", to: "a.txt")
+        try client.stage(paths: ["a.txt"])
+        try write("one\nstaged\nunstaged\n", to: "a.txt")
+
+        try client.discard(paths: ["a.txt"])
+        let status = try client.status()
+        XCTAssertFalse(status.isDirty)
+        let content = try String(contentsOf: repoURL.appendingPathComponent("a.txt"), encoding: .utf8)
+        XCTAssertEqual(content, "one\n")
+    }
+
+    func testDiscardMixedBatchOfStagedNewAndTrackedModified() throws {
+        // One call, two kinds of paths: the tracked file is restored to HEAD,
+        // the staged-new file survives as untracked (the ls-files split).
+        try write("one\nchanged\n", to: "a.txt")
+        try client.stage(paths: ["a.txt"])
+        try write("new\n", to: "b-new.txt")
+        try client.stage(paths: ["b-new.txt"])
+
+        try client.discard(paths: ["a.txt", "b-new.txt"])
+        let status = try client.status()
+        XCTAssertTrue(status.staged.isEmpty)
+        XCTAssertEqual(status.unstaged.map(\.path), ["b-new.txt"])
+        let restored = try String(contentsOf: repoURL.appendingPathComponent("a.txt"), encoding: .utf8)
+        XCTAssertEqual(restored, "one\n")
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: repoURL.appendingPathComponent("b-new.txt").path))
+    }
+
+    func testDiscardTreatsGlobCharactersInFilenamesLiterally() throws {
+        try write("star\n", to: "a*.txt")
+        try write("plain\n", to: "abc.txt")
+        try client.stage(paths: ["a*.txt", "abc.txt"])
+        try client.commit(message: "Add oddly named files")
+
+        try write("star changed\n", to: "a*.txt")
+        try write("plain changed\n", to: "abc.txt")
+        try client.discard(paths: ["a*.txt"])
+
+        // Only the literal file is reverted; the glob sibling keeps its edit.
+        let reverted = try String(contentsOf: repoURL.appendingPathComponent("a*.txt"), encoding: .utf8)
+        XCTAssertEqual(reverted, "star\n")
+        let untouched = try String(contentsOf: repoURL.appendingPathComponent("abc.txt"), encoding: .utf8)
+        XCTAssertEqual(untouched, "plain changed\n")
+    }
+
     func testDiffRoundTrip() throws {
         try write("one\nchanged\n", to: "a.txt")
         let diff = try client.diff(path: "a.txt", staged: false)
@@ -257,6 +370,139 @@ final class GitIntegrationTests: XCTestCase {
 
         XCTAssertEqual(client.remoteDefaultBranch(remote: "origin"), "main")
         XCTAssertNil(client.remoteDefaultBranch(remote: "upstream"))
+    }
+
+    func testPublishSetsUpstreamOnCustomRemote() throws {
+        // A local bare repo as the remote, under a non-default name: "origin"-
+        // hardcoded publishing would fail here with "origin does not appear to
+        // be a git repository".
+        let remoteURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitEnoughTests-remote-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: remoteURL) }
+        try run(["init", "--bare", remoteURL.path])
+        try run(["remote", "add", "work", remoteURL.path])
+
+        try client.push(setUpstream: true, remote: "work")
+
+        let main = try XCTUnwrap(client.branches().first { $0.name == "main" },
+                                 "expected default branch 'main'")
+        XCTAssertEqual(main.upstream, "work/main")
+    }
+
+    func testCreateTagLightweightAndAnnotated() throws {
+        let head = try XCTUnwrap(try client.log(limit: 1).first?.hash)
+        try client.createTag(name: "v1.0", message: nil, at: head)
+        try client.createTag(name: "v2.0-beta", message: "Second release", at: head)
+        let after = try XCTUnwrap(try client.log(limit: 1).first)
+        let tags = after.decorations.filter { $0.kind == .tag }.map(\.name)
+        XCTAssertTrue(tags.contains("v1.0"))
+        XCTAssertTrue(tags.contains("v2.0-beta"))
+        // Invalid refnames surface as git errors, not silent success.
+        XCTAssertThrowsError(try client.createTag(name: "not a tag", message: nil, at: head))
+        // Existing tags must not be silently moved (no implicit -f).
+        XCTAssertThrowsError(try client.createTag(name: "v1.0", message: nil, at: head))
+        // Leading-dash names are rejected before git can parse them as options.
+        XCTAssertThrowsError(try client.createTag(name: "-f", message: nil, at: head))
+        // The annotated tag actually carries its message.
+        let annotation = try GitShell.shared.runChecked(
+            ["-C", repoURL.path, "for-each-ref", "refs/tags/v2.0-beta",
+             "--format=%(contents:subject)"], in: nil)
+        XCTAssertEqual(annotation.stdout.trimmingCharacters(in: .whitespacesAndNewlines),
+                       "Second release")
+        // And the lightweight one has no annotation object.
+        let lightweight = try GitShell.shared.runChecked(
+            ["-C", repoURL.path, "for-each-ref", "refs/tags/v1.0", "--format=%(objecttype)"], in: nil)
+        XCTAssertEqual(lightweight.stdout.trimmingCharacters(in: .whitespacesAndNewlines),
+                       "commit")
+    }
+
+    func testGitIgnoreEscapedPatternMatchesLiterally() throws {
+        // A filename full of glob metacharacters must be ignored *literally*.
+        try write("data\n", to: "report[1].txt")
+        let updated = GitIgnore.appending("report[1].txt", to: "")
+        try updated.write(to: repoURL.appendingPathComponent(".gitignore"),
+                          atomically: true, encoding: .utf8)
+        // check-ignore exits 0 (and echoes the path) when the path is ignored.
+        let result = try GitShell.shared.runChecked(
+            ["-C", repoURL.path, "check-ignore", "report[1].txt"], in: nil)
+        XCTAssertEqual(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines),
+                       "report[1].txt")
+    }
+
+    func testIsIgnoredDetectsBroaderExistingPatterns() throws {
+        try write("*.log\nbuild/\n", to: ".gitignore")
+        XCTAssertTrue(client.isIgnored(path: "error.log"))
+        XCTAssertTrue(client.isIgnored(path: "build/output.bin"))
+        XCTAssertFalse(client.isIgnored(path: "notes.txt"))
+    }
+
+    // MARK: - Rebase / cherry-pick conflicts
+
+    /// Creates a branch whose next commit on a.txt conflicts with main's next
+    /// commit, leaving both branches in place.
+    private func makeConflictingBranch(_ name: String) throws {
+        try run(["checkout", "-b", name])
+        try write("from \(name)\n", to: "a.txt")
+        try run(["add", "a.txt"])
+        try run(["commit", "-m", "Change a on \(name)"])
+        try run(["checkout", "main"])
+        try write("from main\n", to: "a.txt")
+        try run(["add", "a.txt"])
+        try run(["commit", "-m", "Change a on main"])
+    }
+
+    func testRebaseConflictDetectionResolutionAndContinue() throws {
+        try makeConflictingBranch("conflicter")
+        XCTAssertNil(client.inProgressOperation())
+
+        // Rebasing main onto conflicter conflicts on a.txt. During a rebase git
+        // writes rebase-merge/ but NOT MERGE_HEAD — exactly the state that
+        // merge-only detection used to miss.
+        XCTAssertThrowsError(try run(["rebase", "conflicter"]))
+        XCTAssertEqual(client.inProgressOperation(), .rebase)
+        XCTAssertEqual(try client.conflictedPaths(), ["a.txt"])
+        XCTAssertFalse(try client.status().conflicted.isEmpty)
+        XCTAssertEqual(client.operationLabel(for: .rebase), "Rebasing main")
+
+        // Ours during a rebase is the new base (conflicter); theirs is main's
+        // commit being replayed.
+        try client.resolveConflict(path: "a.txt", ours: true)
+        try client.rebaseContinue()
+
+        XCTAssertNil(client.inProgressOperation())
+        let content = try String(contentsOf: repoURL.appendingPathComponent("a.txt"), encoding: .utf8)
+        XCTAssertEqual(content, "from conflicter\n")
+        XCTAssertFalse(try client.status().isDirty)
+    }
+
+    func testRebaseAbortRestoresState() throws {
+        try makeConflictingBranch("conflicter")
+        XCTAssertThrowsError(try run(["rebase", "conflicter"]))
+        XCTAssertEqual(client.inProgressOperation(), .rebase)
+
+        try client.rebaseAbort()
+
+        XCTAssertNil(client.inProgressOperation())
+        let content = try String(contentsOf: repoURL.appendingPathComponent("a.txt"), encoding: .utf8)
+        XCTAssertEqual(content, "from main\n")
+        XCTAssertFalse(try client.status().isDirty)
+    }
+
+    func testCherryPickConflictDetectionAndAbort() throws {
+        try makeConflictingBranch("picker")
+        let hash = try GitShell.shared.runChecked(["rev-parse", "picker"], in: repoURL).stdout
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        XCTAssertThrowsError(try client.cherryPick(hash))
+        XCTAssertEqual(client.inProgressOperation(), .cherryPick)
+        XCTAssertEqual(try client.conflictedPaths(), ["a.txt"])
+
+        try client.cherryPickAbort()
+
+        XCTAssertNil(client.inProgressOperation())
+        let content = try String(contentsOf: repoURL.appendingPathComponent("a.txt"), encoding: .utf8)
+        XCTAssertEqual(content, "from main\n")
+        XCTAssertFalse(try client.status().isDirty)
     }
 
     func testValidationHelpers() throws {

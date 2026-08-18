@@ -15,13 +15,23 @@ struct ContentView: View {
                 .navigationSplitViewColumnWidth(min: 200, ideal: 250, max: 340)
         } detail: {
             if let repo = appState.selectedRepository {
+                // Distinct identity per repo: view-local state (history
+                // filter, selections, sheet drafts) must not leak across a
+                // repository switch.
                 RepoDetailView(repo: repo, viewModel: appState.viewModel(for: repo))
+                    .id(repo.path)
             } else {
                 WelcomeView()
             }
         }
         .sheet(isPresented: $appState.showingAddRepository) {
             AddRepositoryView()
+        }
+        .alert("Couldn't add repository",
+               isPresented: dropErrorPresented) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(appState.dropAddError ?? "")
         }
         .onAppear {
             appState.refreshSummaries()
@@ -36,6 +46,15 @@ struct ContentView: View {
         } message: {
             Text("GitEnough drives the git command-line tool, which ships with the Xcode Command Line Tools. Install them, then relaunch GitEnough.")
         }
+    }
+
+    private var dropErrorPresented: Binding<Bool> {
+        Binding(
+            get: { appState.dropAddError != nil },
+            set: { isPresented in
+                if !isPresented { appState.dropAddError = nil }
+            }
+        )
     }
 
     private var gitUnavailable: Binding<Bool> {

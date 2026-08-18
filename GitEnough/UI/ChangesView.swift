@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 /// The Changes tab: conflict resolution (while merging), staged/unstaged file
 /// lists, the commit box with AI message generation, and the diff of the selected
@@ -11,9 +12,35 @@ struct ChangesView: View {
     @State private var selectionIsStaged = false
     @State private var fileToDiscard: FileChange?
     @State private var showingStashSheet = false
+    @State private var showingAmendPushedConfirmation = false
 
     private var conflicts: [FileChange] { viewModel.status.conflicted }
-    private var mergeInProgress: Bool { viewModel.mergeState.isMerging }
+    /// Conflicted files must be visible whenever *any* sequencer operation is in
+    /// progress — merges, but also rebases, cherry-picks, and reverts, whose
+    /// unmerged entries otherwise vanish from the UI entirely.
+    private var conflictUIActive: Bool {
+        viewModel.mergeState.isInProgress || viewModel.mergeState.isResolvingConflicts
+    }
+
+    /// The subject-line soft limit: git's traditional wrap point and
+    /// GitHub's truncation point.
+    private static let subjectLimit = 72
+
+    /// Length of the message's first line — the git subject. Splitting on the
+    /// full newline character set keeps pasted CRLF text from inflating the
+    /// count. Counting grapheme clusters (not bytes) matches how the limit
+    /// reads to a human typing non-ASCII text.
+    private var subjectLength: Int {
+        viewModel.draftCommitMessage.components(separatedBy: .newlines).first?.count ?? 0
+    }
+
+    /// Amending a commit that the upstream already contains rewrites public
+    /// history (upstream set, nothing ahead → HEAD is reachable from upstream).
+    /// The predicate lives on the view model so the warning and the
+    /// confirmation gate share one testable source.
+    private var amendRewritesPushedCommit: Bool {
+        viewModel.amendWouldRewritePushedCommit
+    }
 
     var body: some View {
         HSplitView {
@@ -30,11 +57,30 @@ struct ChangesView: View {
             viewModel.selectFile(file, staged: selectionIsStaged)
         }
         .onChange(of: viewModel.status) { _, status in
-            // Drop the selection if the file vanished from the lists (committed,
-            // discarded, resolved).
-            if let file = selectedFile,
-               !status.staged.contains(file) && !status.unstaged.contains(file) {
+            // Keep the selection pointed at the file as it moves between the
+            // staged and unstaged lists (FileChange equality includes the status
+            // columns, so comparing whole values would drop the selection on
+            // every stage/unstage); clear it only when the file is gone from
+            // both lists (committed, discarded, resolved).
+            guard let selected = selectedFile else { return }
+            let stagedMatch = status.staged.first { $0.path == selected.path }
+            let unstagedMatch = status.unstaged.first { $0.path == selected.path }
+            switch (stagedMatch, unstagedMatch) {
+            case (nil, nil):
                 selectedFile = nil
+            case (nil, let unstaged?):
+                // Unstaged it: follow the file into the Changes list.
+                selectionIsStaged = false
+                selectedFile = unstaged
+            case (let staged?, nil):
+                // Staged it: follow the file into the Staged list.
+                selectionIsStaged = true
+                selectedFile = staged
+            case (let staged?, let unstaged?):
+                // In both lists (partially staged file): keep the current side,
+                // refreshing the cached value so status-column changes don't
+                // leave it stale (assigning an equal value is a no-op).
+                selectedFile = selectionIsStaged ? staged : unstaged
             }
         }
         .confirmationDialog("Discard changes?",
@@ -56,6 +102,16 @@ struct ChangesView: View {
         .sheet(isPresented: $showingStashSheet) {
             stashSheet
         }
+        .confirmationDialog("Amend a pushed commit?",
+                            isPresented: $showingAmendPushedConfirmation,
+                            titleVisibility: .visible) {
+            Button("Amend Anyway", role: .destructive) {
+                viewModel.commit()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The last commit is already on the upstream branch. Amending rewrites public history and requires a force push.")
+        }
     }
 
     private var discardConfirmationPresented: Binding<Bool> {
@@ -66,7 +122,7 @@ struct ChangesView: View {
 
     private var fileList: some View {
         List {
-            if mergeInProgress {
+            if conflictUIActive {
                 Section {
                     ForEach(conflicts) { file in
                         ConflictRow(path: file.path, viewModel: viewModel)
@@ -80,13 +136,16 @@ struct ChangesView: View {
             Section {
                 ForEach(viewModel.status.staged) { file in
                     FileRow(file: file,
-                            isSelected: selectedFile == file && selectionIsStaged,
+                            repoURL: viewModel.repo.url,
+                            isSelected: selectedFile?.path == file.path && selectionIsStaged,
                             actionIcon: "minus.circle",
                             actionHelp: "Unstage") {
                         selectedFile = file
                         selectionIsStaged = true
                     } onAction: {
                         viewModel.unstage([file])
+                    } onIgnore: {
+                        // Staged files are tracked; ignore only applies to untracked.
                     } onDiscard: {
                         fileToDiscard = file
                     }
@@ -106,13 +165,16 @@ struct ChangesView: View {
             Section {
                 ForEach(viewModel.status.unstaged) { file in
                     FileRow(file: file,
-                            isSelected: selectedFile == file && !selectionIsStaged,
+                            repoURL: viewModel.repo.url,
+                            isSelected: selectedFile?.path == file.path && !selectionIsStaged,
                             actionIcon: "plus.circle",
                             actionHelp: "Stage") {
                         selectedFile = file
                         selectionIsStaged = false
                     } onAction: {
                         viewModel.stage([file])
+                    } onIgnore: {
+                        viewModel.ignore(file)
                     } onDiscard: {
                         fileToDiscard = file
                     }
@@ -165,6 +227,13 @@ struct ChangesView: View {
                     .lineLimit(3)
             }
 
+            if amendRewritesPushedCommit {
+                Label("The last commit is already pushed — amending rewrites public history.",
+                      systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+
             HStack(spacing: 8) {
                 Button {
                     viewModel.generateCommitMessage()
@@ -179,6 +248,15 @@ struct ChangesView: View {
                 .disabled(viewModel.isGeneratingMessage || viewModel.status.staged.isEmpty)
                 .help("Write the commit message with the configured LLM (Settings → AI)")
 
+                if !viewModel.draftCommitMessage.isEmpty {
+                    Text("\(subjectLength)/\(Self.subjectLimit)")
+                        .font(.caption)
+                        .monospacedDigit()
+                        .foregroundStyle(subjectLength > Self.subjectLimit ? .orange : .secondary)
+                        .help("Subject line length — keep it at or under \(Self.subjectLimit) characters")
+                        .accessibilityLabel("Subject line length \(subjectLength) of \(Self.subjectLimit)")
+                }
+
                 Spacer()
 
                 Toggle("Amend", isOn: $viewModel.amendLastCommit)
@@ -186,7 +264,14 @@ struct ChangesView: View {
                     .help("Amend the last commit instead of creating a new one")
 
                 Button("Commit") {
-                    viewModel.commit()
+                    // The inline warning can be scrolled past — gate the
+                    // action itself when the amend would rewrite a pushed
+                    // commit.
+                    if amendRewritesPushedCommit {
+                        showingAmendPushedConfirmation = true
+                    } else {
+                        viewModel.commit()
+                    }
                 }
                 .keyboardShortcut(.return, modifiers: .command)
                 .buttonStyle(.borderedProminent)
@@ -235,11 +320,13 @@ struct ChangesView: View {
 private struct FileRow: View {
 
     let file: FileChange
+    let repoURL: URL
     let isSelected: Bool
     let actionIcon: String
     let actionHelp: String
     let onSelect: () -> Void
     let onAction: () -> Void
+    let onIgnore: () -> Void
     let onDiscard: () -> Void
 
     var body: some View {
@@ -265,6 +352,33 @@ private struct FileRow: View {
         .contextMenu {
             Button(action: onAction) {
                 Label(actionHelp, systemImage: actionIcon)
+            }
+            if file.isUntracked {
+                Button("Ignore in .gitignore", action: onIgnore)
+            }
+            Divider()
+            if FileManager.default.fileExists(
+                atPath: repoURL.appendingPathComponent(file.path).path) {
+                Button {
+                    NSWorkspace.shared.activateFileViewerSelecting(
+                        [repoURL.appendingPathComponent(file.path)])
+                } label: {
+                    Label("Show in Finder", systemImage: "folder")
+                }
+            }
+            Button {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(file.path, forType: .string)
+            } label: {
+                Label("Copy Path", systemImage: "doc.on.doc")
+            }
+            if FileManager.default.fileExists(
+                atPath: repoURL.appendingPathComponent(file.path).path) {
+                Button {
+                    NSWorkspace.shared.open(repoURL.appendingPathComponent(file.path))
+                } label: {
+                    Label("Open in External Editor", systemImage: "arrow.up.forward.app")
+                }
             }
             Divider()
             Button("Discard Changes…", role: .destructive, action: onDiscard)

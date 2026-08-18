@@ -96,16 +96,16 @@ struct AddRepositoryView: View {
         panel.prompt = "Add"
         if panel.runModal() == .OK, let url = panel.url {
             localPath = url.path
-            if appState.addRepository(at: url) {
-                dismiss()
+            appState.addRepository(at: url) { repo in
+                if repo != nil { dismiss() }
             }
         }
     }
 
     private func addLocal() {
         let url = URL(fileURLWithPath: (localPath as NSString).expandingTildeInPath)
-        if appState.addRepository(at: url) {
-            dismiss()
+        appState.addRepository(at: url) { repo in
+            if repo != nil { dismiss() }
         }
     }
 
@@ -141,8 +141,8 @@ struct AddRepositoryView: View {
                 try GitClient.clone(trimmedURL, into: target)
                 DispatchQueue.main.async {
                     isCloning = false
-                    if appState.addRepository(at: target) {
-                        dismiss()
+                    appState.addRepository(at: target) { repo in
+                        if repo != nil { dismiss() }
                     }
                 }
             } catch {

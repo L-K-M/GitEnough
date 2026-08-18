@@ -24,7 +24,14 @@ private struct GeneralSettingsView: View {
 
     @AppStorage("pullRebase") private var pullRebase = false
     @AppStorage(AppState.discoveryFolderKey) private var discoveryFolder = ""
+    @AppStorage(AppState.autoFetchMinutesKey) private var autoFetchMinutes = 0
     @EnvironmentObject var appState: AppState
+
+    /// `git --version` shells out synchronously — computing it in `body` spawned a
+    /// process on every Settings render. Fetched once per Settings appearance
+    /// instead, so it also picks up a CLT install without relaunching (matching
+    /// the git-missing alert's reprobe flow).
+    @State private var gitVersion: String?
 
     var body: some View {
         Form {
@@ -33,6 +40,14 @@ private struct GeneralSettingsView: View {
                 Text("Rebase the current branch").tag(true)
             }
             .pickerStyle(.radioGroup)
+
+            Picker("Automatically fetch the active repository:", selection: $autoFetchMinutes) {
+                Text("Never").tag(0)
+                Text("Every 5 minutes").tag(5)
+                Text("Every 15 minutes").tag(15)
+                Text("Every 30 minutes").tag(30)
+                Text("Every hour").tag(60)
+            }
 
             Section("Repository discovery") {
                 HStack {
@@ -55,8 +70,15 @@ private struct GeneralSettingsView: View {
             }
 
             LabeledContent("git") {
-                Text(GitClient.version() ?? "not found")
+                Text(gitVersion ?? "Checking…")
                     .foregroundStyle(.secondary)
+                    .task {
+                        // Off the main thread: even one synchronous process
+                        // spawn would beachball Settings briefly.
+                        gitVersion = await Task.detached {
+                            GitClient.version() ?? "not found"
+                        }.value
+                    }
             }
         }
         .formStyle(.grouped)
