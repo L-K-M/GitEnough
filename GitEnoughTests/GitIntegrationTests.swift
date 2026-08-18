@@ -517,4 +517,41 @@ final class GitIntegrationTests: XCTestCase {
         let nonRepo = FileManager.default.temporaryDirectory
         XCTAssertFalse(GitClient.isRepository(at: nonRepo))
     }
+
+    // MARK: - Activity log wrappers
+
+    func testActivityLogRecordsSuccessfulCommand() throws {
+        let log = GitActivityLog()
+        client.activityLog = log
+        _ = try client.status()
+        let entry = log.entries.last
+        XCTAssertEqual(entry?.command.hasPrefix("status"), true)
+        XCTAssertEqual(entry?.isRunning, false)
+        XCTAssertEqual(entry?.exitCode, 0)
+    }
+
+    func testActivityLogRecordsFailureWithGitStderr() throws {
+        let log = GitActivityLog()
+        client.activityLog = log
+        // No merge in progress → git exits non-zero with a real message.
+        XCTAssertThrowsError(try client.mergeAbort())
+        let entry = log.entries.last
+        XCTAssertEqual(entry?.isRunning, false)
+        XCTAssertNotEqual(entry?.exitCode, 0)
+        // The entry must carry git's actual stderr (hook output lives there),
+        // never a generic "operation couldn't be completed" description.
+        XCTAssertTrue(entry?.stderrTail?.localizedCaseInsensitiveContains("merge") ?? false)
+    }
+
+    func testActivityLogRecordsCommitWithoutLeakingMessage() throws {
+        let log = GitActivityLog()
+        client.activityLog = log
+        try write("log-test\n", to: "log.txt")
+        try client.stage(paths: ["log.txt"])
+        try client.commit(message: "s3cret message", amend: false)
+        let entry = try XCTUnwrap(log.entries.last(where: { $0.command.hasPrefix("commit") }))
+        XCTAssertEqual(entry.exitCode, 0)
+        // The message travels via stdin (commit -F -): logged nowhere.
+        XCTAssertFalse(log.entries.contains { $0.command.contains("s3cret") })
+    }
 }

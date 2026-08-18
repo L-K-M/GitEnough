@@ -12,6 +12,7 @@ struct RepoDetailView: View {
 
     @State private var newBranchName = ""
     @State private var checkoutNewBranch = true
+    @State private var showingActivityLog = false
 
     private var localBranches: [Branch] {
         viewModel.branches.filter { !$0.isRemote }
@@ -211,6 +212,22 @@ struct RepoDetailView: View {
                 Label(activity, systemImage: "arrow.clockwise")
                     .foregroundStyle(.secondary)
             }
+            // What is actually running right now — the difference between "slow
+            // fetch" and "pre-commit hook executing the test suite for 3 min".
+            // Rarely more than one (merge tool overlapping a queue op).
+            ForEach(viewModel.runningActivityEntries) { running in
+                HStack(spacing: 4) {
+                    Image(systemName: "terminal")
+                    Text("git \(running.command)")
+                        .font(.caption.monospaced())
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .frame(maxWidth: 260, alignment: .leading)
+                    Text(running.startedAt, style: .timer)
+                        .monospacedDigit()
+                }
+                .foregroundStyle(.secondary)
+            }
             if let remote = viewModel.remotes.first {
                 Label(remote.displayHost, systemImage: "network")
                     .lineLimit(1)
@@ -229,6 +246,18 @@ struct RepoDetailView: View {
             Text(viewModel.status.isDirty
                  ? "\(viewModel.status.changeCount) uncommitted change\(viewModel.status.changeCount == 1 ? "" : "s")"
                  : "Working tree clean")
+            if !viewModel.activityEntries.isEmpty {
+                Button {
+                    showingActivityLog.toggle()
+                } label: {
+                    Image(systemName: "terminal")
+                }
+                .buttonStyle(.borderless)
+                .help("Recent git activity")
+                .popover(isPresented: $showingActivityLog, arrowEdge: .bottom) {
+                    ActivityLogView(entries: viewModel.activityEntries)
+                }
+            }
         }
         .font(.caption)
         .foregroundStyle(.secondary)
