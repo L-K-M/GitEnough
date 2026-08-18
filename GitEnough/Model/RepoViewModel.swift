@@ -229,12 +229,25 @@ final class RepoViewModel: ObservableObject, Identifiable {
     /// "already has a pull request" banner once the browser is signed in.
     func openPullRequest() {
         guard !isResolvingPullRequest else { return }
+        if status.isUnborn {
+            errorMessage = "Can't open a pull request: this repository has no commits yet."
+            return
+        }
         guard let branch = status.head else {
             errorMessage = "Can't open a pull request: HEAD is detached — check out a branch first."
             return
         }
         guard let remote = preferredRemote() else {
             errorMessage = "Can't open a pull request: the repository has no remotes."
+            return
+        }
+        // A branch that isn't on the remote yet has no PR to find and no
+        // compare to run — the forge would only show a dead "nothing to
+        // compare" page. No upstream tracking and no matching remote branch
+        // is a reliable "never pushed" signal; the Publish button is nearby.
+        if status.upstream == nil,
+           !branches.contains(where: { $0.isRemote && $0.name == "\(remote.name)/\(branch)" }) {
+            errorMessage = "“\(branch)” isn't on \(remote.name) yet — publish the branch first, then open its pull request."
             return
         }
         guard let forge = ForgeRepo.parse(remoteURL: remote.url) else {
@@ -246,7 +259,8 @@ final class RepoViewModel: ObservableObject, Identifiable {
         // The remote's default branch (the PR base) comes from git, so it goes
         // through the serial queue like every other git read; the network
         // lookup runs off it — only URLSession, no process to block on.
-        let fallbackBase = branches.contains { !$0.isRemote && $0.name == "master" } ? "master" : "main"
+        let fallbackBase = branches.contains { $0.isRemote && $0.name == "\(remote.name)/master" }
+            ? "master" : "main"
         queue.async { [weak self] in
             let base = self?.client.remoteDefaultBranch(remote: remote.name) ?? fallbackBase
             Task { [weak self] in

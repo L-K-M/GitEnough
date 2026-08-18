@@ -80,30 +80,35 @@ struct ForgeRepo: Equatable {
 
         // ASCII hostnames only — no IDN/punycode translation happens here, and
         // anything else (brackets, colons, spaces) can't be a forge host.
+        // Lowercased: hosts are case-insensitive, and remotes copied from
+        // browsers or written by hand do carry mixed case — "GitHub.COM" must
+        // still be recognized as GitHub, both for the kind and for `origin`.
         guard !host.isEmpty,
               host.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == ".") })
         else { return nil }
+        let hostname = host.lowercased()
 
         var components = URLComponents()
         components.scheme = scheme
-        components.host = String(host)
+        components.host = hostname
         if let port, let value = Int(port), (1..<65_536).contains(value) {
             components.port = value
         }
         guard let origin = components.url else { return nil }
 
-        // owner/[nested/]repo path segments; the repo drops a ".git" suffix.
+        // owner/[nested/]repo path segments; the repo drops a ".git" suffix
+        // (case-insensitively — a remote may end in ".GIT").
         let segments = path.split(separator: "/", omittingEmptySubsequences: true)
             .map { Self.encodePath($0) }
         guard segments.count >= 2 else { return nil }
         var repo = segments[segments.count - 1]
-        if repo.hasSuffix(".git") { repo = String(repo.dropLast(4)) }
+        if repo.lowercased().hasSuffix(".git") { repo = String(repo.dropLast(4)) }
         guard !repo.isEmpty else { return nil }
         let owner = segments.dropLast().joined(separator: "/")
         guard !owner.isEmpty else { return nil }
 
-        let kind: Kind = host == "github.com" ? .github
-            : host == "gitlab.com" ? .gitlab
+        let kind: Kind = hostname == "github.com" ? .github
+            : hostname == "gitlab.com" ? .gitlab
             : .generic
         return ForgeRepo(kind: kind, origin: origin, owner: owner, repo: repo)
     }
@@ -157,6 +162,13 @@ struct ForgeRepo: Equatable {
     /// answered the Forgejo/Gitea API, so PR URLs take the /pulls/ shape.
     func assumingForgejo() -> ForgeRepo {
         ForgeRepo(kind: .forgejo, origin: origin, owner: owner, repo: repo)
+    }
+
+    /// A copy with the kind forced to GitLab — used once a self-hosted host has
+    /// answered the GitLab v4 API, so MR URLs take the /-/merge_requests shape
+    /// (and the create fallback uses /-/merge_requests/new).
+    func assumingGitLab() -> ForgeRepo {
+        ForgeRepo(kind: .gitlab, origin: origin, owner: owner, repo: repo)
     }
 
     // MARK: - URL assembly

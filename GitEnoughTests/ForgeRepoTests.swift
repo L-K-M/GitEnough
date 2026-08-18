@@ -53,6 +53,22 @@ final class ForgeRepoTests: XCTestCase {
         XCTAssertEqual(forge.repo, "web")
     }
 
+    func testParseUppercaseHost() throws {
+        // Hostnames are case-insensitive; remotes copied by hand carry mixed case.
+        let https = try XCTUnwrap(ForgeRepo.parse(remoteURL: "https://GitHub.COM/acme/web.git"))
+        XCTAssertEqual(https.kind, .github)
+        XCTAssertEqual(https.origin.absoluteString, "https://github.com")
+        XCTAssertEqual(https.repo, "web")
+        let scp = try XCTUnwrap(ForgeRepo.parse(remoteURL: "git@GitLab.com:group/sub/project.git"))
+        XCTAssertEqual(scp.kind, .gitlab)
+        XCTAssertEqual(scp.origin.absoluteString, "https://gitlab.com")
+    }
+
+    func testParseStripsUppercaseGitSuffix() throws {
+        let forge = try XCTUnwrap(ForgeRepo.parse(remoteURL: "https://github.com/acme/web.GIT"))
+        XCTAssertEqual(forge.repo, "web")
+    }
+
     func testParseRejectsNonForges() {
         for url in ["", "/local/path", "relative/path", "file:///srv/git/x.git",
                     "ftp://host/owner/repo.git", "https://github.com",
@@ -78,6 +94,19 @@ final class ForgeRepoTests: XCTestCase {
                       owner: "group/sub", repo: "project")
                 .pullRequestURL(number: 5).absoluteString,
             "https://gitlab.com/group/sub/project/-/merge_requests/5")
+        // A self-hosted GitLab discovered via its API takes MR shapes too.
+        XCTAssertEqual(
+            ForgeRepo(kind: .generic, origin: URL(string: "https://git.acme.dev")!,
+                      owner: "acme", repo: "widget")
+                .assumingGitLab().pullRequestURL(number: 5).absoluteString,
+            "https://git.acme.dev/acme/widget/-/merge_requests/5")
+        XCTAssertEqual(
+            ForgeRepo(kind: .generic, origin: URL(string: "https://git.acme.dev")!,
+                      owner: "acme", repo: "widget")
+                .assumingGitLab().newPullRequestURL(base: "main", head: "topic").absoluteString,
+            "https://git.acme.dev/acme/widget/-/merge_requests/new"
+            + "?merge_request%5Bsource_branch%5D=topic"
+            + "&merge_request%5Btarget_branch%5D=main")
         // Unknown hosts get GitHub-style paths as the best guess.
         XCTAssertEqual(
             ForgeRepo(kind: .generic, origin: URL(string: "https://host.example")!,

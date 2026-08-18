@@ -44,8 +44,9 @@ xcodebuild -project GitEnough.xcodeproj -scheme GitEnough -destination 'platform
 - `GitEnough/Forge/` — forge integration for the "Open Pull Request…" command:
   ForgeRepo (remote URL → website URL shapes, pure, tested) and
   PullRequestFinder (unauthenticated "which PR is open for this branch?" API
-  lookup — GitHub and Forgejo/Gitea only; everything else falls back to opening
-  the forge's compare page). No forge tokens, ever.
+  lookup — GitHub, GitLab v4, and Forgejo/Gitea; unknown hosts get Forgejo then
+  GitLab probes, everything else falls back to opening the forge's compare
+  page). No forge tokens, ever.
 - `GitEnough/Model/` — RepoStore (sidebar list, persistence, discovery
   exclusions), AppState (selection, view-model cache, watch-folder scans),
   RepoViewModel (per-repo state + ops; all git calls on one serial DispatchQueue
