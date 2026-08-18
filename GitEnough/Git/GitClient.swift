@@ -92,12 +92,22 @@ final class GitClient {
         // every ref under refs/ (plus HEAD), which leaks synthetic tool refs into
         // the graph as permanent-looking lanes: the stash's "WIP on…"/"index on …"
         // commits (older stashes live in refs/stash's reflog, which --all does not
-        // traverse), filter-branch backups, bisect state, prefetched commits, and
-        // notes trees. None of them are history the user wants to see.
+        // traverse), filter-branch backups, bisect state, prefetched commits, notes
+        // trees, replace mappings, and post-rewrite bookkeeping. None of them are
+        // history the user wants to see; --decorate-refs-exclude keeps the same
+        // refs out of the %D decoration chips when they point at visible commits.
         var args = ["-C", worktree.path, "log",
                     "--exclude=refs/stash", "--exclude=refs/original/*",
                     "--exclude=refs/bisect/*", "--exclude=refs/prefetch/*",
-                    "--exclude=refs/notes/*", "--all",
+                    "--exclude=refs/notes/*", "--exclude=refs/replace/*",
+                    "--exclude=refs/rewritten/*", "--all",
+                    "--decorate-refs-exclude=refs/stash",
+                    "--decorate-refs-exclude=refs/original/*",
+                    "--decorate-refs-exclude=refs/bisect/*",
+                    "--decorate-refs-exclude=refs/prefetch/*",
+                    "--decorate-refs-exclude=refs/notes/*",
+                    "--decorate-refs-exclude=refs/replace/*",
+                    "--decorate-refs-exclude=refs/rewritten/*",
                     "--topo-order", "--date-order",
                     "--pretty=tformat:\(format)",
                     "--max-count=\(limit)"]

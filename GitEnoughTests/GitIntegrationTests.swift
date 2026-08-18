@@ -198,6 +198,10 @@ final class GitIntegrationTests: XCTestCase {
         try run(["branch", "-D", "scratch"])
         try run(["update-ref", "refs/original/refs/heads/scratch", scratchHash])
         try run(["update-ref", "refs/bisect/bad", scratchHash])
+        defer {
+            try? run(["update-ref", "-d", "refs/original/refs/heads/scratch"])
+            try? run(["update-ref", "-d", "refs/bisect/bad"])
+        }
 
         let commits = try client.log(limit: 50)
         XCTAssertEqual(commits.count, 4)
