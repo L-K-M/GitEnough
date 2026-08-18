@@ -25,6 +25,7 @@ struct ContentView: View {
         }
         .onAppear {
             appState.refreshSummaries()
+            appState.scanDiscoveryFolder()
         }
         .alert("git is not installed", isPresented: gitUnavailable) {
             Button("Install Command Line Tools") {

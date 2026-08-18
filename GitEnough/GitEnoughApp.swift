@@ -24,6 +24,8 @@ struct GitEnoughApp: App {
 
         Settings {
             SettingsView()
+                .environmentObject(appState)
+                .environmentObject(appState.store)
         }
     }
 }

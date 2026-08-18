@@ -27,7 +27,9 @@ struct RepoSummary: Equatable {
     static let unknown = RepoSummary(branch: nil, isDirty: false, ahead: 0, behind: 0, isValid: true)
 }
 
-/// The sidebar's list of repositories: add, remove, reorder, persist.
+/// The sidebar's list of repositories: add, remove, reorder, persist, plus the
+/// "removal sticks" bookkeeping for watch-folder discovery (paths the user
+/// removed are never auto-re-added).
 final class RepoStore: ObservableObject {
 
     @Published private(set) var repositories: [Repository] = []
@@ -36,9 +38,14 @@ final class RepoStore: ObservableObject {
     @Published var summaries: [String: RepoSummary] = [:]
 
     private let defaultsKey = "repositories.v1"
+    private let excludedKey = "excludedRepositories.v1"
+
+    /// Paths the user removed — excluded from discovery until manually re-added.
+    private var excludedPaths: Set<String> = []
 
     init() {
         load()
+        excludedPaths = Set(UserDefaults.standard.stringArray(forKey: excludedKey) ?? [])
     }
 
     private func load() {
@@ -55,8 +62,13 @@ final class RepoStore: ObservableObject {
         }
     }
 
+    private func persistExclusions() {
+        UserDefaults.standard.set(Array(excludedPaths), forKey: excludedKey)
+    }
+
     /// Adds the repo containing `url` (any depth inside a worktree resolves to the
     /// worktree root). Returns the repo, or nil when the folder isn't a git repo.
+    /// A manual add also cancels a previous removal (discovery may re-offer it).
     @discardableResult
     func add(url: URL) -> Repository? {
         guard GitClient.isRepository(at: url),
@@ -66,12 +78,34 @@ final class RepoStore: ObservableObject {
             repositories.append(repo)
             persist()
         }
+        if excludedPaths.remove(topLevel.path) != nil {
+            persistExclusions()
+        }
         return repositories.first { $0 == repo }
+    }
+
+    /// Adds already-validated repository URLs found by folder discovery. Skips
+    /// paths the user removed earlier (removal sticks) and existing entries.
+    /// Returns how many repos were actually added.
+    @discardableResult
+    func addDiscovered(_ urls: [URL]) -> Int {
+        var added = 0
+        for url in urls {
+            let path = url.path
+            guard !excludedPaths.contains(path),
+                  !repositories.contains(where: { $0.path == path }) else { continue }
+            repositories.append(Repository(path: path, name: url.lastPathComponent))
+            added += 1
+        }
+        if added > 0 { persist() }
+        return added
     }
 
     func remove(_ repo: Repository) {
         repositories.removeAll { $0 == repo }
         summaries.removeValue(forKey: repo.path)
+        excludedPaths.insert(repo.path)
+        persistExclusions()
         persist()
     }
 

@@ -2,7 +2,7 @@
 
 **Latest release:** v<!-- version -->0.1.0<!-- /version --> · [Download](https://github.com/L-K-M/GitEnough/releases/latest)
 
-A native macOS git client that is *just enough*: the everyday 95 % of GitHub
+A native macOS git client that is *just good enough*: the everyday 95 % of GitHub
 Desktop — clone, stage, commit, pull, push, branch, merge — with the two things
 Desktop never gave you: a proper **IntelliJ-style branch/merge graph** and
 **AI-written commit messages** from your staged diff.
@@ -16,6 +16,10 @@ Desktop never gave you: a proper **IntelliJ-style branch/merge graph** and
 - **Two-pane window.** Repositories on the left (with live branch / dirty /
   ahead-behind summaries), the selected repository on the right. Drag any folder
   into the sidebar to add it; clone straight from the welcome sheet.
+- **Watch folder.** Point Settings → General at a folder (say `~/code`) and
+  GitEnough scans it about once a minute, automatically adding every repository
+  it finds — directly inside, or one folder deep. Removing a repo from the
+  sidebar keeps it out for good.
 - **History graph.** A color-coded lane graph of `git log --all` — branch
   fan-outs, merge-ins, octopus merges, tag/branch/HEAD chips on the commits —
   with a detail pane (files changed, per-file diff) next to it. Context menus:

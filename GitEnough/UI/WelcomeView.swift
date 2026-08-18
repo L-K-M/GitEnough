@@ -14,7 +14,7 @@ struct WelcomeView: View {
             Text("GitEnough")
                 .font(.largeTitle)
                 .fontWeight(.bold)
-            Text("A git client that is just enough.\nAdd a repository to get started.")
+            Text("A git client that is just good enough.\nAdd a repository to get started.")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
             HStack(spacing: 12) {
@@ -26,7 +26,7 @@ struct WelcomeView: View {
                 .controlSize(.large)
                 .keyboardShortcut(.defaultAction)
             }
-            Text("You can also drop any folder into the sidebar.")
+            Text("You can also drop any folder into the sidebar, or set a watch folder in Settings → General.")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
         }
