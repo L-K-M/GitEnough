@@ -153,8 +153,11 @@ final class RepoStoreTests: XCTestCase {
         store.remove(store.repositories[0])
 
         // …but an explicit add re-includes the path for future discovery.
-        XCTAssertNotNil(store.add(url: repoURL))
+        // (Validation is AppState's job now — GitClient.isRepository/topLevel —
+        // RepoStore registers the validated root via register(_:).)
+        let registered = store.register(Repository(url: repoURL))
         XCTAssertEqual(store.repositories.count, 1)
+        XCTAssertEqual(store.repositories[0], registered)
         XCTAssertEqual(store.addDiscovered([repoURL]), 0)
         XCTAssertEqual(store.repositories.count, 1)
     }
