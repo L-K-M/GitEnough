@@ -56,6 +56,15 @@ final class GitShellEnvironmentTests: XCTestCase {
         XCTAssertTrue(path.hasSuffix(":" + home + "/.nvm/versions/node/v22.11.0/bin"))
     }
 
+    func testNvmAliasPointingAtUninstalledVersionFallsBackToLatest() {
+        // default=20 with only v18/v22 installed must not strand the user with
+        // no node at all — fall back to the highest installed version.
+        let path = augmented(existingDirs: [home + "/.nvm/versions/node/v22.11.0/bin"],
+                             nvmVersions: ["v18.20.4", "v22.11.0"],
+                             files: [home + "/.nvm/alias/default": "20"])
+        XCTAssertTrue(path.hasSuffix(":" + home + "/.nvm/versions/node/v22.11.0/bin"))
+    }
+
     func testStrayEntriesInNvmVersionsDirectoryAreIgnored() {
         let path = augmented(existingDirs: [home + "/.nvm/versions/node/v20.1.0/bin"],
                              nvmVersions: [".cache", "v20.1.0"])

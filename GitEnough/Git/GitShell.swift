@@ -49,8 +49,10 @@ final class GitShell {
     }
 
     /// Environment handed to every git child process. Built once — the PATH
-    /// lookup hits the filesystem and the answer can't change during the app's
-    /// lifetime. `static let` gives us thread-safe lazy initialization.
+    /// lookup hits the filesystem and re-running it for every git call would
+    /// waste I/O. Tradeoff: tools installed after the first git command in a
+    /// session stay invisible to hooks until the app relaunches. `static let`
+    /// gives us thread-safe lazy initialization.
     private static let childEnvironment: [String: String] = {
         var env = ProcessInfo.processInfo.environment
         // Apps launched from Finder inherit launchd's bare PATH
