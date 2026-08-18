@@ -372,6 +372,23 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertNil(client.remoteDefaultBranch(remote: "upstream"))
     }
 
+    func testPublishSetsUpstreamOnCustomRemote() throws {
+        // A local bare repo as the remote, under a non-default name: "origin"-
+        // hardcoded publishing would fail here with "origin does not appear to
+        // be a git repository".
+        let remoteURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitEnoughTests-remote-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: remoteURL) }
+        try run(["init", "--bare", remoteURL.path])
+        try run(["remote", "add", "work", remoteURL.path])
+
+        try client.push(setUpstream: true, remote: "work")
+
+        let main = try XCTUnwrap(client.branches().first { $0.name == "main" },
+                                 "expected default branch 'main'")
+        XCTAssertEqual(main.upstream, "work/main")
+    }
+
     func testValidationHelpers() throws {
         XCTAssertTrue(GitClient.isRepository(at: repoURL))
         // git reports the physical path; temporaryDirectory may sit behind the
