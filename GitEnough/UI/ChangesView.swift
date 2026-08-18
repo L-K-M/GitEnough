@@ -16,7 +16,7 @@ struct ChangesView: View {
     /// Conflict resolution shows for merges *and* rebases — unmerged paths only
     /// ever appear in `status.conflicted`, so gating on merges alone would hide
     /// them entirely during a rebase.
-    private var mergeInProgress: Bool {
+    private var conflictResolutionInProgress: Bool {
         viewModel.mergeState.isMerging || viewModel.mergeState.rebaseInProgress
     }
 
@@ -71,7 +71,7 @@ struct ChangesView: View {
 
     private var fileList: some View {
         List {
-            if mergeInProgress {
+            if conflictResolutionInProgress {
                 Section {
                     ForEach(conflicts) { file in
                         ConflictRow(path: file.path, viewModel: viewModel)

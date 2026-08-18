@@ -200,7 +200,7 @@ struct RepoDetailView: View {
                     .fontWeight(.semibold)
                 let conflicts = viewModel.mergeState.conflictedFiles.count
                 Text(conflicts == 0
-                     ? "Conflicts resolved — continue the rebase."
+                     ? "No conflicts right now — continue when ready."
                      : "\(conflicts) conflicted file\(conflicts == 1 ? "" : "s") to resolve, then continue.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
