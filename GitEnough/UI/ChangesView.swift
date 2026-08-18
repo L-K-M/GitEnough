@@ -11,9 +11,30 @@ struct ChangesView: View {
     @State private var selectionIsStaged = false
     @State private var fileToDiscard: FileChange?
     @State private var showingStashSheet = false
+    @State private var showingAmendPushedConfirmation = false
 
     private var conflicts: [FileChange] { viewModel.status.conflicted }
     private var mergeInProgress: Bool { viewModel.mergeState.isMerging }
+
+    /// The subject-line soft limit: git's traditional wrap point and
+    /// GitHub's truncation point.
+    private static let subjectLimit = 72
+
+    /// Length of the message's first line — the git subject. Splitting on the
+    /// full newline character set keeps pasted CRLF text from inflating the
+    /// count. Counting grapheme clusters (not bytes) matches how the limit
+    /// reads to a human typing non-ASCII text.
+    private var subjectLength: Int {
+        viewModel.draftCommitMessage.components(separatedBy: .newlines).first?.count ?? 0
+    }
+
+    /// Amending a commit that the upstream already contains rewrites public
+    /// history (upstream set, nothing ahead → HEAD is reachable from upstream).
+    /// The predicate lives on the view model so the warning and the
+    /// confirmation gate share one testable source.
+    private var amendRewritesPushedCommit: Bool {
+        viewModel.amendWouldRewritePushedCommit
+    }
 
     var body: some View {
         HSplitView {
@@ -55,6 +76,16 @@ struct ChangesView: View {
         }
         .sheet(isPresented: $showingStashSheet) {
             stashSheet
+        }
+        .confirmationDialog("Amend a pushed commit?",
+                            isPresented: $showingAmendPushedConfirmation,
+                            titleVisibility: .visible) {
+            Button("Amend Anyway", role: .destructive) {
+                viewModel.commit()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The last commit is already on the upstream branch. Amending rewrites public history and requires a force push.")
         }
     }
 
@@ -165,6 +196,13 @@ struct ChangesView: View {
                     .lineLimit(3)
             }
 
+            if amendRewritesPushedCommit {
+                Label("The last commit is already pushed — amending rewrites public history.",
+                      systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+
             HStack(spacing: 8) {
                 Button {
                     viewModel.generateCommitMessage()
@@ -179,6 +217,15 @@ struct ChangesView: View {
                 .disabled(viewModel.isGeneratingMessage || viewModel.status.staged.isEmpty)
                 .help("Write the commit message with the configured LLM (Settings → AI)")
 
+                if !viewModel.draftCommitMessage.isEmpty {
+                    Text("\(subjectLength)/\(Self.subjectLimit)")
+                        .font(.caption)
+                        .monospacedDigit()
+                        .foregroundStyle(subjectLength > Self.subjectLimit ? .orange : .secondary)
+                        .help("Subject line length — keep it at or under \(Self.subjectLimit) characters")
+                        .accessibilityLabel("Subject line length \(subjectLength) of \(Self.subjectLimit)")
+                }
+
                 Spacer()
 
                 Toggle("Amend", isOn: $viewModel.amendLastCommit)
@@ -186,7 +233,14 @@ struct ChangesView: View {
                     .help("Amend the last commit instead of creating a new one")
 
                 Button("Commit") {
-                    viewModel.commit()
+                    // The inline warning can be scrolled past — gate the
+                    // action itself when the amend would rewrite a pushed
+                    // commit.
+                    if amendRewritesPushedCommit {
+                        showingAmendPushedConfirmation = true
+                    } else {
+                        viewModel.commit()
+                    }
                 }
                 .keyboardShortcut(.return, modifiers: .command)
                 .buttonStyle(.borderedProminent)
