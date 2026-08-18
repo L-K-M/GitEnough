@@ -116,6 +116,119 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertFalse(status.isDirty)
     }
 
+    func testDiscardRemovesStagedChanges() throws {
+        try write("one\ndiscarded\n", to: "a.txt")
+        try client.stage(paths: ["a.txt"])
+        var status = try client.status()
+        XCTAssertEqual(status.staged.map(\.path), ["a.txt"])
+        XCTAssertTrue(status.unstaged.isEmpty)
+
+        // Discarding from the Staged section must drop the staged content too —
+        // a bare `checkout --` would only restore the worktree from the index.
+        try client.discard(paths: ["a.txt"])
+        status = try client.status()
+        XCTAssertFalse(status.isDirty)
+        let content = try String(contentsOf: repoURL.appendingPathComponent("a.txt"), encoding: .utf8)
+        XCTAssertEqual(content, "one\n")
+    }
+
+    func testDiscardStagedNewFileKeepsItAsUntracked() throws {
+        // A staged *new* file has no HEAD state to restore. Discarding it must
+        // not destroy the content — it becomes untracked again (Trash is one
+        // deliberate step away from there).
+        try write("brand new\n", to: "staged-new.txt")
+        try client.stage(paths: ["staged-new.txt"])
+        try client.discard(paths: ["staged-new.txt"])
+        let status = try client.status()
+        XCTAssertTrue(status.staged.isEmpty)
+        XCTAssertEqual(status.unstaged.map(\.path), ["staged-new.txt"])
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: repoURL.appendingPathComponent("staged-new.txt").path))
+    }
+
+    func testDiscardStagedDeletionRestoresTheFile() throws {
+        try run(["rm", "-q", "a.txt"])
+        var status = try client.status()
+        XCTAssertEqual(status.staged.map(\.path), ["a.txt"])
+
+        try client.discard(paths: ["a.txt"])
+        status = try client.status()
+        XCTAssertFalse(status.isDirty)
+        let content = try String(contentsOf: repoURL.appendingPathComponent("a.txt"), encoding: .utf8)
+        XCTAssertEqual(content, "one\n")
+    }
+
+    func testDiscardOnUnbornHEADKeepsEditedStagedFile() throws {
+        // A brand-new repo without commits: discard can only unstage, and must
+        // cope with a file that was edited *after* staging (rm --cached needs
+        // -f for that) — while never touching the worktree file.
+        let unbornURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitEnoughTests-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: unbornURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: unbornURL) }
+        _ = try GitShell.shared.runChecked(["init", "-b", "main"], in: unbornURL)
+        let unborn = GitClient(worktree: unbornURL)
+
+        let file = unbornURL.appendingPathComponent("new.txt")
+        try "first\n".write(to: file, atomically: true, encoding: .utf8)
+        try unborn.stage(paths: ["new.txt"])
+        try "edited after staging\n".write(to: file, atomically: true, encoding: .utf8)
+
+        try unborn.discard(paths: ["new.txt"])
+        let status = try unborn.status()
+        XCTAssertTrue(status.staged.isEmpty)
+        XCTAssertEqual(status.unstaged.map(\.path), ["new.txt"])
+        let content = try String(contentsOf: file, encoding: .utf8)
+        XCTAssertEqual(content, "edited after staging\n")
+    }
+
+    func testDiscardRemovesBothStagedAndUnstagedEdits() throws {
+        try write("one\nstaged\n", to: "a.txt")
+        try client.stage(paths: ["a.txt"])
+        try write("one\nstaged\nunstaged\n", to: "a.txt")
+
+        try client.discard(paths: ["a.txt"])
+        let status = try client.status()
+        XCTAssertFalse(status.isDirty)
+        let content = try String(contentsOf: repoURL.appendingPathComponent("a.txt"), encoding: .utf8)
+        XCTAssertEqual(content, "one\n")
+    }
+
+    func testDiscardMixedBatchOfStagedNewAndTrackedModified() throws {
+        // One call, two kinds of paths: the tracked file is restored to HEAD,
+        // the staged-new file survives as untracked (the ls-files split).
+        try write("one\nchanged\n", to: "a.txt")
+        try client.stage(paths: ["a.txt"])
+        try write("new\n", to: "b-new.txt")
+        try client.stage(paths: ["b-new.txt"])
+
+        try client.discard(paths: ["a.txt", "b-new.txt"])
+        let status = try client.status()
+        XCTAssertTrue(status.staged.isEmpty)
+        XCTAssertEqual(status.unstaged.map(\.path), ["b-new.txt"])
+        let restored = try String(contentsOf: repoURL.appendingPathComponent("a.txt"), encoding: .utf8)
+        XCTAssertEqual(restored, "one\n")
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: repoURL.appendingPathComponent("b-new.txt").path))
+    }
+
+    func testDiscardTreatsGlobCharactersInFilenamesLiterally() throws {
+        try write("star\n", to: "a*.txt")
+        try write("plain\n", to: "abc.txt")
+        try client.stage(paths: ["a*.txt", "abc.txt"])
+        try client.commit(message: "Add oddly named files")
+
+        try write("star changed\n", to: "a*.txt")
+        try write("plain changed\n", to: "abc.txt")
+        try client.discard(paths: ["a*.txt"])
+
+        // Only the literal file is reverted; the glob sibling keeps its edit.
+        let reverted = try String(contentsOf: repoURL.appendingPathComponent("a*.txt"), encoding: .utf8)
+        XCTAssertEqual(reverted, "star\n")
+        let untouched = try String(contentsOf: repoURL.appendingPathComponent("abc.txt"), encoding: .utf8)
+        XCTAssertEqual(untouched, "plain changed\n")
+    }
+
     func testDiffRoundTrip() throws {
         try write("one\nchanged\n", to: "a.txt")
         let diff = try client.diff(path: "a.txt", staged: false)

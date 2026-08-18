@@ -203,11 +203,46 @@ final class GitClient {
         }
     }
 
-    /// Reverts worktree changes for tracked paths. Untracked paths must be handled
-    /// by the caller (they need a file move to the Trash, not a git command).
+    /// Reverts tracked paths to their HEAD state — both the index and the
+    /// worktree. Untracked paths must be handled by the caller (they need a file
+    /// move to the Trash, not a git command).
+    ///
+    /// A plain `git checkout -- <path>` only restores the worktree from the
+    /// index, so for a file whose changes are *staged* it silently discards
+    /// nothing. Instead: unstage first (`reset`), then restore the worktree
+    /// for the paths that are still tracked afterwards. A staged *new* file
+    /// has no HEAD state to restore; it ends up untracked with its content
+    /// kept, rather than being destroyed.
+    ///
+    /// On an unborn HEAD there is nothing to restore against at all, so
+    /// discarding just unstages (the files stay on disk as untracked).
     func discard(paths: [String]) throws {
         guard !paths.isEmpty else { return }
-        try shell.runChecked(["-C", worktree.path, "checkout", "--"] + paths, in: nil)
+        // Git pathspecs glob by default: a file literally named "a*.txt" would
+        // make these commands also match unrelated tracked files (abc.txt…).
+        // Force literal matching everywhere a real path is passed.
+        let literalSpecs = paths.map { ":(literal)" + $0 }
+        // Check for an unborn HEAD explicitly instead of inferring it from a
+        // `reset` failure: a blanket catch would turn a genuine reset error
+        // (corrupt ref, unwritable index) into an unintended `rm --cached`,
+        // which shows up as staged *deletions* of files the user only meant
+        // to revert.
+        let headExists = (try? shell.runChecked(
+            ["-C", worktree.path, "rev-parse", "--verify", "--quiet", "HEAD"], in: nil)) != nil
+        guard headExists else {
+            // Unborn HEAD: there is nothing to restore against, so discarding
+            // can only unstage. --cached never touches worktree files; -f just
+            // bypasses the safety check that refuses staged-new files that
+            // were edited after staging.
+            try shell.runChecked(["-C", worktree.path, "rm", "--cached", "-r", "-f", "--ignore-unmatch", "--"] + literalSpecs, in: nil)
+            return
+        }
+        try shell.runChecked(["-C", worktree.path, "reset", "-q", "HEAD", "--"] + literalSpecs, in: nil)
+        let tracked = try shell.runChecked(["-C", worktree.path, "ls-files", "-z", "--"] + literalSpecs, in: nil).stdout
+        let stillTracked = tracked.components(separatedBy: "\0").filter { !$0.isEmpty }
+        if !stillTracked.isEmpty {
+            try shell.runChecked(["-C", worktree.path, "checkout", "--"] + stillTracked.map { ":(literal)" + $0 }, in: nil)
+        }
     }
 
     func commit(message: String, amend: Bool = false) throws {
