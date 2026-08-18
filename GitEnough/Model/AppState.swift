@@ -75,6 +75,7 @@ final class AppState: ObservableObject {
 
     func select(_ repo: Repository) {
         selectedRepoPath = repo.path
+        store.markOpened(repo)
         // Warm the view model immediately so the detail pane has data.
         _ = viewModel(for: repo)
     }

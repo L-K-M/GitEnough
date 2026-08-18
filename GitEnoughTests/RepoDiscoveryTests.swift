@@ -94,15 +94,18 @@ final class RepoStoreTests: XCTestCase {
 
     private let repositoryKey = "repositories.v1"
     private let excludedKey = "excludedRepositories.v1"
+    private let lastOpenedKey = "repoLastOpened.v1"
 
     override func setUpWithError() throws {
         UserDefaults.standard.removeObject(forKey: repositoryKey)
         UserDefaults.standard.removeObject(forKey: excludedKey)
+        UserDefaults.standard.removeObject(forKey: lastOpenedKey)
     }
 
     override func tearDownWithError() throws {
         UserDefaults.standard.removeObject(forKey: repositoryKey)
         UserDefaults.standard.removeObject(forKey: excludedKey)
+        UserDefaults.standard.removeObject(forKey: lastOpenedKey)
     }
 
     func testDiscoveryAddsEachRepositoryOnlyOnce() {
@@ -154,5 +157,15 @@ final class RepoStoreTests: XCTestCase {
         XCTAssertEqual(store.repositories.count, 1)
         XCTAssertEqual(store.addDiscovered([repoURL]), 0)
         XCTAssertEqual(store.repositories.count, 1)
+    }
+
+    func testMarkOpenedPersistsTimestamps() throws {
+        let store = RepoStore()
+        let repo = Repository(path: "/tmp/repo", name: "repo")
+        XCTAssertNil(store.lastOpenedAt[repo.path])
+        store.markOpened(repo)
+        XCTAssertNotNil(store.lastOpenedAt[repo.path])
+        // Survives a store reload.
+        XCTAssertNotNil(RepoStore().lastOpenedAt[repo.path])
     }
 }

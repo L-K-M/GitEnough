@@ -42,10 +42,18 @@ struct LLMConfiguration: Equatable {
                                             model: Provider.zai.defaultModel)
 
     var chatCompletionsURL: URL? {
+        endpoint("chat/completions")
+    }
+
+    var modelsURL: URL? {
+        endpoint("models")
+    }
+
+    private func endpoint(_ path: String) -> URL? {
         let trimmed = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
             .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         guard !trimmed.isEmpty else { return nil }
-        return URL(string: trimmed + "/chat/completions")
+        return URL(string: trimmed + "/" + path)
     }
 
     // MARK: - Persistence

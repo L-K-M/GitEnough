@@ -299,6 +299,23 @@ final class GitClient {
         try shell.runChecked(["-C", worktree.path, "add", "--", path], in: nil)
     }
 
+    /// True when the file still contains git conflict markers (`<<<<<<<`,
+    /// `=======`, `>>>>>>>` at line start). Used after an external merge tool
+    /// exits: opendiff-style tools can't be trusted to stage the file or answer
+    /// git's "was it resolved?" prompt (which hits a headless EOF), so GitEnough
+    /// verifies the file itself.
+    func fileHasConflictMarkers(_ path: String) -> Bool {
+        let url = worktree.appendingPathComponent(path)
+        guard let data = try? Data(contentsOf: url) else { return false }
+        let text = String(decoding: data, as: UTF8.self)
+        for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
+            if line.hasPrefix("<<<<<<<") || line.hasPrefix("=======") || line.hasPrefix(">>>>>>>") {
+                return true
+            }
+        }
+        return false
+    }
+
     /// Resolves a conflicted path by checking out one side and staging it.
     func resolveConflict(path: String, ours: Bool) throws {
         try shell.runChecked(

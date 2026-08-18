@@ -8,6 +8,12 @@ struct SidebarView: View {
 
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var store: RepoStore
+    @AppStorage("sidebarSortOrder") private var sortOrderRaw = SidebarSortOrder.manual.rawValue
+    @State private var filterText = ""
+
+    private var sortOrder: SidebarSortOrder {
+        SidebarSortOrder(rawValue: sortOrderRaw) ?? .manual
+    }
 
     private var selection: Binding<String?> {
         Binding(
@@ -22,36 +28,61 @@ struct SidebarView: View {
         )
     }
 
+    /// Repositories after the filter text and sort order are applied.
+    private var visibleRepositories: [Repository] {
+        var repos = store.repositories
+        if !filterText.isEmpty {
+            let needle = filterText.lowercased()
+            repos = repos.filter {
+                $0.name.lowercased().contains(needle) || $0.path.lowercased().contains(needle)
+            }
+        }
+        switch sortOrder {
+        case .manual:
+            break
+        case .name:
+            repos.sort {
+                $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+            }
+        case .recentlyOpened:
+            repos.sort {
+                (store.lastOpenedAt[$0.path] ?? 0) > (store.lastOpenedAt[$1.path] ?? 0)
+            }
+        }
+        return repos
+    }
+
     var body: some View {
         List(selection: selection) {
             Section {
-                ForEach(store.repositories) { repo in
-                    SidebarRow(repo: repo, summary: store.summaries[repo.path] ?? .unknown)
-                        .tag(repo.path)
-                        .contextMenu {
-                            Button("Show in Finder") {
-                                NSWorkspace.shared.activateFileViewerSelecting([repo.url])
-                            }
-                            Button("Copy Path") {
-                                NSPasteboard.general.clearContents()
-                                NSPasteboard.general.setString(repo.path, forType: .string)
-                            }
-                            Divider()
-                            Button("Remove from GitEnough") {
-                                appState.remove(repo)
-                            }
+                if sortOrder == .manual {
+                    repoRows
+                        .onMove { offsets, destination in
+                            store.move(fromOffsets: offsets, toOffset: destination)
                         }
-                }
-                .onMove { offsets, destination in
-                    store.move(fromOffsets: offsets, toOffset: destination)
+                } else {
+                    repoRows
                 }
             } header: {
                 Text("Repositories")
             }
         }
         .listStyle(.sidebar)
+        .searchable(text: $filterText, placement: .sidebar, prompt: "Filter repositories")
         .onDrop(of: [UTType.fileURL], isTargeted: nil, perform: handleDrop)
         .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Menu {
+                    Picker("Sort by", selection: $sortOrderRaw) {
+                        ForEach(SidebarSortOrder.allCases) { order in
+                            Text(order.rawValue).tag(order.rawValue)
+                        }
+                    }
+                } label: {
+                    Image(systemName: "arrow.up.arrow.down")
+                }
+                .help("Sort repositories")
+            }
             ToolbarItem(placement: .primaryAction) {
                 Button {
                     appState.showingAddRepository = true
@@ -70,6 +101,26 @@ struct SidebarView: View {
                     .padding(.vertical, 6)
                     .background(.bar)
             }
+        }
+    }
+
+    private var repoRows: some View {
+        ForEach(visibleRepositories) { repo in
+            SidebarRow(repo: repo, summary: store.summaries[repo.path] ?? .unknown)
+                .tag(repo.path)
+                .contextMenu {
+                    Button("Show in Finder") {
+                        NSWorkspace.shared.activateFileViewerSelecting([repo.url])
+                    }
+                    Button("Copy Path") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(repo.path, forType: .string)
+                    }
+                    Divider()
+                    Button("Remove from GitEnough") {
+                        appState.remove(repo)
+                    }
+                }
         }
     }
 

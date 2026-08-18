@@ -50,8 +50,20 @@ final class CommitMessageGeneratorTests: XCTestCase {
                                       model: "glm-4.6")
         XCTAssertEqual(config.chatCompletionsURL?.absoluteString,
                        "https://api.z.ai/api/coding/paas/v4/chat/completions")
+        XCTAssertEqual(config.modelsURL?.absoluteString,
+                       "https://api.z.ai/api/coding/paas/v4/models")
 
         config.baseURL = "  "
         XCTAssertNil(config.chatCompletionsURL)
+        XCTAssertNil(config.modelsURL)
+    }
+
+    func testParseModelsResponse() {
+        let json = #"{"object":"list","data":[{"id":"glm-4.6","object":"model","created":1},{"id":"glm-4.5"},{"id":"glm-5.2"}]}"#
+        XCTAssertEqual(CommitMessageGenerator.parseModelsResponse(Data(json.utf8)),
+                       ["glm-4.5", "glm-4.6", "glm-5.2"])
+        // Unexpected shapes degrade to an empty list (settings then shows a text field).
+        XCTAssertEqual(CommitMessageGenerator.parseModelsResponse(Data("not json".utf8)), [])
+        XCTAssertEqual(CommitMessageGenerator.parseModelsResponse(Data("{}".utf8)), [])
     }
 }

@@ -31,6 +31,15 @@ struct RepoSummary: Equatable {
     static let unknown = RepoSummary(branch: nil, isDirty: false, ahead: 0, behind: 0, isValid: true)
 }
 
+/// How the sidebar orders repositories (persisted in UserDefaults).
+enum SidebarSortOrder: String, CaseIterable, Identifiable {
+    case manual = "Manually"
+    case name = "Name"
+    case recentlyOpened = "Recently Opened"
+
+    var id: String { rawValue }
+}
+
 /// The sidebar's list of repositories: add, remove, reorder, persist, plus the
 /// "removal sticks" bookkeeping for watch-folder discovery (paths the user
 /// removed are never auto-re-added).
@@ -41,8 +50,12 @@ final class RepoStore: ObservableObject {
     /// path → summary, refreshed by AppState.
     @Published var summaries: [String: RepoSummary] = [:]
 
+    /// path → last-opened timestamp, for the "Recently Opened" sort order.
+    @Published private(set) var lastOpenedAt: [String: TimeInterval] = [:]
+
     private let defaultsKey = "repositories.v1"
     private let excludedKey = "excludedRepositories.v1"
+    private let lastOpenedKey = "repoLastOpened.v1"
 
     /// Paths the user removed — excluded from discovery until manually re-added.
     private var excludedPaths: Set<String> = []
@@ -50,6 +63,10 @@ final class RepoStore: ObservableObject {
     init() {
         load()
         excludedPaths = Set(UserDefaults.standard.stringArray(forKey: excludedKey) ?? [])
+        if let data = UserDefaults.standard.data(forKey: lastOpenedKey),
+           let decoded = try? JSONDecoder().decode([String: TimeInterval].self, from: data) {
+            lastOpenedAt = decoded
+        }
     }
 
     private func load() {
@@ -116,5 +133,13 @@ final class RepoStore: ObservableObject {
     func move(fromOffsets: IndexSet, toOffset: Int) {
         repositories.move(fromOffsets: fromOffsets, toOffset: toOffset)
         persist()
+    }
+
+    /// Records that `repo` was selected (feeds the "Recently Opened" sort).
+    func markOpened(_ repo: Repository) {
+        lastOpenedAt[repo.path] = Date().timeIntervalSince1970
+        if let data = try? JSONEncoder().encode(lastOpenedAt) {
+            UserDefaults.standard.set(data, forKey: lastOpenedKey)
+        }
     }
 }

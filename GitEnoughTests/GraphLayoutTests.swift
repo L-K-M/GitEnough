@@ -109,6 +109,29 @@ final class GraphLayoutTests: XCTestCase {
 
     // MARK: - Lane reuse
 
+    /// A merge whose first parent is already expected elsewhere folds its lane
+    /// away — the second parent must then fan out to a FRESH lane to the right,
+    /// never back into the node's own just-freed column (which would draw a
+    /// curve into itself).
+    func testSecondParentNeverGetsTheNodesOwnColumn() {
+        // T → p; M merges p and q (p already expected by T's lane when M is seen).
+        let layout = GraphLayout.layout(commits: [
+            commit("T", parents: ["p"]),
+            commit("M", parents: ["p", "q"]),
+            commit("p", parents: ["r"]),
+            commit("q", parents: ["r"]),
+            commit("r"),
+        ])
+        // M claims lane 1, folds into lane 0 (first parent p); q opens lane 2.
+        XCTAssertTrue(hasSegment(layout, fromRow: 1, fromColumn: 1, toRow: 1, toColumn: 0, kind: .joinExisting))
+        XCTAssertTrue(hasSegment(layout, fromRow: 1, fromColumn: 1, toRow: 2, toColumn: 2, kind: .branchOut))
+        // No segment ever starts and ends in the same column as the merge node.
+        XCTAssertFalse(layout.segments.contains {
+            $0.kind == .branchOut && $0.fromColumn == $0.toColumn
+        })
+        XCTAssertEqual(layout.columnCount, 3)
+    }
+
     /// Two disconnected roots: the second reuses the freed lane 0 instead of
     /// growing the graph wider.
     func testDisconnectedRootsReuseFreedLanes() {

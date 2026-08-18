@@ -15,7 +15,8 @@ Desktop never gave you: a proper **IntelliJ-style branch/merge graph** and
 
 - **Two-pane window.** Repositories on the left (with live branch / dirty /
   ahead-behind summaries), the selected repository on the right. Drag any folder
-  into the sidebar to add it; clone straight from the welcome sheet.
+  into the sidebar to add it; clone straight from the welcome sheet. Filter the
+  list as you type, and sort it manually, by name, or by recently opened.
 - **Watch folder.** Point Settings → General at a folder (say `~/code`) and
   GitEnough scans it about once a minute, automatically adding every repository
   it finds — directly inside, or one folder deep. Removing a repo from the
@@ -30,11 +31,15 @@ Desktop never gave you: a proper **IntelliJ-style branch/merge graph** and
 - **Smart commits.** The ✨ Generate button sends the staged diff (stat + patch)
   to an OpenAI-compatible LLM endpoint — **Z.AI GLM** by default, OpenAI or any
   custom/self-hosted endpoint in Settings — and writes a conventional commit
-  message for you. The API key lives in the **Keychain**, never in plain text.
+  message for you. The model picker loads the provider's model list itself
+  (with a manual text field as fallback), and the API key lives in the
+  **Keychain**, never in plain text.
 - **Merge conflicts.** A merge banner, per-file resolution (ours/theirs), and
   one click into your **external merge tool** — FileMerge, Kaleidoscope, Beyond
   Compare, Araxis, P4Merge, Meld, DeltaWalker, Sublime Merge and KDiff3 are
-  auto-detected and driven through `git mergetool`.
+  auto-detected and driven through `git mergetool`. The tool never blocks the
+  rest of the app; when it closes, GitEnough checks the file itself and stages
+  it if the markers are gone.
 - **Branches & stash.** Switch by double-click, create/rename/delete/merge from
   the context menu, tracking-checkouts for remote branches, stash apply/pop/drop.
 
