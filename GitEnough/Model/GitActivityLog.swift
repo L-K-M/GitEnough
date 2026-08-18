@@ -69,7 +69,9 @@ final class GitActivityLog {
         }
         storage[index].finishedAt = now
         storage[index].exitCode = exitCode
-        let tail = stderr.map(Self.stderrTail)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        // stderr can echo a remote URL on network errors — redact before storing.
+        let redacted = stderr.map(Self.redactCredentials)
+        let tail = redacted.map(Self.stderrTail)?.trimmingCharacters(in: .whitespacesAndNewlines)
         storage[index].stderrTail = (tail?.isEmpty ?? true) ? nil : tail
         let snapshot = storage
         lock.unlock()
@@ -100,14 +102,22 @@ final class GitActivityLog {
         if argv.count >= 2, argv[0] == "-C" {
             argv.removeFirst(2)
         }
+        // Read-only probes pass `--no-optional-locks` before the subcommand;
+        // strip it so the display leads with the command name (`status …`).
+        argv.removeAll { $0 == "--no-optional-locks" }
         return argv.map(displayArgument).joined(separator: " ")
     }
 
+    /// https://token@host/… or https://user:pass@host/… → https://***@host/…
+    /// Both argv and stderr (network errors echo remote URLs) go through this.
+    static func redactCredentials(_ string: String) -> String {
+        string.replacingOccurrences(of: #"://[^/\s@]+@"#,
+                                    with: "://***@",
+                                    options: .regularExpression)
+    }
+
     private static func displayArgument(_ arg: String) -> String {
-        // https://token@host/… or https://user:pass@host/… → https://***@host/…
-        let redacted = arg.replacingOccurrences(of: #"://[^/\s@]+@"#,
-                                                with: "://***@",
-                                                options: .regularExpression)
+        let redacted = redactCredentials(arg)
         if redacted.contains(where: { $0 == " " || $0 == "\t" }) {
             return "\"\(redacted)\""
         }

@@ -99,6 +99,21 @@ final class GitActivityLogTests: XCTestCase {
             "fetch --prune")
     }
 
+    func testDisplayCommandStripsNoOptionalLocks() {
+        XCTAssertEqual(
+            GitActivityLog.displayCommand(for: ["-C", "/r", "--no-optional-locks", "status", "--porcelain=v2"]),
+            "status --porcelain=v2")
+    }
+
+    func testStderrTailHasCredentialsRedacted() {
+        let log = GitActivityLog()
+        let id = log.begin(command: "fetch")
+        log.finish(id, exitCode: 128,
+                   stderr: "fatal: unable to access 'https://token123@github.com/a/b.git/': 403")
+        XCTAssertEqual(log.entries.first?.stderrTail,
+                       "fatal: unable to access 'https://***@github.com/a/b.git/': 403")
+    }
+
     func testDisplayCommandQuotesArgumentsWithSpaces() {
         XCTAssertEqual(
             GitActivityLog.displayCommand(for: ["stash", "push", "-m", "wip: fix it"]),
