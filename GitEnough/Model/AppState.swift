@@ -148,29 +148,50 @@ final class AppState: ObservableObject {
     }
 
     /// Refreshes the sidebar summaries (branch name, dirty dot, ahead/behind) for
-    /// every registered repo on a background queue.
+    /// every registered repo. Each repo is an independent read-only
+    /// `--no-optional-locks` status query, so they run concurrently (windowed, to
+    /// avoid a process-spawn burst with dozens of repos) instead of one-by-one —
+    /// with 15+ repos a serial pass took seconds on every activation.
     func refreshSummaries() {
         let repos = store.repositories
-        DispatchQueue.global(qos: .utility).async { [weak self] in
-            var result: [String: RepoSummary] = [:]
-            for repo in repos {
-                guard FileManager.default.fileExists(atPath: repo.path) else {
-                    result[repo.path] = RepoSummary(branch: nil, isDirty: false,
-                                                  ahead: 0, behind: 0, isValid: false)
-                    continue
-                }
-                let client = GitClient(worktree: repo.url)
-                if let status = try? client.status() {
-                    result[repo.path] = RepoSummary(status: status)
-                } else {
-                    result[repo.path] = RepoSummary(branch: nil, isDirty: false,
-                                                  ahead: 0, behind: 0, isValid: false)
-                }
-            }
-            DispatchQueue.main.async {
-                self?.store.summaries = result
-            }
+        guard !repos.isEmpty else { return }
+        Task.detached(priority: .utility) { [weak self] in
+            let result = await Self.summaries(for: repos)
+            await MainActor.run { self?.store.summaries = result }
         }
+    }
+
+    /// The per-repo sidebar summaries, computed for up to `maxConcurrent` repos at
+    /// a time. Pure-ish (git reads only); static so tests can drive it directly.
+    static func summaries(for repos: [Repository],
+                          maxConcurrent: Int = 6) async -> [String: RepoSummary] {
+        precondition(maxConcurrent > 0)
+        return await withTaskGroup(of: (String, RepoSummary).self) { group in
+            var iterator = repos.makeIterator()
+            var results: [String: RepoSummary] = [:]
+            results.reserveCapacity(repos.count)
+            func enqueueNext() {
+                guard let repo = iterator.next() else { return }
+                group.addTask { (repo.path, Self.summary(for: repo)) }
+            }
+            for _ in 0..<min(maxConcurrent, repos.count) { enqueueNext() }
+            while let (path, summary) = await group.next() {
+                results[path] = summary
+                enqueueNext()
+            }
+            return results
+        }
+    }
+
+    /// One repo's sidebar summary. A missing folder or a failed status read yields
+    /// an invalid summary rather than an error — the sidebar shows the warning
+    /// triangle instead of pretending everything is fine.
+    private static func summary(for repo: Repository) -> RepoSummary {
+        let invalid = RepoSummary(branch: nil, isDirty: false, ahead: 0, behind: 0, isValid: false)
+        guard FileManager.default.fileExists(atPath: repo.path) else { return invalid }
+        let client = GitClient(worktree: repo.url)
+        guard let status = try? client.status() else { return invalid }
+        return RepoSummary(status: status)
     }
 
     // MARK: - Auto-fetch

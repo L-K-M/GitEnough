@@ -372,6 +372,139 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertNil(client.remoteDefaultBranch(remote: "upstream"))
     }
 
+    func testPublishSetsUpstreamOnCustomRemote() throws {
+        // A local bare repo as the remote, under a non-default name: "origin"-
+        // hardcoded publishing would fail here with "origin does not appear to
+        // be a git repository".
+        let remoteURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitEnoughTests-remote-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: remoteURL) }
+        try run(["init", "--bare", remoteURL.path])
+        try run(["remote", "add", "work", remoteURL.path])
+
+        try client.push(setUpstream: true, remote: "work")
+
+        let main = try XCTUnwrap(client.branches().first { $0.name == "main" },
+                                 "expected default branch 'main'")
+        XCTAssertEqual(main.upstream, "work/main")
+    }
+
+    func testCreateTagLightweightAndAnnotated() throws {
+        let head = try XCTUnwrap(try client.log(limit: 1).first?.hash)
+        try client.createTag(name: "v1.0", message: nil, at: head)
+        try client.createTag(name: "v2.0-beta", message: "Second release", at: head)
+        let after = try XCTUnwrap(try client.log(limit: 1).first)
+        let tags = after.decorations.filter { $0.kind == .tag }.map(\.name)
+        XCTAssertTrue(tags.contains("v1.0"))
+        XCTAssertTrue(tags.contains("v2.0-beta"))
+        // Invalid refnames surface as git errors, not silent success.
+        XCTAssertThrowsError(try client.createTag(name: "not a tag", message: nil, at: head))
+        // Existing tags must not be silently moved (no implicit -f).
+        XCTAssertThrowsError(try client.createTag(name: "v1.0", message: nil, at: head))
+        // Leading-dash names are rejected before git can parse them as options.
+        XCTAssertThrowsError(try client.createTag(name: "-f", message: nil, at: head))
+        // The annotated tag actually carries its message.
+        let annotation = try GitShell.shared.runChecked(
+            ["-C", repoURL.path, "for-each-ref", "refs/tags/v2.0-beta",
+             "--format=%(contents:subject)"], in: nil)
+        XCTAssertEqual(annotation.stdout.trimmingCharacters(in: .whitespacesAndNewlines),
+                       "Second release")
+        // And the lightweight one has no annotation object.
+        let lightweight = try GitShell.shared.runChecked(
+            ["-C", repoURL.path, "for-each-ref", "refs/tags/v1.0", "--format=%(objecttype)"], in: nil)
+        XCTAssertEqual(lightweight.stdout.trimmingCharacters(in: .whitespacesAndNewlines),
+                       "commit")
+    }
+
+    func testGitIgnoreEscapedPatternMatchesLiterally() throws {
+        // A filename full of glob metacharacters must be ignored *literally*.
+        try write("data\n", to: "report[1].txt")
+        let updated = GitIgnore.appending("report[1].txt", to: "")
+        try updated.write(to: repoURL.appendingPathComponent(".gitignore"),
+                          atomically: true, encoding: .utf8)
+        // check-ignore exits 0 (and echoes the path) when the path is ignored.
+        let result = try GitShell.shared.runChecked(
+            ["-C", repoURL.path, "check-ignore", "report[1].txt"], in: nil)
+        XCTAssertEqual(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines),
+                       "report[1].txt")
+    }
+
+    func testIsIgnoredDetectsBroaderExistingPatterns() throws {
+        try write("*.log\nbuild/\n", to: ".gitignore")
+        XCTAssertTrue(client.isIgnored(path: "error.log"))
+        XCTAssertTrue(client.isIgnored(path: "build/output.bin"))
+        XCTAssertFalse(client.isIgnored(path: "notes.txt"))
+    }
+
+    // MARK: - Rebase / cherry-pick conflicts
+
+    /// Creates a branch whose next commit on a.txt conflicts with main's next
+    /// commit, leaving both branches in place.
+    private func makeConflictingBranch(_ name: String) throws {
+        try run(["checkout", "-b", name])
+        try write("from \(name)\n", to: "a.txt")
+        try run(["add", "a.txt"])
+        try run(["commit", "-m", "Change a on \(name)"])
+        try run(["checkout", "main"])
+        try write("from main\n", to: "a.txt")
+        try run(["add", "a.txt"])
+        try run(["commit", "-m", "Change a on main"])
+    }
+
+    func testRebaseConflictDetectionResolutionAndContinue() throws {
+        try makeConflictingBranch("conflicter")
+        XCTAssertNil(client.inProgressOperation())
+
+        // Rebasing main onto conflicter conflicts on a.txt. During a rebase git
+        // writes rebase-merge/ but NOT MERGE_HEAD — exactly the state that
+        // merge-only detection used to miss.
+        XCTAssertThrowsError(try run(["rebase", "conflicter"]))
+        XCTAssertEqual(client.inProgressOperation(), .rebase)
+        XCTAssertEqual(try client.conflictedPaths(), ["a.txt"])
+        XCTAssertFalse(try client.status().conflicted.isEmpty)
+        XCTAssertEqual(client.operationLabel(for: .rebase), "Rebasing main")
+
+        // Ours during a rebase is the new base (conflicter); theirs is main's
+        // commit being replayed.
+        try client.resolveConflict(path: "a.txt", ours: true)
+        try client.rebaseContinue()
+
+        XCTAssertNil(client.inProgressOperation())
+        let content = try String(contentsOf: repoURL.appendingPathComponent("a.txt"), encoding: .utf8)
+        XCTAssertEqual(content, "from conflicter\n")
+        XCTAssertFalse(try client.status().isDirty)
+    }
+
+    func testRebaseAbortRestoresState() throws {
+        try makeConflictingBranch("conflicter")
+        XCTAssertThrowsError(try run(["rebase", "conflicter"]))
+        XCTAssertEqual(client.inProgressOperation(), .rebase)
+
+        try client.rebaseAbort()
+
+        XCTAssertNil(client.inProgressOperation())
+        let content = try String(contentsOf: repoURL.appendingPathComponent("a.txt"), encoding: .utf8)
+        XCTAssertEqual(content, "from main\n")
+        XCTAssertFalse(try client.status().isDirty)
+    }
+
+    func testCherryPickConflictDetectionAndAbort() throws {
+        try makeConflictingBranch("picker")
+        let hash = try GitShell.shared.runChecked(["rev-parse", "picker"], in: repoURL).stdout
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        XCTAssertThrowsError(try client.cherryPick(hash))
+        XCTAssertEqual(client.inProgressOperation(), .cherryPick)
+        XCTAssertEqual(try client.conflictedPaths(), ["a.txt"])
+
+        try client.cherryPickAbort()
+
+        XCTAssertNil(client.inProgressOperation())
+        let content = try String(contentsOf: repoURL.appendingPathComponent("a.txt"), encoding: .utf8)
+        XCTAssertEqual(content, "from main\n")
+        XCTAssertFalse(try client.status().isDirty)
+    }
+
     func testValidationHelpers() throws {
         XCTAssertTrue(GitClient.isRepository(at: repoURL))
         // git reports the physical path; temporaryDirectory may sit behind the

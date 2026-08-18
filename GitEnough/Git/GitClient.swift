@@ -181,6 +181,15 @@ final class GitClient {
             ["-C", worktree.path, "diff", "--staged", "--stat", "--no-color"], in: nil).stdout
     }
 
+    /// True when an existing gitignore rule already covers `path`
+    /// (`git check-ignore`), so "Ignore" doesn't pile redundant specific
+    /// entries under a broader pattern like `*.log` or `build/`.
+    func isIgnored(path: String) -> Bool {
+        guard let result = try? shell.run(
+            ["-C", worktree.path, "check-ignore", "-q", "--", path], in: nil) else { return false }
+        return result.exitCode == 0
+    }
+
     // MARK: - Staging
 
     func stage(paths: [String]) throws {
@@ -275,6 +284,11 @@ final class GitClient {
     // MARK: - Branches
 
     func createBranch(_ name: String, at startPoint: String? = nil, checkout: Bool) throws {
+        // Same option-injection guard as createTag: a leading-dash name must
+        // never reach git in option position.
+        guard !name.hasPrefix("-") else {
+            throw GitError(message: "Branch names must not start with “-”.", exitCode: -1)
+        }
         var args = ["-C", worktree.path]
         args.append(checkout ? "checkout" : "branch")
         if checkout { args.append("-b") }
@@ -301,6 +315,25 @@ final class GitClient {
 
     func renameBranch(old: String, new: String) throws {
         try shell.runChecked(["-C", worktree.path, "branch", "-m", old, new], in: nil)
+    }
+
+    // MARK: - Tags
+
+    /// Creates a tag pointing at `hash`. With a non-empty message the tag is
+    /// annotated (`-a -m`), otherwise lightweight. `git tag` validates the
+    /// refname itself, so invalid names surface as git errors.
+    func createTag(name: String, message: String?, at hash: String) throws {
+        // A name in option position could be parsed as a git flag (`-f` would
+        // force-move an existing tag) — reject it before git ever sees it.
+        guard !name.hasPrefix("-") else {
+            throw GitError(message: "Tag names must not start with “-”.", exitCode: -1)
+        }
+        var args = ["-C", worktree.path, "tag"]
+        if let message, !message.isEmpty {
+            args.append(contentsOf: ["-a", "-m", message])
+        }
+        args.append(contentsOf: [name, hash])
+        try shell.runChecked(args, in: nil)
     }
 
     // MARK: - Merging
@@ -387,6 +420,86 @@ final class GitClient {
             ["-C", worktree.path, "checkout", ours ? "--ours" : "--theirs", "--", path],
             in: nil)
         try shell.runChecked(["-C", worktree.path, "add", "--", path], in: nil)
+    }
+
+    // MARK: - Sequencer state (merge / rebase / cherry-pick / revert)
+
+    /// Which sequencer operation is currently in progress, if any.
+    ///
+    /// Rebase is detected via the `rebase-merge`/`rebase-apply` state directories and
+    /// checked FIRST: during a conflicted rebase git writes MERGE_MSG (and other
+    /// sequencer files) but *not* MERGE_HEAD, so merge-only detection misses it —
+    /// exactly the gap that used to make conflicted rebases invisible in the UI.
+    func inProgressOperation() -> InProgressOperation? {
+        guard let gitDir = gitDir() else { return nil }
+        let fileManager = FileManager.default
+        func stateExists(_ relative: String) -> Bool {
+            fileManager.fileExists(atPath: gitDir.appendingPathComponent(relative).path)
+        }
+        // Same detection git's own shell prompt uses: rebase-merge is always a
+        // rebase; rebase-apply is also created by `git am`, whose `applying`
+        // marker file distinguishes it.
+        if stateExists("rebase-merge") { return .rebase }
+        if stateExists("rebase-apply"), !stateExists("rebase-apply/applying") { return .rebase }
+        if stateExists("CHERRY_PICK_HEAD") { return .cherryPick }
+        if stateExists("REVERT_HEAD") { return .revert }
+        let mergeHead = (try? mergeHead()) ?? nil
+        return mergeHead != nil ? .merge : nil
+    }
+
+    /// A human label for the operation banner: MERGE_MSG's first line for merges,
+    /// "Rebasing <branch>" for rebases, a plain phrase otherwise.
+    func operationLabel(for operation: InProgressOperation) -> String? {
+        switch operation {
+        case .merge:
+            return mergeMessageLabel()
+        case .rebase:
+            guard let gitDir = gitDir() else { return nil }
+            // head-name holds the full ref of the branch being rebased.
+            for relative in ["rebase-merge/head-name", "rebase-apply/head-name"] {
+                let url = gitDir.appendingPathComponent(relative)
+                guard let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
+                let ref = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                if ref.hasPrefix("refs/heads/") {
+                    return "Rebasing \(String(ref.dropFirst("refs/heads/".count)))"
+                }
+                // A detached-HEAD rebase writes the literal "detached" here;
+                // the generic "Rebase in progress" beats "Rebasing detached".
+                if ref != "detached", !ref.isEmpty { return "Rebasing \(ref)" }
+            }
+            return nil
+        case .cherryPick:
+            return "Cherry-pick in progress"
+        case .revert:
+            return "Revert in progress"
+        }
+    }
+
+    /// Continues an in-progress rebase. Safe headless: GIT_EDITOR=true (set by
+    /// GitShell) makes `--continue` accept git's prepared commit message instead
+    /// of blocking on an editor.
+    func rebaseContinue() throws {
+        try shell.runChecked(["-C", worktree.path, "rebase", "--continue"], in: nil)
+    }
+
+    func rebaseAbort() throws {
+        try shell.runChecked(["-C", worktree.path, "rebase", "--abort"], in: nil)
+    }
+
+    func cherryPickContinue() throws {
+        try shell.runChecked(["-C", worktree.path, "cherry-pick", "--continue"], in: nil)
+    }
+
+    func cherryPickAbort() throws {
+        try shell.runChecked(["-C", worktree.path, "cherry-pick", "--abort"], in: nil)
+    }
+
+    func revertContinue() throws {
+        try shell.runChecked(["-C", worktree.path, "revert", "--continue"], in: nil)
+    }
+
+    func revertAbort() throws {
+        try shell.runChecked(["-C", worktree.path, "revert", "--abort"], in: nil)
     }
 
     // MARK: - Stash

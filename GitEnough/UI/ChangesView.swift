@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 /// The Changes tab: conflict resolution (while merging), staged/unstaged file
 /// lists, the commit box with AI message generation, and the diff of the selected
@@ -14,7 +15,12 @@ struct ChangesView: View {
     @State private var showingAmendPushedConfirmation = false
 
     private var conflicts: [FileChange] { viewModel.status.conflicted }
-    private var mergeInProgress: Bool { viewModel.mergeState.isMerging }
+    /// Conflicted files must be visible whenever *any* sequencer operation is in
+    /// progress — merges, but also rebases, cherry-picks, and reverts, whose
+    /// unmerged entries otherwise vanish from the UI entirely.
+    private var conflictUIActive: Bool {
+        viewModel.mergeState.isInProgress || viewModel.mergeState.isResolvingConflicts
+    }
 
     /// The subject-line soft limit: git's traditional wrap point and
     /// GitHub's truncation point.
@@ -116,7 +122,7 @@ struct ChangesView: View {
 
     private var fileList: some View {
         List {
-            if mergeInProgress {
+            if conflictUIActive {
                 Section {
                     ForEach(conflicts) { file in
                         ConflictRow(path: file.path, viewModel: viewModel)
@@ -130,6 +136,7 @@ struct ChangesView: View {
             Section {
                 ForEach(viewModel.status.staged) { file in
                     FileRow(file: file,
+                            repoURL: viewModel.repo.url,
                             isSelected: selectedFile?.path == file.path && selectionIsStaged,
                             actionIcon: "minus.circle",
                             actionHelp: "Unstage") {
@@ -137,6 +144,8 @@ struct ChangesView: View {
                         selectionIsStaged = true
                     } onAction: {
                         viewModel.unstage([file])
+                    } onIgnore: {
+                        // Staged files are tracked; ignore only applies to untracked.
                     } onDiscard: {
                         fileToDiscard = file
                     }
@@ -156,6 +165,7 @@ struct ChangesView: View {
             Section {
                 ForEach(viewModel.status.unstaged) { file in
                     FileRow(file: file,
+                            repoURL: viewModel.repo.url,
                             isSelected: selectedFile?.path == file.path && !selectionIsStaged,
                             actionIcon: "plus.circle",
                             actionHelp: "Stage") {
@@ -163,6 +173,8 @@ struct ChangesView: View {
                         selectionIsStaged = false
                     } onAction: {
                         viewModel.stage([file])
+                    } onIgnore: {
+                        viewModel.ignore(file)
                     } onDiscard: {
                         fileToDiscard = file
                     }
@@ -308,11 +320,13 @@ struct ChangesView: View {
 private struct FileRow: View {
 
     let file: FileChange
+    let repoURL: URL
     let isSelected: Bool
     let actionIcon: String
     let actionHelp: String
     let onSelect: () -> Void
     let onAction: () -> Void
+    let onIgnore: () -> Void
     let onDiscard: () -> Void
 
     var body: some View {
@@ -338,6 +352,33 @@ private struct FileRow: View {
         .contextMenu {
             Button(action: onAction) {
                 Label(actionHelp, systemImage: actionIcon)
+            }
+            if file.isUntracked {
+                Button("Ignore in .gitignore", action: onIgnore)
+            }
+            Divider()
+            if FileManager.default.fileExists(
+                atPath: repoURL.appendingPathComponent(file.path).path) {
+                Button {
+                    NSWorkspace.shared.activateFileViewerSelecting(
+                        [repoURL.appendingPathComponent(file.path)])
+                } label: {
+                    Label("Show in Finder", systemImage: "folder")
+                }
+            }
+            Button {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(file.path, forType: .string)
+            } label: {
+                Label("Copy Path", systemImage: "doc.on.doc")
+            }
+            if FileManager.default.fileExists(
+                atPath: repoURL.appendingPathComponent(file.path).path) {
+                Button {
+                    NSWorkspace.shared.open(repoURL.appendingPathComponent(file.path))
+                } label: {
+                    Label("Open in External Editor", systemImage: "arrow.up.forward.app")
+                }
             }
             Divider()
             Button("Discard Changes…", role: .destructive, action: onDiscard)
