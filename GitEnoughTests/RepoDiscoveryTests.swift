@@ -7,12 +7,14 @@ final class RepoDiscoveryTests: XCTestCase {
     private var root: URL!
 
     override func setUpWithError() throws {
-        // Canonicalize (temporaryDirectory sits behind /var → /private/var, and
-        // contentsOfDirectory returns physically-resolved child paths).
-        root = FileManager.default.temporaryDirectory
+        // temporaryDirectory sits behind /var → /private/var, and
+        // contentsOfDirectory returns physically-resolved child paths. Create the
+        // directory FIRST, then canonicalize — resolvingSymlinksInPath can't
+        // resolve a path that doesn't exist yet.
+        let raw = FileManager.default.temporaryDirectory
             .appendingPathComponent("GitEnoughDiscovery-\(UUID().uuidString)")
-            .resolvingSymlinksInPath()
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: raw, withIntermediateDirectories: true)
+        root = raw.resolvingSymlinksInPath()
     }
 
     override func tearDownWithError() throws {
@@ -40,6 +42,10 @@ final class RepoDiscoveryTests: XCTestCase {
         return dir
     }
 
+    private func canonicalPaths(_ urls: [URL]) -> Set<String> {
+        Set(urls.map { $0.resolvingSymlinksInPath().path })
+    }
+
     func testFindsReposAtDepthOneAndTwoAndSkipsNoise() throws {
         let repoA = try makeRepo("repoA")                       // depth 1
         let repoB = try makeRepo("org/repoB")                   // depth 2
@@ -49,9 +55,8 @@ final class RepoDiscoveryTests: XCTestCase {
         try makeRepo("org/repoB/inner")                         // below a repo boundary
         try makeRepo("a/b/c/repoD")                             // depth 3 — too deep
 
-        let found = RepoDiscovery.findRepositories(in: root)
-        XCTAssertEqual(Set(found.map(\.path)),
-                       Set([repoA, repoB, worktree].map(\.path)))
+        XCTAssertEqual(canonicalPaths(RepoDiscovery.findRepositories(in: root)),
+                       canonicalPaths([repoA, repoB, worktree]))
     }
 
     func testRootItselfCountsAsRepository() throws {
@@ -59,16 +64,17 @@ final class RepoDiscoveryTests: XCTestCase {
                                                 withIntermediateDirectories: true)
         try makeRepo("other")
 
-        let found = RepoDiscovery.findRepositories(in: root)
-        XCTAssertEqual(found.map(\.path), [root.path, root.appendingPathComponent("other").path])
+        XCTAssertEqual(canonicalPaths(RepoDiscovery.findRepositories(in: root)),
+                       canonicalPaths([root, root.appendingPathComponent("other")]))
     }
 
     func testMaxDepthControlsHowDeepTheScanGoes() throws {
         let repoA = try makeRepo("repoA")
         try makeRepo("org/repoB")
 
-        XCTAssertEqual(RepoDiscovery.findRepositories(in: root, maxDepth: 1).map(\.path),
-                       [repoA.path])
+        XCTAssertEqual(RepoDiscovery.findRepositories(in: root, maxDepth: 1)
+            .map { $0.resolvingSymlinksInPath().path },
+                       [repoA.resolvingSymlinksInPath().path])
         XCTAssertEqual(RepoDiscovery.findRepositories(in: root, maxDepth: 0), [])
     }
 
