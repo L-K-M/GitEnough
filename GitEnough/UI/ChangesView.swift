@@ -11,14 +11,17 @@ struct ChangesView: View {
     @State private var selectionIsStaged = false
     @State private var fileToDiscard: FileChange?
     @State private var showingStashSheet = false
+    @State private var showingAmendPushedConfirmation = false
 
     private var conflicts: [FileChange] { viewModel.status.conflicted }
     private var mergeInProgress: Bool { viewModel.mergeState.isMerging }
 
     /// Length of the message's first line — the git subject. 72 is the
-    /// traditional wrap limit (and GitHub's truncation point).
+    /// traditional wrap limit (and GitHub's truncation point). Splitting on
+    /// the full newline character set keeps pasted CRLF text from inflating
+    /// the count.
     private var subjectLength: Int {
-        viewModel.draftCommitMessage.components(separatedBy: "\n").first?.count ?? 0
+        viewModel.draftCommitMessage.components(separatedBy: .newlines).first?.count ?? 0
     }
 
     /// Amending a commit that the upstream already contains rewrites public
@@ -69,6 +72,16 @@ struct ChangesView: View {
         }
         .sheet(isPresented: $showingStashSheet) {
             stashSheet
+        }
+        .confirmationDialog("Amend a pushed commit?",
+                            isPresented: $showingAmendPushedConfirmation,
+                            titleVisibility: .visible) {
+            Button("Amend Anyway", role: .destructive) {
+                viewModel.commit()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The last commit is already on the upstream branch. Amending rewrites public history and requires a force push.")
         }
     }
 
@@ -215,7 +228,14 @@ struct ChangesView: View {
                     .help("Amend the last commit instead of creating a new one")
 
                 Button("Commit") {
-                    viewModel.commit()
+                    // The inline warning can be scrolled past — gate the
+                    // action itself when the amend would rewrite a pushed
+                    // commit.
+                    if amendRewritesPushedCommit {
+                        showingAmendPushedConfirmation = true
+                    } else {
+                        viewModel.commit()
+                    }
                 }
                 .keyboardShortcut(.return, modifiers: .command)
                 .buttonStyle(.borderedProminent)
