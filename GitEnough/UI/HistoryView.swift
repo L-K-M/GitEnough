@@ -215,6 +215,10 @@ private struct CommitRowView: View {
                 .frame(width: 110, alignment: .trailing)
         }
         .padding(.leading, 8)
+        // Fill the fixed-height row frame (applied by the caller) so the
+        // selection background is as tall as the graph strip next to it, not
+        // just as tall as the text.
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(isSelected ? Color.accentColor.opacity(0.20) : Color.clear)
     }
 }

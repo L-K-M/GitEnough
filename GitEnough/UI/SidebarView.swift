@@ -9,10 +9,15 @@ struct SidebarView: View {
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var store: RepoStore
     @AppStorage("sidebarSortOrder") private var sortOrderRaw = SidebarSortOrder.manual.rawValue
+    @AppStorage("sidebarFilter") private var filterRaw = SidebarFilter.all.rawValue
     @State private var filterText = ""
 
     private var sortOrder: SidebarSortOrder {
         SidebarSortOrder(rawValue: sortOrderRaw) ?? .manual
+    }
+
+    private var sidebarFilter: SidebarFilter {
+        SidebarFilter(rawValue: filterRaw) ?? .all
     }
 
     private var selection: Binding<String?> {
@@ -28,13 +33,28 @@ struct SidebarView: View {
         )
     }
 
-    /// Repositories after the filter text and sort order are applied.
+    /// Repositories after the logical filter, the filter text, and the sort
+    /// order are applied.
     private var visibleRepositories: [Repository] {
         var repos = store.repositories
+        if sidebarFilter != .all {
+            // Summaries load asynchronously; a repo whose state hasn't loaded yet
+            // stays visible rather than flashing an empty sidebar on launch (the
+            // filter is persisted, so this hits every cold start).
+            repos = repos.filter { repo in
+                guard let summary = store.summaries[repo.path] else { return true }
+                return sidebarFilter.matches(summary)
+            }
+        }
         if !filterText.isEmpty {
+            // Name always matches; the path only when the query looks like a path
+            // — otherwise a shared parent folder (~/Documents/GitHub/…) makes every
+            // plain word match everything, while "work/api" still disambiguates
+            // same-named repos.
             let needle = filterText.lowercased()
             repos = repos.filter {
-                $0.name.lowercased().contains(needle) || $0.path.lowercased().contains(needle)
+                $0.name.lowercased().contains(needle)
+                    || (needle.contains("/") && $0.path.lowercased().contains(needle))
             }
         }
         switch sortOrder {
@@ -59,7 +79,7 @@ struct SidebarView: View {
     var body: some View {
         List(selection: selection) {
             Section {
-                if sortOrder == .manual && filterText.isEmpty {
+                if sortOrder == .manual && filterText.isEmpty && sidebarFilter == .all {
                     ForEach(visibleRepositories) { repo in
                         rowContent(repo)
                     }
@@ -79,6 +99,20 @@ struct SidebarView: View {
         .searchable(text: $filterText, placement: .sidebar, prompt: "Filter repositories")
         .onDrop(of: [UTType.fileURL], isTargeted: nil, perform: handleDrop)
         .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Menu {
+                    Picker("Show", selection: $filterRaw) {
+                        ForEach(SidebarFilter.allCases) { filter in
+                            Text(filter.displayName).tag(filter.rawValue)
+                        }
+                    }
+                } label: {
+                    Image(systemName: sidebarFilter == .all
+                          ? "line.3.horizontal.decrease.circle"
+                          : "line.3.horizontal.decrease.circle.fill")
+                }
+                .help("Filter repositories by state")
+            }
             ToolbarItem(placement: .primaryAction) {
                 Menu {
                     Picker("Sort by", selection: $sortOrderRaw) {

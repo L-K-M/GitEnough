@@ -67,8 +67,8 @@ final class GraphLayoutTests: XCTestCase {
         XCTAssertTrue(hasSegment(layout, fromRow: 1, fromColumn: 0, toRow: 2, toColumn: 0, kind: .vertical))
         // …the side lane passes through row 1…
         XCTAssertTrue(hasSegment(layout, fromRow: 1, fromColumn: 1, toRow: 2, toColumn: 1, kind: .vertical))
-        // …and folds back into lane 0 at c2's row.
-        XCTAssertTrue(hasSegment(layout, fromRow: 2, fromColumn: 1, toRow: 2, toColumn: 0, kind: .joinExisting))
+        // …and folds back into lane 0, reaching it one row below c2's row.
+        XCTAssertTrue(hasSegment(layout, fromRow: 2, fromColumn: 1, toRow: 3, toColumn: 0, kind: .joinExisting))
         XCTAssertTrue(hasSegment(layout, fromRow: 2, fromColumn: 0, toRow: 3, toColumn: 0, kind: .vertical))
         XCTAssertEqual(layout.segments.count, 6)
     }
@@ -103,7 +103,7 @@ final class GraphLayoutTests: XCTestCase {
         ])
         XCTAssertEqual(layout.columnCount, 2)
         XCTAssertEqual(layout.nodes.map(\.column), [0, 1, 0])
-        XCTAssertTrue(hasSegment(layout, fromRow: 1, fromColumn: 1, toRow: 1, toColumn: 0, kind: .joinExisting))
+        XCTAssertTrue(hasSegment(layout, fromRow: 1, fromColumn: 1, toRow: 2, toColumn: 0, kind: .joinExisting))
         XCTAssertTrue(hasSegment(layout, fromRow: 1, fromColumn: 0, toRow: 2, toColumn: 0, kind: .vertical))
     }
 
@@ -123,7 +123,7 @@ final class GraphLayoutTests: XCTestCase {
             commit("r"),
         ])
         // M claims lane 1, folds into lane 0 (first parent p); q opens lane 2.
-        XCTAssertTrue(hasSegment(layout, fromRow: 1, fromColumn: 1, toRow: 1, toColumn: 0, kind: .joinExisting))
+        XCTAssertTrue(hasSegment(layout, fromRow: 1, fromColumn: 1, toRow: 2, toColumn: 0, kind: .joinExisting))
         XCTAssertTrue(hasSegment(layout, fromRow: 1, fromColumn: 1, toRow: 2, toColumn: 2, kind: .branchOut))
         // No segment ever starts and ends in the same column as the merge node.
         XCTAssertFalse(layout.segments.contains {
@@ -158,8 +158,94 @@ final class GraphLayoutTests: XCTestCase {
         // than widening the graph, then itself folds into lane 0 (which expects r).
         XCTAssertEqual(layout.columnCount, 2)
         XCTAssertEqual(layout.nodes.map(\.column), [0, 0, 1, 1, 0])
-        XCTAssertTrue(hasSegment(layout, fromRow: 2, fromColumn: 1, toRow: 2, toColumn: 0, kind: .joinExisting))
-        XCTAssertTrue(hasSegment(layout, fromRow: 3, fromColumn: 1, toRow: 3, toColumn: 0, kind: .joinExisting))
+        XCTAssertTrue(hasSegment(layout, fromRow: 2, fromColumn: 1, toRow: 3, toColumn: 0, kind: .joinExisting))
+        XCTAssertTrue(hasSegment(layout, fromRow: 3, fromColumn: 1, toRow: 4, toColumn: 0, kind: .joinExisting))
+    }
+
+    /// Truncated history: the last row folds into a lane whose parent lies
+    /// below the loaded window, so the join must reach toRow == commitCount
+    /// (clipped at the canvas bottom) instead of stopping short.
+    func testLastRowFoldReachesCommitCount() {
+        let layout = GraphLayout.layout(commits: [
+            commit("a", parents: ["ghost"]),
+            commit("b", parents: ["ghost"]),
+        ])
+        XCTAssertTrue(hasSegment(layout, fromRow: 1, fromColumn: 1,
+                                 toRow: 2, toColumn: 0, kind: .joinExisting))
+    }
+
+    // MARK: - Attachment invariant
+
+    /// Deterministic RNG so a failing history reproduces from its seed.
+    private struct SplitMix64 {
+        var state: UInt64
+        mutating func next() -> UInt64 {
+            state &+= 0x9E3779B97F4A7C15
+            var z = state
+            z = (z ^ (z >> 30)) &* 0xBF58476D1CE4E5B9
+            z = (z ^ (z >> 27)) &* 0x94D049BB133111EB
+            return z ^ (z >> 31)
+        }
+        mutating func next(_ bound: Int) -> Int { Int(next() % UInt64(bound)) }
+    }
+
+    /// A random newest-first, topologically ordered history: every parent is
+    /// drawn from the commits below it. Includes merges, octopus merges, and
+    /// disconnected roots.
+    private func randomHistory(count: Int, seed: Int) -> [Commit] {
+        var rng = SplitMix64(state: UInt64(seed))
+        var commits: [Commit] = []
+        for i in 0..<count {
+            var parents: [String] = []
+            if i < count - 1 {
+                let parentCount: Int
+                switch rng.next(10) {
+                case 0: parentCount = 0                    // occasional mid-history root
+                case 1, 2: parentCount = 2 + rng.next(2)   // merge, sometimes octopus
+                default: parentCount = 1
+                }
+                var chosen = Set<Int>()
+                for _ in 0..<parentCount {
+                    let j = i + 1 + rng.next(count - i - 1)
+                    if chosen.insert(j).inserted {
+                        parents.append("c\(j)")
+                    }
+                }
+                if parents.isEmpty && parentCount > 0 {
+                    parents.append("c\(i + 1)")
+                }
+            }
+            commits.append(commit("c\(i)", parents: parents))
+        }
+        return commits
+    }
+
+    /// Every segment endpoint must visibly attach: land on a node, meet another
+    /// segment's endpoint, or run off the bottom edge of a truncated history.
+    /// Anything else draws a line that stops in mid-air — with row-edge (rather
+    /// than center-line) endpoints this showed up as the first commit after a
+    /// branch point floating half a row off its lane.
+    func testEverySegmentEndpointAttaches() {
+        for seed in 0..<60 {
+            let commits = randomHistory(count: 30, seed: seed)
+            let layout = GraphLayout.layout(commits: commits)
+
+            let nodePoints = Set(layout.nodes.map { "\($0.row):\($0.column)" })
+            var endpointRefs: [String: Int] = [:]
+            for s in layout.segments {
+                endpointRefs["\(s.fromRow):\(s.fromColumn)", default: 0] += 1
+                endpointRefs["\(s.toRow):\(s.toColumn)", default: 0] += 1
+            }
+            for s in layout.segments {
+                let start = "\(s.fromRow):\(s.fromColumn)"
+                let end = "\(s.toRow):\(s.toColumn)"
+                XCTAssertTrue(nodePoints.contains(start) || (endpointRefs[start] ?? 0) > 1,
+                              "seed \(seed): \(s.kind) starts detached at \(start)")
+                XCTAssertTrue(nodePoints.contains(end) || (endpointRefs[end] ?? 0) > 1
+                              || s.toRow == commits.count,
+                              "seed \(seed): \(s.kind) ends detached at \(end)")
+            }
+        }
     }
 
     // MARK: - Colors
