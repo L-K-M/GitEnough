@@ -15,7 +15,11 @@ struct ContentView: View {
                 .navigationSplitViewColumnWidth(min: 200, ideal: 250, max: 340)
         } detail: {
             if let repo = appState.selectedRepository {
+                // Distinct identity per repo: view-local state (history
+                // filter, selections, sheet drafts) must not leak across a
+                // repository switch.
                 RepoDetailView(repo: repo, viewModel: appState.viewModel(for: repo))
+                    .id(repo.path)
             } else {
                 WelcomeView()
             }
