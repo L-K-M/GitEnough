@@ -10,7 +10,12 @@ struct SidebarView: View {
     @EnvironmentObject var store: RepoStore
     @AppStorage("sidebarSortOrder") private var sortOrderRaw = SidebarSortOrder.manual.rawValue
     @State private var filterText = ""
-    @State private var dropErrorMessage: String?
+    @State private var dropFailures: [String] = []
+
+    private var dropErrorPresented: Binding<Bool> {
+        Binding(get: { !dropFailures.isEmpty },
+                set: { if !$0 { dropFailures = [] } })
+    }
 
     private var sortOrder: SidebarSortOrder {
         SidebarSortOrder(rawValue: sortOrderRaw) ?? .manual
@@ -82,7 +87,8 @@ struct SidebarView: View {
         .alert("Couldn’t Add Repository", isPresented: dropErrorPresented) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text(dropErrorMessage ?? "")
+            // One line per failed drop — a multi-folder drop can fail partly.
+            Text(dropFailures.joined(separator: "\n"))
         }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
@@ -137,11 +143,6 @@ struct SidebarView: View {
             }
     }
 
-    private var dropErrorPresented: Binding<Bool> {
-        Binding(get: { dropErrorMessage != nil },
-                set: { if !$0 { dropErrorMessage = nil } })
-    }
-
     private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
         var accepted = false
         for provider in providers where provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
@@ -155,11 +156,13 @@ struct SidebarView: View {
                 }
                 guard let url else { return }
                 DispatchQueue.main.async {
-                    // addRepository's failure path only feeds the Add sheet's
-                    // error label — from a drop there is no sheet, so surface
-                    // the failure here instead of swallowing it silently.
+                    // addRepository's failure only feeds the Add sheet's error
+                    // label — from a drop there is no sheet, so collect the
+                    // real message per failed folder and alert instead of
+                    // swallowing it silently.
                     if !appState.addRepository(at: url) {
-                        dropErrorMessage = "“\(url.lastPathComponent)” is not inside a git repository."
+                        dropFailures.append(appState.addRepositoryError
+                            ?? "“\(url.lastPathComponent)” couldn’t be added.")
                     }
                 }
             }
