@@ -340,7 +340,11 @@ final class GitClient {
         func stateExists(_ relative: String) -> Bool {
             fileManager.fileExists(atPath: gitDir.appendingPathComponent(relative).path)
         }
-        if stateExists("rebase-merge") || stateExists("rebase-apply") { return .rebase }
+        // Same detection git's own shell prompt uses: rebase-merge is always a
+        // rebase; rebase-apply is also created by `git am`, whose `applying`
+        // marker file distinguishes it.
+        if stateExists("rebase-merge") { return .rebase }
+        if stateExists("rebase-apply"), !stateExists("rebase-apply/applying") { return .rebase }
         if stateExists("CHERRY_PICK_HEAD") { return .cherryPick }
         if stateExists("REVERT_HEAD") { return .revert }
         let mergeHead = (try? mergeHead()) ?? nil
@@ -363,7 +367,9 @@ final class GitClient {
                 if ref.hasPrefix("refs/heads/") {
                     return "Rebasing \(String(ref.dropFirst("refs/heads/".count)))"
                 }
-                if !ref.isEmpty { return "Rebasing \(ref)" }
+                // A detached-HEAD rebase writes the literal "detached" here;
+                // the generic "Rebase in progress" beats "Rebasing detached".
+                if ref != "detached", !ref.isEmpty { return "Rebasing \(ref)" }
             }
             return nil
         case .cherryPick:
