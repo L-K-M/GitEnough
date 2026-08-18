@@ -170,7 +170,9 @@ final class PullRequestFinderTests: XCTestCase {
     private func stubbedFinder() -> PullRequestFinder {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [MockURLProtocol.self]
-        return PullRequestFinder(session: URLSession(configuration: configuration))
+        let session = URLSession(configuration: configuration)
+        addTeardownBlock { session.finishTasksAndInvalidate() }
+        return PullRequestFinder(session: session)
     }
 
     func testGitLabKindHitsGitLabEndpoint() async {
@@ -229,8 +231,14 @@ final class PullRequestFinderTests: XCTestCase {
 /// stay free of test scaffolding.
 final class MockURLProtocol: URLProtocol {
 
-    /// Set before each test; returns (response, body) for a request.
-    static var handler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
+    /// Set before each test; returns (response, body) for a request. Locked:
+    /// URLProtocol callbacks run on URLSession's internal threads.
+    private static let lock = NSLock()
+    private static var _handler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
+    static var handler: ((URLRequest) throws -> (HTTPURLResponse, Data))? {
+        get { lock.lock(); defer { lock.unlock() }; return _handler }
+        set { lock.lock(); defer { lock.unlock() }; _handler = newValue }
+    }
 
     static func ok(_ url: URL) -> HTTPURLResponse {
         HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!
