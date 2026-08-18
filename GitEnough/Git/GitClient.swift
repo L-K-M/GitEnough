@@ -36,8 +36,11 @@ final class GitClient {
             log.finish(id, exitCode: result.exitCode, stderr: result.stderr)
             return result
         } catch {
-            log.finish(id, exitCode: (error as? GitError)?.exitCode,
-                       stderr: error.localizedDescription)
+            // GitError.message carries git's real stderr (hook output!) — never
+            // fall back to a generic localizedDescription for git failures.
+            let gitError = error as? GitError
+            log.finish(id, exitCode: gitError?.exitCode,
+                       stderr: gitError?.message ?? error.localizedDescription)
             throw error
         }
     }
@@ -54,8 +57,9 @@ final class GitClient {
             log.finish(id, exitCode: result.exitCode, stderr: result.stderr)
             return result
         } catch {
-            log.finish(id, exitCode: (error as? GitError)?.exitCode,
-                       stderr: error.localizedDescription)
+            let gitError = error as? GitError
+            log.finish(id, exitCode: gitError?.exitCode,
+                       stderr: gitError?.message ?? error.localizedDescription)
             throw error
         }
     }

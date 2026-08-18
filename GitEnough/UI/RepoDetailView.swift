@@ -203,7 +203,8 @@ struct RepoDetailView: View {
             }
             // What is actually running right now — the difference between "slow
             // fetch" and "pre-commit hook executing the test suite for 3 min".
-            if let running = viewModel.runningActivityEntry {
+            // Rarely more than one (merge tool overlapping a queue op).
+            ForEach(viewModel.runningActivityEntries) { running in
                 HStack(spacing: 4) {
                     Image(systemName: "terminal")
                     Text("git \(running.command)")

@@ -91,6 +91,9 @@ struct ActivityLogView: View {
         }
         let minutes = Int(seconds) / 60
         let rest = Int(seconds) % 60
+        if minutes >= 60 {
+            return "\(minutes / 60)h \(minutes % 60)m"
+        }
         return "\(minutes)m \(rest)s"
     }
 }

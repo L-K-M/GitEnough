@@ -48,10 +48,10 @@ final class RepoViewModel: ObservableObject, Identifiable {
     let activityLog = GitActivityLog()
     @Published private(set) var activityEntries: [GitActivityLog.Entry] = []
 
-    /// The git command running right now, if any (at most one — the queue is
-    /// serial; the merge tool is the one off-queue exception).
-    var runningActivityEntry: GitActivityLog.Entry? {
-        activityEntries.last(where: { $0.isRunning })
+    /// The git commands running right now — usually zero or one (the queue is
+    /// serial), but a merge tool runs off-queue and can overlap with repo ops.
+    var runningActivityEntries: [GitActivityLog.Entry] {
+        activityEntries.filter { $0.isRunning }
     }
 
     /// Non-blocking indicator while an external merge tool is open. Unlike
