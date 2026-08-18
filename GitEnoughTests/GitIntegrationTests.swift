@@ -170,6 +170,54 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertTrue(try client.stashList().isEmpty)
     }
 
+    func testStashCommitsAreExcludedFromHistory() throws {
+        let before = try client.log(limit: 50)
+        XCTAssertEqual(before.count, 4)
+
+        try write("dirty\n", to: "a.txt")
+        try client.stashPush(message: "wip", includeUntracked: false)
+        XCTAssertFalse(try client.stashList().isEmpty)
+        defer { try? run(["stash", "drop", "stash@{0}"]) }
+
+        // Stashing must not change the visible graph. Without --exclude=refs/stash,
+        // --all leaks the stash's synthetic WIP/index commits as extra lanes.
+        let after = try client.log(limit: 50)
+        XCTAssertEqual(after.map(\.hash), before.map(\.hash))
+    }
+
+    func testSyntheticToolRefsAreExcludedFromHistory() throws {
+        // A commit reachable ONLY through filter-branch-style backup refs, bisect
+        // markers, prefetch refs, notes, and rewrite bookkeeping must not leak
+        // into the graph — every hidden namespace gets covered.
+        try run(["checkout", "-b", "scratch"])
+        try write("scratch\n", to: "scratch.txt")
+        try run(["add", "scratch.txt"])
+        try run(["commit", "-m", "Scratch commit"])
+        let scratchHash = try GitShell.shared.runChecked(
+            ["-C", repoURL.path, "rev-parse", "HEAD"], in: nil).stdout
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        try run(["checkout", "-"])  // back to where we came from (main)
+        try run(["branch", "-D", "scratch"])
+        let hiddenRefs = ["refs/original/refs/heads/scratch",
+                          "refs/bisect/bad",
+                          "refs/prefetch/remotes/origin/main",
+                          "refs/notes/commits",
+                          "refs/rewritten/scratch"]
+        // Register cleanup *before* creation so a mid-loop throw still unwinds.
+        defer {
+            for ref in hiddenRefs {
+                try? run(["update-ref", "-d", ref])
+            }
+        }
+        for ref in hiddenRefs {
+            try run(["update-ref", ref, scratchHash])
+        }
+
+        let commits = try client.log(limit: 50)
+        XCTAssertEqual(commits.count, 4)
+        XCTAssertFalse(commits.contains { $0.hash == scratchHash })
+    }
+
     func testMergeConflictDetectionAndOursResolution() throws {
         // Create a conflicting change on a second branch.
         try run(["checkout", "-b", "conflicter"])
