@@ -42,6 +42,44 @@ struct HistoryView: View {
     }
 
     var body: some View {
+        // Split into two builder expressions (core + dialogs): as one giant
+        // expression this body timed the Swift type-checker out on CI.
+        historyCore
+        .sheet(item: $commitForNewBranch) { commit in
+            newBranchSheet(for: commit)
+        }
+        .sheet(item: $commitToTag) { commit in
+            newTagSheet(for: commit)
+        }
+        .confirmationDialog("Check out \(commitToCheckout?.shortHash ?? "")?",
+                            isPresented: checkoutConfirmationPresented,
+                            titleVisibility: .visible) {
+            Button("Check Out Commit") {
+                if let commit = commitToCheckout {
+                    viewModel.checkoutCommit(commit.hash)
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This detaches HEAD at \(commitToCheckout?.shortHash ?? ""). New commits here won't belong to any branch unless you create one.")
+        }
+        .confirmationDialog("Reset current branch to \(commitToReset?.shortHash ?? "")?",
+                            isPresented: resetConfirmationPresented,
+                            titleVisibility: .visible) {
+            Button("Soft — keep index and worktree") {
+                if let c = commitToReset { viewModel.reset(to: c.hash, mode: .soft) }
+            }
+            Button("Mixed — keep worktree, reset index") {
+                if let c = commitToReset { viewModel.reset(to: c.hash, mode: .mixed) }
+            }
+            Button("Hard — discard everything", role: .destructive) {
+                if let c = commitToReset { viewModel.reset(to: c.hash, mode: .hard) }
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+    }
+
+    private var historyCore: some View {
         // HStack + fixed-width detail, not HSplitView: an HSplitView inside a
         // NavigationSplitView's detail column redistributes its panes when the
         // detail content swaps between placeholder and commit (selecting a
@@ -75,38 +113,6 @@ struct HistoryView: View {
             if let selectedHash, !hashes.contains(selectedHash) {
                 self.selectedHash = nil
             }
-        }
-        .sheet(item: $commitForNewBranch) { commit in
-            newBranchSheet(for: commit)
-        }
-        .sheet(item: $commitToTag) { commit in
-            newTagSheet(for: commit)
-        }
-        .confirmationDialog("Check out \(commitToCheckout?.shortHash ?? "")?",
-                            isPresented: checkoutConfirmationPresented,
-                            titleVisibility: .visible) {
-            Button("Check Out Commit") {
-                if let commit = commitToCheckout {
-                    viewModel.checkoutCommit(commit.hash)
-                }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("This detaches HEAD at \(commitToCheckout?.shortHash ?? ""). New commits here won't belong to any branch unless you create one.")
-        }
-        .confirmationDialog("Reset current branch to \(commitToReset?.shortHash ?? "")?",
-                            isPresented: resetConfirmationPresented,
-                            titleVisibility: .visible) {
-            Button("Soft — keep index and worktree") {
-                if let c = commitToReset { viewModel.reset(to: c.hash, mode: .soft) }
-            }
-            Button("Mixed — keep worktree, reset index") {
-                if let c = commitToReset { viewModel.reset(to: c.hash, mode: .mixed) }
-            }
-            Button("Hard — discard everything", role: .destructive) {
-                if let c = commitToReset { viewModel.reset(to: c.hash, mode: .hard) }
-            }
-            Button("Cancel", role: .cancel) {}
         }
     }
 
