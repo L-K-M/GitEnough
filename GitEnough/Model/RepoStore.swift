@@ -135,6 +135,10 @@ final class RepoStore: ObservableObject {
         UserDefaults.standard.set(Array(excludedPaths), forKey: excludedKey)
     }
 
+    private func persistStars() {
+        UserDefaults.standard.set(Array(starredPaths), forKey: starredKey)
+    }
+
     /// Registers an already-validated repository (validation — the git calls —
     /// is the caller's job and must happen off the main thread; see
     /// AppState.addRepository). A manual add also cancels a previous removal
@@ -151,8 +155,8 @@ final class RepoStore: ObservableObject {
             if excludedPaths.remove(repo.path) != nil { persistExclusions() }
             return existing
         }
-        let insertAt = repositories.lastIndex(where: { starredPaths.contains($0.path) })
-            .map { $0 + 1 } ?? 0
+        let insertAt = repositories.firstIndex(where: { !starredPaths.contains($0.path) })
+            ?? repositories.count
         repositories.insert(repo, at: insertAt)
         persist()
         if excludedPaths.remove(repo.path) != nil { persistExclusions() }
@@ -179,6 +183,11 @@ final class RepoStore: ObservableObject {
         repositories.removeAll { $0 == repo }
         summaries.removeValue(forKey: repo.path)
         excludedPaths.insert(repo.path)
+        // The star goes with the repo: starredPaths must only ever contain
+        // registered paths, or its count could never again be used as an index
+        // basis — and a removed repo re-added later shouldn't silently re-pin.
+        starredPaths.remove(repo.path)
+        persistStars()
         persistExclusions()
         persist()
     }
@@ -186,15 +195,15 @@ final class RepoStore: ObservableObject {
     /// Applies a sidebar drag expressed in *visible* row coordinates. The
     /// visible list (starred pinned first, then the rest) is a permutation of
     /// `repositories`, so the move is applied there; starred-first is
-    /// re-imposed afterwards, which keeps a drag across the star boundary from
-    /// burying a starred repo below the fold.
+    /// re-imposed afterwards, which keeps the persisted manual order aligned
+    /// with what the user sees (the sidebar re-derives the grouping on every
+    /// render regardless).
     func moveVisible(_ visible: [Repository], fromOffsets: IndexSet, toOffset: Int) {
         guard visible.count == repositories.count,
               Set(visible.map(\.path)) == Set(repositories.map(\.path)) else { return }
         var moved = visible
         moved.move(fromOffsets: fromOffsets, toOffset: toOffset)
-        repositories = moved.filter { starredPaths.contains($0.path) }
-            + moved.filter { !starredPaths.contains($0.path) }
+        repositories = Self.starredFirst(moved, starred: starredPaths)
         persist()
     }
 
@@ -204,32 +213,22 @@ final class RepoStore: ObservableObject {
         starredPaths.contains(repo.path)
     }
 
-    /// Stars or unstars `repo`. The list array keeps a starred-first invariant
-    /// (starred block at the front, in manual order): starring hoists the repo
-    /// to the bottom of that block, unstarring parks it at the top of the
-    /// unstarred one. The sidebar derives the same grouping for the name and
-    /// recently-opened sorts, so starring applies in every order either way.
+    /// Stars or unstars `repo`. The stored order is left untouched — the sidebar
+    /// displays starred repositories first in every sort order (see
+    /// `starredFirst(_:starred:)`), so unstarring always restores the exact
+    /// manual arrangement there was before.
     func toggleStar(_ repo: Repository) {
-        let wasStarred = starredPaths.contains(repo.path)
-        if wasStarred {
+        if !starredPaths.insert(repo.path).inserted {
             starredPaths.remove(repo.path)
-        } else {
-            starredPaths.insert(repo.path)
         }
-        UserDefaults.standard.set(Array(starredPaths), forKey: starredKey)
+        persistStars()
+    }
 
-        // Not registered (the sidebar only stars listed repos) — flag alone.
-        guard let index = repositories.firstIndex(of: repo) else { return }
-        if wasStarred {
-            // The starred block just shrank by one; park the repo right below it.
-            repositories.move(fromOffsets: IndexSet(integer: index),
-                              toOffset: starredPaths.count)
-        } else {
-            // Hoist it to the bottom of the (now larger) starred block.
-            repositories.move(fromOffsets: IndexSet(integer: index),
-                              toOffset: starredPaths.count - 1)
-        }
-        persist()
+    /// Repositories in sidebar display order: starred ones pinned above the
+    /// unstarred ones, each block keeping its incoming order. Pure, so the
+    /// sidebar's grouping (the user-facing contract of starring) is testable.
+    static func starredFirst(_ repos: [Repository], starred: Set<String>) -> [Repository] {
+        repos.filter { starred.contains($0.path) } + repos.filter { !starred.contains($0.path) }
     }
 
     /// Records that `repo` was selected (feeds the "Recently Opened" sort).

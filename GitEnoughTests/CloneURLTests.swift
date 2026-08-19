@@ -49,7 +49,20 @@ final class CloneURLTests: XCTestCase {
     func testUnderivableNamesAreNil() {
         XCTAssertNil(CloneURL("").suggestedFolderName)
         XCTAssertNil(CloneURL("   ").suggestedFolderName)
-        XCTAssertNil(CloneURL("https://github.com/owner/.git").suggestedFolderName)
         XCTAssertNil(CloneURL("/").suggestedFolderName)
+        // Would resolve outside the chosen destination folder; git refuses to
+        // guess names for these too.
+        XCTAssertNil(CloneURL("https://host/owner/..").suggestedFolderName)
+        XCTAssertNil(CloneURL("https://host/owner/repo/..").suggestedFolderName)
+        XCTAssertNil(CloneURL("https://host/owner/." ).suggestedFolderName)
+    }
+
+    func testTrailingDotGitComponentFallsBackLikeGit() {
+        // Cloning the bare-repo URL "…/repo/.git" lands in "repo", like git.
+        XCTAssertEqual(CloneURL("https://github.com/owner/repo/.git").suggestedFolderName,
+                       "repo")
+        XCTAssertEqual(CloneURL("https://github.com/owner/.git").suggestedFolderName,
+                       "owner")
+        XCTAssertEqual(CloneURL("https://host/.git").suggestedFolderName, "host")
     }
 }

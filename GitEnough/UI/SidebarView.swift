@@ -77,13 +77,15 @@ struct SidebarView: View {
         }
         // Starred repos pin above the unstarred ones in every sort order. The
         // partition is stable, so each block keeps the order chosen above.
-        return repos.filter { store.isStarred($0) } + repos.filter { !store.isStarred($0) }
+        return RepoStore.starredFirst(repos, starred: store.starredPaths)
     }
 
     /// How many registered repositories the logical filter currently hides
     /// (shown as a footer hint, so an unexpectedly short list is explainable).
+    /// Suppressed while a text query is active — the search field itself
+    /// explains that narrowing.
     private var hiddenByFilterCount: Int {
-        guard sidebarFilter != .all else { return 0 }
+        guard sidebarFilter != .all, filterText.isEmpty else { return 0 }
         return store.repositories.filter { repo in
             repo.path != appState.selectedRepoPath && !matchesLogicalFilter(repo)
         }.count
@@ -175,11 +177,13 @@ struct SidebarView: View {
     }
 
     /// Scrolls the sidebar so a freshly added repository is on screen. Deferred
-    /// one runloop turn so the List has actually inserted the row first.
+    /// one runloop turn so the List has actually inserted the row first, and
+    /// clears the cue afterwards so re-adding the same repository re-reveals it.
     private func reveal(_ path: String?, with proxy: ScrollViewProxy) {
         guard let path else { return }
         DispatchQueue.main.async {
             withAnimation { proxy.scrollTo(path, anchor: .center) }
+            appState.lastAddedRepoPath = nil
         }
     }
 

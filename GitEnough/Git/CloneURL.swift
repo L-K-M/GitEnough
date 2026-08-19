@@ -14,7 +14,8 @@ struct CloneURL {
     }
 
     /// The suggested clone destination folder name, or nil when no sensible
-    /// name can be derived (empty/whitespace-only URL, or a trailing `.git`).
+    /// name can be derived (empty/whitespace-only URL, or a `.`/`..` component
+    /// that would escape the chosen destination folder).
     var suggestedFolderName: String? {
         var url = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
         while url.hasSuffix("/") { url.removeLast() }
@@ -29,9 +30,20 @@ struct CloneURL {
             url = String(url[url.index(after: colon)...])
         }
 
-        guard let last = url.components(separatedBy: "/").last else { return nil }
+        // git strips a trailing "/.git" component and names the folder after
+        // what precedes it (cloning "…/repo/.git" — a bare-repo URL — lands in
+        // "repo", not in an empty name).
+        var components = url.components(separatedBy: "/")
+        if components.last == ".git", components.count > 1 {
+            components.removeLast()
+        }
+
+        guard let last = components.last else { return nil }
         // hasSuffix guarantees >= 4 characters, so dropLast(4) is safe.
         let name = last.hasSuffix(".git") ? String(last.dropLast(4)) : last
-        return name.isEmpty ? nil : name
+        // "." and ".." would resolve outside the chosen destination folder;
+        // git refuses to guess a name for these too.
+        guard !name.isEmpty, name != ".", name != ".." else { return nil }
+        return name
     }
 }
