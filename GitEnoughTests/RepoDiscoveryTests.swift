@@ -95,17 +95,20 @@ final class RepoStoreTests: XCTestCase {
     private let repositoryKey = "repositories.v1"
     private let excludedKey = "excludedRepositories.v1"
     private let lastOpenedKey = "repoLastOpened.v1"
+    private let starredKey = "starredRepositories.v1"
 
     override func setUpWithError() throws {
         UserDefaults.standard.removeObject(forKey: repositoryKey)
         UserDefaults.standard.removeObject(forKey: excludedKey)
         UserDefaults.standard.removeObject(forKey: lastOpenedKey)
+        UserDefaults.standard.removeObject(forKey: starredKey)
     }
 
     override func tearDownWithError() throws {
         UserDefaults.standard.removeObject(forKey: repositoryKey)
         UserDefaults.standard.removeObject(forKey: excludedKey)
         UserDefaults.standard.removeObject(forKey: lastOpenedKey)
+        UserDefaults.standard.removeObject(forKey: starredKey)
     }
 
     func testDiscoveryAddsEachRepositoryOnlyOnce() {
@@ -170,5 +173,68 @@ final class RepoStoreTests: XCTestCase {
         XCTAssertNotNil(store.lastOpenedAt[repo.path])
         // Survives a store reload.
         XCTAssertNotNil(RepoStore().lastOpenedAt[repo.path])
+    }
+
+    func testManualAddInsertsAtTopOfUnstarredBlock() {
+        let store = RepoStore()
+        _ = store.register(Repository(path: "/tmp/a", name: "a"))
+        _ = store.register(Repository(path: "/tmp/b", name: "b"))
+        // Newest first — a manual add is something the user just did and is
+        // looking for; a bottom-of-the-list append reads as "didn't appear".
+        XCTAssertEqual(store.repositories.map(\.name), ["b", "a"])
+
+        // Starring pins above new additions too.
+        store.toggleStar(store.repositories.last!)   // a
+        _ = store.register(Repository(path: "/tmp/c", name: "c"))
+        XCTAssertEqual(store.repositories.map(\.name), ["a", "c", "b"])
+    }
+
+    func testStarringPersistsAcrossReload() {
+        let store = RepoStore()
+        let repo = Repository(path: "/tmp/repo", name: "repo")
+        _ = store.register(repo)
+        XCTAssertFalse(store.isStarred(repo))
+
+        store.toggleStar(repo)
+        XCTAssertTrue(store.isStarred(repo))
+        XCTAssertTrue(RepoStore().isStarred(repo))   // survives a store reload
+
+        store.toggleStar(repo)
+        XCTAssertFalse(store.isStarred(repo))
+        XCTAssertFalse(RepoStore().isStarred(repo))
+    }
+
+    func testMoveVisibleAppliesDragAndKeepsStarredFirst() {
+        let store = RepoStore()
+        _ = store.register(Repository(path: "/tmp/a", name: "a"))
+        _ = store.register(Repository(path: "/tmp/b", name: "b"))
+        _ = store.register(Repository(path: "/tmp/c", name: "c"))
+        // Store order is [c, b, a] (manual adds insert at top); star "a".
+        store.toggleStar(store.repositories.last!)
+
+        // The visible list pins "a" first: [a, c, b]. Drag "b" to the top.
+        let visible = [
+            Repository(path: "/tmp/a", name: "a"),
+            Repository(path: "/tmp/c", name: "c"),
+            Repository(path: "/tmp/b", name: "b"),
+        ]
+        store.moveVisible(visible, fromOffsets: IndexSet(integer: 2), toOffset: 0)
+        // "b" wins the unstarred block, but the starred "a" still pins above it.
+        XCTAssertEqual(store.repositories.map(\.name), ["a", "b", "c"])
+
+        // The reordered list survives a reload.
+        XCTAssertEqual(RepoStore().repositories.map(\.name), ["a", "b", "c"])
+    }
+
+    func testMoveVisibleIgnoresMismatchedVisibleList() {
+        let store = RepoStore()
+        _ = store.register(Repository(path: "/tmp/a", name: "a"))
+        _ = store.register(Repository(path: "/tmp/b", name: "b"))
+        // A visible list that isn't a permutation of the store (e.g. filtered)
+        // must not corrupt the manual order — the sidebar only attaches onMove
+        // when unfiltered, and this guard keeps that promise honest.
+        store.moveVisible([Repository(path: "/nope", name: "nope")],
+                          fromOffsets: IndexSet(integer: 0), toOffset: 0)
+        XCTAssertEqual(Set(store.repositories.map(\.name)), ["a", "b"])
     }
 }

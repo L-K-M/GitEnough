@@ -95,9 +95,14 @@ final class RepoStore: ObservableObject {
     /// path → last-opened timestamp, for the "Recently Opened" sort order.
     @Published private(set) var lastOpenedAt: [String: TimeInterval] = [:]
 
+    /// Paths of starred repositories — pinned above the unstarred ones in every
+    /// sidebar sort order.
+    @Published private(set) var starredPaths: Set<String> = []
+
     private let defaultsKey = "repositories.v1"
     private let excludedKey = "excludedRepositories.v1"
     private let lastOpenedKey = "repoLastOpened.v1"
+    private let starredKey = "starredRepositories.v1"
 
     /// Paths the user removed — excluded from discovery until manually re-added.
     private var excludedPaths: Set<String> = []
@@ -105,6 +110,7 @@ final class RepoStore: ObservableObject {
     init() {
         load()
         excludedPaths = Set(UserDefaults.standard.stringArray(forKey: excludedKey) ?? [])
+        starredPaths = Set(UserDefaults.standard.stringArray(forKey: starredKey) ?? [])
         if let data = UserDefaults.standard.data(forKey: lastOpenedKey),
            let decoded = try? JSONDecoder().decode([String: TimeInterval].self, from: data) {
             lastOpenedAt = decoded
@@ -133,13 +139,21 @@ final class RepoStore: ObservableObject {
     /// is the caller's job and must happen off the main thread; see
     /// AppState.addRepository). A manual add also cancels a previous removal
     /// (discovery may re-offer it).
+    ///
+    /// Manual adds insert at the top of the unstarred block rather than
+    /// appending: the repository the user just added is the one they're looking
+    /// for, and at the bottom of a long manually-sorted list an append reads as
+    /// "it didn't show up". (Discovery keeps appending — its finds are
+    /// background additions, not user actions.)
     @discardableResult
     func register(_ repo: Repository) -> Repository {
         if let existing = repositories.first(where: { $0 == repo }) {
             if excludedPaths.remove(repo.path) != nil { persistExclusions() }
             return existing
         }
-        repositories.append(repo)
+        let insertAt = repositories.lastIndex(where: { starredPaths.contains($0.path) })
+            .map { $0 + 1 } ?? 0
+        repositories.insert(repo, at: insertAt)
         persist()
         if excludedPaths.remove(repo.path) != nil { persistExclusions() }
         return repo
@@ -169,8 +183,52 @@ final class RepoStore: ObservableObject {
         persist()
     }
 
-    func move(fromOffsets: IndexSet, toOffset: Int) {
-        repositories.move(fromOffsets: fromOffsets, toOffset: toOffset)
+    /// Applies a sidebar drag expressed in *visible* row coordinates. The
+    /// visible list (starred pinned first, then the rest) is a permutation of
+    /// `repositories`, so the move is applied there; starred-first is
+    /// re-imposed afterwards, which keeps a drag across the star boundary from
+    /// burying a starred repo below the fold.
+    func moveVisible(_ visible: [Repository], fromOffsets: IndexSet, toOffset: Int) {
+        guard visible.count == repositories.count,
+              Set(visible.map(\.path)) == Set(repositories.map(\.path)) else { return }
+        var moved = visible
+        moved.move(fromOffsets: fromOffsets, toOffset: toOffset)
+        repositories = moved.filter { starredPaths.contains($0.path) }
+            + moved.filter { !starredPaths.contains($0.path) }
+        persist()
+    }
+
+    // MARK: - Starring
+
+    func isStarred(_ repo: Repository) -> Bool {
+        starredPaths.contains(repo.path)
+    }
+
+    /// Stars or unstars `repo`. The list array keeps a starred-first invariant
+    /// (starred block at the front, in manual order): starring hoists the repo
+    /// to the bottom of that block, unstarring parks it at the top of the
+    /// unstarred one. The sidebar derives the same grouping for the name and
+    /// recently-opened sorts, so starring applies in every order either way.
+    func toggleStar(_ repo: Repository) {
+        let wasStarred = starredPaths.contains(repo.path)
+        if wasStarred {
+            starredPaths.remove(repo.path)
+        } else {
+            starredPaths.insert(repo.path)
+        }
+        UserDefaults.standard.set(Array(starredPaths), forKey: starredKey)
+
+        // Not registered (the sidebar only stars listed repos) — flag alone.
+        guard let index = repositories.firstIndex(of: repo) else { return }
+        if wasStarred {
+            // The starred block just shrank by one; park the repo right below it.
+            repositories.move(fromOffsets: IndexSet(integer: index),
+                              toOffset: starredPaths.count)
+        } else {
+            // Hoist it to the bottom of the (now larger) starred block.
+            repositories.move(fromOffsets: IndexSet(integer: index),
+                              toOffset: starredPaths.count - 1)
+        }
         persist()
     }
 

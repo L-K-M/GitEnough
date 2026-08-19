@@ -33,6 +33,11 @@ final class AppState: ObservableObject {
     /// New-branch sheet (triggered from the Repository menu, shown by the detail pane).
     @Published var showingNewBranch = false
 
+    /// Path of the most recently added repository. Purely a UI cue: the sidebar
+    /// scrolls to reveal it — in a long manually-sorted list a new bottom/top
+    /// row can otherwise land out of view and read as "didn't appear".
+    @Published var lastAddedRepoPath: String?
+
     private var viewModels: [String: RepoViewModel] = [:]
 
     /// App-wide persistent git command history ("shell history" window).
@@ -129,6 +134,7 @@ final class AppState: ObservableObject {
                 let repo = self.store.register(Repository(url: validated))
                 self.select(repo)
                 self.refreshSummaries()
+                self.lastAddedRepoPath = repo.path
                 // Success invalidates any previous failure message, sheet or not.
                 self.addRepositoryError = nil
                 completion?(repo)

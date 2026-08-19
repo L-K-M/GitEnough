@@ -33,17 +33,19 @@ struct SidebarView: View {
         )
     }
 
-    /// Repositories after the logical filter, the filter text, and the sort
-    /// order are applied.
+    /// Repositories after the logical filter, the filter text, the sort order,
+    /// and the starred-first grouping are applied.
     private var visibleRepositories: [Repository] {
         var repos = store.repositories
         if sidebarFilter != .all {
             // Summaries load asynchronously; a repo whose state hasn't loaded yet
             // stays visible rather than flashing an empty sidebar on launch (the
-            // filter is persisted, so this hits every cold start).
+            // filter is persisted, so this hits every cold start). The open
+            // repository also always stays listed: a freshly cloned repo is
+            // clean (nothing ahead, behind, or uncommitted) and would otherwise
+            // vanish from the sidebar while its history shows in the detail pane.
             repos = repos.filter { repo in
-                guard let summary = store.summaries[repo.path] else { return true }
-                return sidebarFilter.matches(summary)
+                repo.path == appState.selectedRepoPath || matchesLogicalFilter(repo)
             }
         }
         if !filterText.isEmpty {
@@ -73,96 +75,138 @@ struct SidebarView: View {
                 return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
             }
         }
-        return repos
+        // Starred repos pin above the unstarred ones in every sort order. The
+        // partition is stable, so each block keeps the order chosen above.
+        return repos.filter { store.isStarred($0) } + repos.filter { !store.isStarred($0) }
+    }
+
+    /// How many registered repositories the logical filter currently hides
+    /// (shown as a footer hint, so an unexpectedly short list is explainable).
+    private var hiddenByFilterCount: Int {
+        guard sidebarFilter != .all else { return 0 }
+        return store.repositories.filter { repo in
+            repo.path != appState.selectedRepoPath && !matchesLogicalFilter(repo)
+        }.count
+    }
+
+    private func matchesLogicalFilter(_ repo: Repository) -> Bool {
+        guard let summary = store.summaries[repo.path] else { return true }
+        return sidebarFilter.matches(summary)
     }
 
     var body: some View {
-        List(selection: selection) {
-            Section {
-                if sortOrder == .manual && filterText.isEmpty && sidebarFilter == .all {
-                    ForEach(visibleRepositories) { repo in
-                        rowContent(repo)
-                    }
-                    .onMove { offsets, destination in
-                        store.move(fromOffsets: offsets, toOffset: destination)
-                    }
-                } else {
-                    ForEach(visibleRepositories) { repo in
-                        rowContent(repo)
-                    }
-                }
-            } header: {
-                Text("Repositories")
-            }
-        }
-        .listStyle(.sidebar)
-        .searchable(text: $filterText, placement: .sidebar, prompt: "Filter repositories")
-        .onDrop(of: [UTType.fileURL], isTargeted: nil, perform: handleDrop)
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Menu {
-                    Picker("Show", selection: $filterRaw) {
-                        ForEach(SidebarFilter.allCases) { filter in
-                            Text(filter.displayName).tag(filter.rawValue)
+        ScrollViewReader { proxy in
+            List(selection: selection) {
+                Section {
+                    if sortOrder == .manual && filterText.isEmpty && sidebarFilter == .all {
+                        ForEach(visibleRepositories) { repo in
+                            rowContent(repo)
+                        }
+                        .onMove { offsets, destination in
+                            store.moveVisible(visibleRepositories,
+                                              fromOffsets: offsets, toOffset: destination)
+                        }
+                    } else {
+                        ForEach(visibleRepositories) { repo in
+                            rowContent(repo)
                         }
                     }
-                } label: {
-                    Image(systemName: sidebarFilter == .all
-                          ? "line.3.horizontal.decrease.circle"
-                          : "line.3.horizontal.decrease.circle.fill")
-                }
-                .help("Filter repositories by state")
-            }
-            ToolbarItem(placement: .primaryAction) {
-                Menu {
-                    Picker("Sort by", selection: $sortOrderRaw) {
-                        ForEach(SidebarSortOrder.allCases) { order in
-                            Text(order.rawValue).tag(order.rawValue)
-                        }
+                } header: {
+                    Text("Repositories")
+                } footer: {
+                    if hiddenByFilterCount > 0 {
+                        Text("\(hiddenByFilterCount) hidden by the “\(sidebarFilter.displayName)” filter")
                     }
-                } label: {
-                    Image(systemName: "arrow.up.arrow.down")
                 }
-                .help("Sort repositories")
             }
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    appState.showingAddRepository = true
-                } label: {
-                    Image(systemName: "plus")
+            .listStyle(.sidebar)
+            .searchable(text: $filterText, placement: .sidebar, prompt: "Filter repositories")
+            .onDrop(of: [UTType.fileURL], isTargeted: nil, perform: handleDrop)
+            .onChange(of: appState.lastAddedRepoPath) { _, newPath in
+                reveal(newPath, with: proxy)
+            }
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    Menu {
+                        Picker("Show", selection: $filterRaw) {
+                            ForEach(SidebarFilter.allCases) { filter in
+                                Text(filter.displayName).tag(filter.rawValue)
+                            }
+                        }
+                    } label: {
+                        Image(systemName: sidebarFilter == .all
+                              ? "line.3.horizontal.decrease.circle"
+                              : "line.3.horizontal.decrease.circle.fill")
+                    }
+                    .help("Filter repositories by state")
                 }
-                .help("Add a repository (⌘O)")
+                ToolbarItem(placement: .primaryAction) {
+                    Menu {
+                        Picker("Sort by", selection: $sortOrderRaw) {
+                            ForEach(SidebarSortOrder.allCases) { order in
+                                Text(order.rawValue).tag(order.rawValue)
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "arrow.up.arrow.down")
+                    }
+                    .help("Sort repositories")
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        appState.showingAddRepository = true
+                    } label: {
+                        Image(systemName: "plus")
+                    }
+                    .help("Add a repository (⌘O)")
+                }
+            }
+            .safeAreaInset(edge: .bottom) {
+                if !store.repositories.isEmpty {
+                    Text("Drop a folder to add it")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
+                        .background(.bar)
+                }
             }
         }
-        .safeAreaInset(edge: .bottom) {
-            if !store.repositories.isEmpty {
-                Text("Drop a folder to add it")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 6)
-                    .background(.bar)
-            }
+    }
+
+    /// Scrolls the sidebar so a freshly added repository is on screen. Deferred
+    /// one runloop turn so the List has actually inserted the row first.
+    private func reveal(_ path: String?, with proxy: ScrollViewProxy) {
+        guard let path else { return }
+        DispatchQueue.main.async {
+            withAnimation { proxy.scrollTo(path, anchor: .center) }
         }
     }
 
     @ViewBuilder
     private func rowContent(_ repo: Repository) -> some View {
-        SidebarRow(repo: repo, summary: store.summaries[repo.path] ?? .unknown)
-            .tag(repo.path)
-            .contextMenu {
-                Button("Show in Finder") {
-                    NSWorkspace.shared.activateFileViewerSelecting([repo.url])
-                }
-                Button("Copy Path") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(repo.path, forType: .string)
-                }
-                Divider()
-                Button("Remove from GitEnough") {
-                    appState.remove(repo)
-                }
+        SidebarRow(repo: repo,
+                   summary: store.summaries[repo.path] ?? .unknown,
+                   isStarred: store.isStarred(repo)) {
+            store.toggleStar(repo)
+        }
+        .tag(repo.path)
+        .contextMenu {
+            Button(store.isStarred(repo) ? "Unstar" : "Star") {
+                store.toggleStar(repo)
             }
+            Button("Show in Finder") {
+                NSWorkspace.shared.activateFileViewerSelecting([repo.url])
+            }
+            Button("Copy Path") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(repo.path, forType: .string)
+            }
+            Divider()
+            Button("Remove from GitEnough") {
+                appState.remove(repo)
+            }
+        }
     }
 
     private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
@@ -186,11 +230,15 @@ struct SidebarView: View {
     }
 }
 
-/// One repository row: name, path, branch + dirty/sync state.
+/// One repository row: name, path, branch + dirty/sync state, star toggle.
 private struct SidebarRow: View {
 
     let repo: Repository
     let summary: RepoSummary
+    let isStarred: Bool
+    let toggleStar: () -> Void
+
+    @State private var isHovering = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -204,6 +252,16 @@ private struct SidebarRow: View {
                         .help("This folder is missing or no longer a git repository.")
                 }
                 Spacer()
+                // Hidden unless starred or hovered (opacity, not if/else, so the
+                // row's layout never shifts as the star appears).
+                Button(action: toggleStar) {
+                    Image(systemName: isStarred ? "star.fill" : "star")
+                        .font(.caption)
+                        .foregroundStyle(isStarred ? .yellow : .secondary)
+                }
+                .buttonStyle(.plain)
+                .opacity(isStarred || isHovering ? 1 : 0)
+                .help(isStarred ? "Unstar this repository" : "Star this repository (pinned to the top)")
                 if summary.isDirty {
                     Circle()
                         .fill(Color.accentColor)
@@ -236,6 +294,7 @@ private struct SidebarRow: View {
             }
         }
         .padding(.vertical, 2)
+        .onHover { isHovering = $0 }
     }
 
     private func abbreviatingHome(_ path: String) -> String {
