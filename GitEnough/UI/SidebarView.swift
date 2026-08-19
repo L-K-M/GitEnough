@@ -24,17 +24,17 @@ struct SidebarView: View {
         Binding(
             get: { appState.selectedRepoPath },
             set: { path in
-                guard let path else {
-                    // The List clears the selection when the selected row briefly
-                    // vanishes mid re-render — a transient, not a user gesture
-                    // (this List has no deselect gesture). Letting that nil
-                    // through drops the selection, and with a logical filter
-                    // active the just-deselected repo's row disappears too —
-                    // "the repo deleted itself when I clicked it".
-                    return
-                }
-                if let repo = store.repositories.first(where: { $0.path == path }) {
+                if let path, let repo = store.repositories.first(where: { $0.path == path }) {
                     appState.select(repo)
+                } else if path == nil, let current = appState.selectedRepoPath,
+                          !store.repositories.contains(where: { $0.path == current }) {
+                    // The selected repo is gone for good (removed) — clear the
+                    // dangling selection. A transient nil (the List briefly
+                    // losing the selected row mid re-render) is NOT cleared:
+                    // this List has no deselect gesture, and letting it through
+                    // wiped the selection and — with a logical filter active —
+                    // the clicked repo's row along with it.
+                    appState.selectedRepoPath = nil
                 }
             }
         )

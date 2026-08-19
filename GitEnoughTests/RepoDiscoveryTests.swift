@@ -326,6 +326,7 @@ final class RepoStoreTests: XCTestCase {
                      Repository(path: "/tmp/./some/repo", name: "repo"),
                      Repository(path: "/tmp/other", name: "other")]
         UserDefaults.standard.set(try! JSONEncoder().encode(repos), forKey: repositoryKey)
+        defer { UserDefaults.standard.removeObject(forKey: repositoryKey) }
         let store = RepoStore()
         XCTAssertEqual(store.repositories.map(\.path), ["/tmp/some/repo", "/tmp/other"])
     }

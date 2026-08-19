@@ -10,14 +10,22 @@ struct Repository: Identifiable, Hashable, Codable {
     var id: String { path }
     var url: URL { URL(fileURLWithPath: path) }
 
-    /// The path with `~`, `.`/`..` and symlinks resolved, for identity
-    /// comparisons. The same working copy can arrive spelled differently —
-    /// NSOpenPanel returns the path as browsed, watch-folder discovery resolves
-    /// symlinks, git's --show-toplevel returns the physical path — and storing
-    /// one folder under two spellings breaks sidebar identity (duplicate rows
-    /// whose selection/equality behaves erratically).
+    /// The path with `~` and `.`/`..` resolved and symlinks chased, for
+    /// identity comparisons. The same working copy can arrive spelled
+    /// differently — NSOpenPanel returns the path as browsed, watch-folder
+    /// discovery resolves symlinks, git's --show-toplevel returns the physical
+    /// path — and storing one folder under two spellings breaks sidebar
+    /// identity (duplicate rows whose selection/equality behaves erratically).
     var normalizedPath: String {
-        (path as NSString).standardizingPath
+        Self.normalizedPath(path)
+    }
+
+    /// Path normalization for identity comparisons. `standardizingPath` alone
+    /// keeps symlinks on modern macOS, so chase them explicitly — discovery
+    /// already does (its URLs go through `resolvingSymlinksInPath`).
+    static func normalizedPath(_ path: String) -> String {
+        let standardized = (path as NSString).standardizingPath
+        return URL(fileURLWithPath: standardized).resolvingSymlinksInPath().path
     }
 
     init(path: String, name: String) {
@@ -157,7 +165,7 @@ final class RepoStore: ObservableObject {
     private func clearExclusion(for repo: Repository) {
         let before = excludedPaths.count
         excludedPaths = excludedPaths.filter {
-            ($0 as NSString).standardizingPath != repo.normalizedPath
+            Repository.normalizedPath($0) != repo.normalizedPath
         }
         if excludedPaths.count != before { persistExclusions() }
     }
@@ -195,9 +203,9 @@ final class RepoStore: ObservableObject {
         var added = 0
         for url in urls {
             let path = url.path
-            let normalized = (path as NSString).standardizingPath
+            let normalized = Repository.normalizedPath(path)
             let excluded = excludedPaths.contains {
-                ($0 as NSString).standardizingPath == normalized
+                Repository.normalizedPath($0) == normalized
             }
             let existing = repositories.contains {
                 $0.normalizedPath == normalized
