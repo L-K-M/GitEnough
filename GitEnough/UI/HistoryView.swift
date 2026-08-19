@@ -129,44 +129,7 @@ struct HistoryView: View {
             Divider()
             ScrollView {
                 VStack(spacing: 0) {
-                    LazyVStack(spacing: 0) {
-                        ForEach(Array(visible.enumerated()), id: \.element.id) { row, commit in
-                            HStack(spacing: 0) {
-                                // The graph only aligns with the full, unfiltered
-                                // row sequence — hide it while filtering.
-                                if !isFiltering {
-                                    GraphStripView(layout: viewModel.layout, row: row,
-                                                   isHeadRow: row == headRow,
-                                                   isSelected: commit.hash == selectedHash)
-                                }
-                                CommitRowView(commit: commit,
-                                              isSelected: commit.hash == selectedHash,
-                                              isHead: commit.isHead)
-                            }
-                            .frame(height: GraphMetrics.rowHeight)
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                selectedHash = commit.hash
-                            }
-                            .contextMenu {
-                                commitContextMenu(commit)
-                            }
-                        }
-                        if isFiltering && visible.isEmpty {
-                            VStack(spacing: 4) {
-                                Text("No commits match “\(activeFilter)”")
-                                    .font(.callout)
-                                Text("Only the \(viewModel.commits.count) loaded commits are searched — load older commits to search deeper.")
-                                    .font(.caption)
-                            }
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.center)
-                            .frame(maxWidth: .infinity, alignment: .center)
-                            .padding(.vertical, 24)
-                            .padding(.horizontal, 32)
-                        }
-                    }
-                    .padding(.trailing, 12)
+                    commitRows(visible)
                     if viewModel.canLoadMoreHistory {
                         Button("Load older commits…") {
                             viewModel.loadMoreHistory()
@@ -183,6 +146,59 @@ struct HistoryView: View {
             // list in blank space. Constant ("") while unfiltered.
             .id(activeFilter)
         }
+    }
+
+    // Kept as small, separate @ViewBuilder pieces: one giant builder
+    // expression here sent the type-checker past its time limit.
+    @ViewBuilder
+    private func commitRows(_ visible: [Commit]) -> some View {
+        LazyVStack(spacing: 0) {
+            ForEach(Array(visible.enumerated()), id: \.element.id) { row, commit in
+                historyRow(row: row, commit: commit)
+            }
+            if isFiltering && visible.isEmpty {
+                emptyFilterState
+            }
+        }
+        .padding(.trailing, 12)
+    }
+
+    @ViewBuilder
+    private func historyRow(row: Int, commit: Commit) -> some View {
+        HStack(spacing: 0) {
+            // The graph only aligns with the full, unfiltered row sequence —
+            // hide it while filtering.
+            if !isFiltering {
+                GraphStripView(layout: viewModel.layout, row: row,
+                               isHeadRow: row == headRow,
+                               isSelected: commit.hash == selectedHash)
+            }
+            CommitRowView(commit: commit,
+                          isSelected: commit.hash == selectedHash,
+                          isHead: commit.isHead)
+        }
+        .frame(height: GraphMetrics.rowHeight)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            selectedHash = commit.hash
+        }
+        .contextMenu {
+            commitContextMenu(commit)
+        }
+    }
+
+    private var emptyFilterState: some View {
+        VStack(spacing: 4) {
+            Text("No commits match “\(activeFilter)”")
+                .font(.callout)
+            Text("Only the \(viewModel.commits.count) loaded commits are searched — load older commits to search deeper.")
+                .font(.caption)
+        }
+        .foregroundStyle(.secondary)
+        .multilineTextAlignment(.center)
+        .frame(maxWidth: .infinity, alignment: .center)
+        .padding(.vertical, 24)
+        .padding(.horizontal, 32)
     }
 
     // MARK: - Filter bar
