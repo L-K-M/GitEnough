@@ -266,7 +266,10 @@ private struct SidebarRow: View {
                 .buttonStyle(.plain)
                 .opacity(isStarred || isHovering ? 1 : 0)
                 .allowsHitTesting(isStarred || isHovering)
-                .accessibilityHidden(!(isStarred || isHovering))
+                // Visibility is a hover-reveal mouse affordance; accessibility
+                // must not depend on pointer hover — the toggle stays in the
+                // VoiceOver tree on every row, with a spoken label.
+                .accessibilityLabel(isStarred ? "Unstar \(repo.name)" : "Star \(repo.name)")
                 .help(isStarred ? "Unstar this repository" : "Star this repository (pinned to the top)")
                 if summary.isDirty {
                     Circle()
