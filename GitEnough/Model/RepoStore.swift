@@ -95,9 +95,14 @@ final class RepoStore: ObservableObject {
     /// path → last-opened timestamp, for the "Recently Opened" sort order.
     @Published private(set) var lastOpenedAt: [String: TimeInterval] = [:]
 
+    /// Paths of starred repositories — pinned above the unstarred ones in every
+    /// sidebar sort order.
+    @Published private(set) var starredPaths: Set<String> = []
+
     private let defaultsKey = "repositories.v1"
     private let excludedKey = "excludedRepositories.v1"
     private let lastOpenedKey = "repoLastOpened.v1"
+    private let starredKey = "starredRepositories.v1"
 
     /// Paths the user removed — excluded from discovery until manually re-added.
     private var excludedPaths: Set<String> = []
@@ -105,6 +110,7 @@ final class RepoStore: ObservableObject {
     init() {
         load()
         excludedPaths = Set(UserDefaults.standard.stringArray(forKey: excludedKey) ?? [])
+        starredPaths = Set(UserDefaults.standard.stringArray(forKey: starredKey) ?? [])
         if let data = UserDefaults.standard.data(forKey: lastOpenedKey),
            let decoded = try? JSONDecoder().decode([String: TimeInterval].self, from: data) {
             lastOpenedAt = decoded
@@ -129,17 +135,29 @@ final class RepoStore: ObservableObject {
         UserDefaults.standard.set(Array(excludedPaths), forKey: excludedKey)
     }
 
+    private func persistStars() {
+        UserDefaults.standard.set(Array(starredPaths), forKey: starredKey)
+    }
+
     /// Registers an already-validated repository (validation — the git calls —
     /// is the caller's job and must happen off the main thread; see
     /// AppState.addRepository). A manual add also cancels a previous removal
     /// (discovery may re-offer it).
+    ///
+    /// Manual adds insert at the top of the unstarred block rather than
+    /// appending: the repository the user just added is the one they're looking
+    /// for, and at the bottom of a long manually-sorted list an append reads as
+    /// "it didn't show up". (Discovery keeps appending — its finds are
+    /// background additions, not user actions.)
     @discardableResult
     func register(_ repo: Repository) -> Repository {
         if let existing = repositories.first(where: { $0 == repo }) {
             if excludedPaths.remove(repo.path) != nil { persistExclusions() }
             return existing
         }
-        repositories.append(repo)
+        let insertAt = repositories.firstIndex(where: { !starredPaths.contains($0.path) })
+            ?? repositories.count
+        repositories.insert(repo, at: insertAt)
         persist()
         if excludedPaths.remove(repo.path) != nil { persistExclusions() }
         return repo
@@ -165,13 +183,59 @@ final class RepoStore: ObservableObject {
         repositories.removeAll { $0 == repo }
         summaries.removeValue(forKey: repo.path)
         excludedPaths.insert(repo.path)
+        // The star goes with the repo: starredPaths must only ever contain
+        // registered paths, or its count could never again be used as an index
+        // basis — and a removed repo re-added later shouldn't silently re-pin.
+        starredPaths.remove(repo.path)
+        persistStars()
         persistExclusions()
         persist()
     }
 
-    func move(fromOffsets: IndexSet, toOffset: Int) {
-        repositories.move(fromOffsets: fromOffsets, toOffset: toOffset)
+    /// Applies a sidebar drag expressed in *visible* row coordinates. The
+    /// visible list (starred pinned first, then the rest) is a permutation of
+    /// `repositories`, so the move is applied there; starred-first is
+    /// re-imposed afterwards, which keeps the persisted manual order aligned
+    /// with what the user sees (the sidebar re-derives the grouping on every
+    /// render regardless).
+    func moveVisible(_ visible: [Repository], fromOffsets: IndexSet, toOffset: Int) {
+        guard visible.count == repositories.count,
+              Set(visible.map(\.path)) == Set(repositories.map(\.path)) else { return }
+        var moved = visible
+        moved.move(fromOffsets: fromOffsets, toOffset: toOffset)
+        repositories = Self.starredFirst(moved, starred: starredPaths)
         persist()
+    }
+
+    // MARK: - Starring
+
+    func isStarred(_ repo: Repository) -> Bool {
+        starredPaths.contains(repo.path)
+    }
+
+    /// Stars or unstars `repo`. The stored order is left untouched — the sidebar
+    /// displays starred repositories first in every sort order (see
+    /// `starredFirst(_:starred:)`). Unstarring drops the pin without moving
+    /// anything; the stored order shown then is whatever manual dragging (via
+    /// `moveVisible`) last persisted, which may already be aligned with a
+    /// previously starred view.
+    func toggleStar(_ repo: Repository) {
+        // Guarded like RepoViewModel.publishBranch: no current call path can
+        // reach this with an unlisted repo (the sidebar stars listed rows only),
+        // but the guard keeps starredPaths honest — registered paths only —
+        // which remove() already maintains.
+        guard repositories.contains(where: { $0 == repo }) else { return }
+        if !starredPaths.insert(repo.path).inserted {
+            starredPaths.remove(repo.path)
+        }
+        persistStars()
+    }
+
+    /// Repositories in sidebar display order: starred ones pinned above the
+    /// unstarred ones, each block keeping its incoming order. Pure, so the
+    /// sidebar's grouping (the user-facing contract of starring) is testable.
+    static func starredFirst(_ repos: [Repository], starred: Set<String>) -> [Repository] {
+        repos.filter { starred.contains($0.path) } + repos.filter { !starred.contains($0.path) }
     }
 
     /// Records that `repo` was selected (feeds the "Recently Opened" sort).

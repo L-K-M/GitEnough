@@ -126,10 +126,9 @@ struct AddRepositoryView: View {
         let trimmedURL = cloneURL.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedURL.isEmpty else { return }
         let base = URL(fileURLWithPath: (cloneDestination as NSString).expandingTildeInPath)
-        // Derive the folder name from the URL, like `git clone` does.
-        var name = trimmedURL.components(separatedBy: "/").last ?? "repository"
-        if name.hasSuffix(".git") { name = String(name.dropLast(4)) }
-        guard !name.isEmpty else {
+        // Derive the folder name from the URL, like `git clone` does (handles
+        // https://…, ssh://…, and scp-style git@host:owner/repo.git forms).
+        guard let name = CloneURL(trimmedURL).suggestedFolderName else {
             cloneError = "Could not derive a folder name from that URL."
             return
         }

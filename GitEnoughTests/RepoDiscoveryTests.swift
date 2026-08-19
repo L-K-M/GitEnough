@@ -95,17 +95,20 @@ final class RepoStoreTests: XCTestCase {
     private let repositoryKey = "repositories.v1"
     private let excludedKey = "excludedRepositories.v1"
     private let lastOpenedKey = "repoLastOpened.v1"
+    private let starredKey = "starredRepositories.v1"
 
     override func setUpWithError() throws {
         UserDefaults.standard.removeObject(forKey: repositoryKey)
         UserDefaults.standard.removeObject(forKey: excludedKey)
         UserDefaults.standard.removeObject(forKey: lastOpenedKey)
+        UserDefaults.standard.removeObject(forKey: starredKey)
     }
 
     override func tearDownWithError() throws {
         UserDefaults.standard.removeObject(forKey: repositoryKey)
         UserDefaults.standard.removeObject(forKey: excludedKey)
         UserDefaults.standard.removeObject(forKey: lastOpenedKey)
+        UserDefaults.standard.removeObject(forKey: starredKey)
     }
 
     func testDiscoveryAddsEachRepositoryOnlyOnce() {
@@ -170,5 +173,131 @@ final class RepoStoreTests: XCTestCase {
         XCTAssertNotNil(store.lastOpenedAt[repo.path])
         // Survives a store reload.
         XCTAssertNotNil(RepoStore().lastOpenedAt[repo.path])
+    }
+
+    func testManualAddInsertsAtTopOfUnstarredBlock() {
+        let store = RepoStore()
+        _ = store.register(Repository(path: "/tmp/a", name: "a"))
+        _ = store.register(Repository(path: "/tmp/b", name: "b"))
+        // Newest first — a manual add is something the user just did and is
+        // looking for; a bottom-of-the-list append reads as "didn't appear".
+        XCTAssertEqual(store.repositories.map(\.name), ["b", "a"])
+
+        // A star pins above new additions: c lands at the top of the unstarred
+        // block in display order (the stored array keeps its manual order).
+        store.toggleStar(store.repositories.last!)   // a
+        _ = store.register(Repository(path: "/tmp/c", name: "c"))
+        XCTAssertEqual(RepoStore.starredFirst(store.repositories, starred: ["/tmp/a"])
+            .map(\.name), ["a", "c", "b"])
+    }
+
+    func testStarringPersistsAcrossReload() {
+        let store = RepoStore()
+        let repo = Repository(path: "/tmp/repo", name: "repo")
+        _ = store.register(repo)
+        XCTAssertFalse(store.isStarred(repo))
+
+        store.toggleStar(repo)
+        XCTAssertTrue(store.isStarred(repo))
+        XCTAssertTrue(RepoStore().isStarred(repo))   // survives a store reload
+
+        store.toggleStar(repo)
+        XCTAssertFalse(store.isStarred(repo))
+        XCTAssertFalse(RepoStore().isStarred(repo))
+    }
+
+    func testStarringNeverReordersStoredManualOrder() {
+        let store = RepoStore()
+        _ = store.register(Repository(path: "/tmp/a", name: "a"))
+        _ = store.register(Repository(path: "/tmp/b", name: "b"))
+        _ = store.register(Repository(path: "/tmp/c", name: "c"))
+        let manualOrder = store.repositories
+
+        // Starring changes the display order only; unstarring restores the
+        // exact previous arrangement.
+        store.toggleStar(manualOrder.last!)   // a
+        XCTAssertEqual(store.repositories, manualOrder)
+        XCTAssertEqual(RepoStore.starredFirst(store.repositories, starred: ["/tmp/a"])
+            .map(\.name), ["a", "c", "b"])
+        store.toggleStar(manualOrder.last!)
+        XCTAssertEqual(store.repositories, manualOrder)
+        XCTAssertEqual(RepoStore.starredFirst(store.repositories, starred: [])
+            .map(\.name), ["c", "b", "a"])
+    }
+
+    func testStarredFirstIsStableWithinBlocks() {
+        let repos = [Repository(path: "/1", name: "one"),
+                     Repository(path: "/2", name: "two"),
+                     Repository(path: "/3", name: "three"),
+                     Repository(path: "/4", name: "four")]
+        XCTAssertEqual(RepoStore.starredFirst(repos, starred: ["/2", "/4"]).map(\.name),
+                       ["two", "four", "one", "three"])
+        XCTAssertEqual(RepoStore.starredFirst(repos, starred: []).map(\.name),
+                       ["one", "two", "three", "four"])
+    }
+
+    func testRemoveDropsStar() {
+        let store = RepoStore()
+        let repo = Repository(path: "/tmp/repo", name: "repo")
+        _ = store.register(repo)
+        store.toggleStar(repo)
+
+        store.remove(repo)
+        XCTAssertFalse(store.isStarred(repo))
+        XCTAssertFalse(RepoStore().isStarred(repo))   // no stale paths survive
+
+        // Re-adding starts unstarred — a removed repo must not silently re-pin.
+        _ = store.register(repo)
+        XCTAssertFalse(store.isStarred(repo))
+    }
+
+    func testToggleStarIgnoresUnregisteredRepo() {
+        let store = RepoStore()
+        let repo = Repository(path: "/tmp/repo", name: "repo")
+        store.toggleStar(repo)
+        XCTAssertFalse(store.isStarred(repo))
+        // starredPaths must only ever hold registered paths — nothing leaked
+        // into the persisted set either.
+        XCTAssertFalse(RepoStore().isStarred(repo))
+    }
+
+    func testMoveVisibleAppliesDragAndKeepsStarredFirst() {
+        let store = RepoStore()
+        _ = store.register(Repository(path: "/tmp/a", name: "a"))
+        _ = store.register(Repository(path: "/tmp/b", name: "b"))
+        _ = store.register(Repository(path: "/tmp/c", name: "c"))
+        // Store order is [c, b, a] (manual adds insert at top); star "a".
+        store.toggleStar(store.repositories.last!)
+
+        // The visible list pins "a" first: [a, c, b]. Drag "b" to the top.
+        let visible = [
+            Repository(path: "/tmp/a", name: "a"),
+            Repository(path: "/tmp/c", name: "c"),
+            Repository(path: "/tmp/b", name: "b"),
+        ]
+        store.moveVisible(visible, fromOffsets: IndexSet(integer: 2), toOffset: 0)
+        // "b" wins the unstarred block, but the starred "a" still pins above it.
+        XCTAssertEqual(store.repositories.map(\.name), ["a", "b", "c"])
+
+        // The reordered list survives a reload.
+        XCTAssertEqual(RepoStore().repositories.map(\.name), ["a", "b", "c"])
+    }
+
+    func testMoveVisibleIgnoresMismatchedVisibleList() {
+        let store = RepoStore()
+        _ = store.register(Repository(path: "/tmp/a", name: "a"))
+        _ = store.register(Repository(path: "/tmp/b", name: "b"))
+        // Wrong count must not corrupt the manual order — the sidebar only
+        // attaches onMove when unfiltered, and this guard keeps that promise.
+        store.moveVisible([Repository(path: "/nope", name: "nope")],
+                          fromOffsets: IndexSet(integer: 0), toOffset: 0)
+        XCTAssertEqual(store.repositories.count, 2)
+
+        // Same count but not a permutation (different paths) must be rejected
+        // too — a count-only guard would silently replace the registered repos.
+        store.moveVisible([Repository(path: "/nope1", name: "nope1"),
+                           Repository(path: "/nope2", name: "nope2")],
+                          fromOffsets: IndexSet(integer: 0), toOffset: 0)
+        XCTAssertEqual(Set(store.repositories.map(\.path)), ["/tmp/a", "/tmp/b"])
     }
 }

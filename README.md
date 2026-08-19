@@ -15,7 +15,8 @@ Desktop never gave you: a proper **IntelliJ-style branch/merge graph** and
 
 - **Two-pane window.** Repositories on the left (with live branch / dirty /
   ahead-behind summaries), the selected repository on the right. Drag any folder
-  into the sidebar to add it; clone straight from the welcome sheet. Filter the
+  into the sidebar to add it; clone straight from a URL. Star the repos you
+  care about — they pin to the top of the list in every sort order. Filter the
   list as you type, and sort it manually, by name, or by recently opened.
 - **Watch folder.** Point Settings → General at a folder (say `~/code`) and
   GitEnough scans it about once a minute, automatically adding every repository
