@@ -3,52 +3,58 @@ import AppKit
 
 /// Renders a unified diff as colored, monospaced, horizontally scrollable lines.
 ///
-/// The parse is memoized in view state: the view model publishes fresh
-/// snapshots every few seconds while the repo is dirty, and each publish
-/// rebuilds this view — parsing up to 4,000 diff lines inline in `body` on
-/// every one of those evaluations is the main scroll-stutter source in the
-/// app. We parse once per diff string instead.
+/// The parse is memoized: the view model publishes fresh snapshots every few
+/// seconds while the repo is dirty, and each publish re-evaluates the parent's
+/// `body` — parsing up to 4,000 diff lines on every one of those is the main
+/// scroll-stutter source in the app. We parse once per diff string instead.
 struct DiffView: View {
 
     let diff: String
 
-    @State private var parsedLines: [DiffLine]
-    @State private var parsedDiff: String
-
-    init(diff: String) {
-        self.diff = diff
-        _parsedDiff = State(initialValue: diff)
-        _parsedLines = State(initialValue: DiffParser.parse(diff))
-    }
+    /// Memoized parse, keyed on the diff string.
+    ///
+    /// A reference type held in `@State`, rather than the parse result itself:
+    /// SwiftUI rebuilds the `DiffView` *value* on every parent `body` pass, so
+    /// anything computed in an initializer is recomputed each time and then
+    /// discarded (`State(initialValue:)` loses to the already-stored state of a
+    /// mounted view). One instance per view identity survives those rebuilds,
+    /// and reading through it in `body` keeps the lines and `diff` consistent
+    /// without the extra frame of lag a state write would introduce.
+    @State private var cache = ParseCache()
 
     var body: some View {
-        // The @State cache lags a diff change by one evaluation (the onChange
-        // write applies afterwards), so read through it: render a direct parse
-        // whenever the cache doesn't match `diff`. Unchanged re-evaluations
-        // (the every-few-seconds snapshot publishes) never re-parse, and a
-        // changed diff never flashes the previous file's lines.
-        let lines = diff == parsedDiff ? parsedLines : DiffParser.parse(diff)
-        Group {
-            if diff.isEmpty {
-                EmptyPane(systemImage: "doc.text.magnifyingglass",
-                          title: "No diff",
-                          subtitle: "Select a file to see its changes.")
-            } else {
-                ScrollView([.horizontal, .vertical]) {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
-                            DiffLineView(line: line)
-                        }
+        let lines = cache.lines(for: diff)
+        if diff.isEmpty {
+            EmptyPane(systemImage: "doc.text.magnifyingglass",
+                      title: "No diff",
+                      subtitle: "Select a file to see its changes.")
+        } else {
+            ScrollView([.horizontal, .vertical]) {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                        DiffLineView(line: line)
                     }
-                    .padding(.vertical, 6)
                 }
-                .background(Color(nsColor: .textBackgroundColor))
+                .padding(.vertical, 6)
             }
+            .background(Color(nsColor: .textBackgroundColor))
         }
-        .onChange(of: diff) { _, newDiff in
-            guard newDiff != parsedDiff else { return }
-            parsedDiff = newDiff
-            parsedLines = DiffParser.parse(newDiff)
+    }
+
+    /// Holds the most recent parse. Read and written only from `body`, which
+    /// SwiftUI evaluates on the main thread; being a plain class, mutating it
+    /// publishes nothing and so can't invalidate the view that reads it.
+    private final class ParseCache {
+
+        private var key: String?
+        private var parsed: [DiffLine] = []
+
+        func lines(for diff: String) -> [DiffLine] {
+            if key == diff { return parsed }
+            let lines = DiffParser.parse(diff)
+            key = diff
+            parsed = lines
+            return lines
         }
     }
 }

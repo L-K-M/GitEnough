@@ -79,6 +79,11 @@ function decodePNG(buf) {
   const bpp = colorType === 6 ? 4 : 3;
   const raw = zlib.inflateSync(Buffer.concat(idat));
   const stride = width * bpp;
+  // Short of this and the unfilter below reads past the end: `line[x]` yields
+  // undefined, the filter arithmetic goes NaN, and Buffer writes coerce that to
+  // 0 — a truncated master would silently render as black icons, exit code 0.
+  if (raw.length < height * (stride + 1))
+    throw new Error(`corrupt PNG: expected ${height * (stride + 1)} inflated bytes, got ${raw.length}`);
   const out = Buffer.alloc(width * height * 4);
   const prev = Buffer.alloc(stride);
   let src = 0;
@@ -130,15 +135,23 @@ function resize(src, dstSize) {
         for (let sx = sx0; sx <= sx1; sx++) {
           const w = wy * (Math.min(x1, sx + 1) - Math.max(x0, sx));
           const i = (sy * sw + sx) * 4;
-          r += rgba[i] * w; g += rgba[i + 1] * w; b += rgba[i + 2] * w; a += rgba[i + 3] * w;
+          // Weight colour by alpha before averaging. Straight-RGBA averaging
+          // pulls the (arbitrary) colour of fully transparent texels into edge
+          // pixels at full weight, haloing the rounded corners at 16–32 px.
+          // A no-op for today's opaque master; correct if it ever gains alpha.
+          const al = rgba[i + 3] / 255;
+          r += rgba[i] * al * w; g += rgba[i + 1] * al * w; b += rgba[i + 2] * al * w;
+          a += rgba[i + 3] * w;
         }
       }
       const area = scaleX * scaleY;
       const o = (dy * dstSize + dx) * 4;
-      out[o] = Math.round(r / area);
-      out[o + 1] = Math.round(g / area);
-      out[o + 2] = Math.round(b / area);
-      out[o + 3] = Math.round(a / area);
+      const alpha = a / area;
+      const an = alpha / 255;
+      out[o] = an > 0 ? Math.round(r / area / an) : 0;
+      out[o + 1] = an > 0 ? Math.round(g / area / an) : 0;
+      out[o + 2] = an > 0 ? Math.round(b / area / an) : 0;
+      out[o + 3] = Math.round(alpha);
     }
   }
   return out;
@@ -147,6 +160,13 @@ function resize(src, dstSize) {
 // --- Write the appiconset ------------------------------------------------------
 const srcPath = path.join(__dirname, "..", "media-sources", "icon.png");
 const master = decodePNG(fs.readFileSync(srcPath));
+// resize() always emits a square, so a non-square master is silently stretched,
+// and one below the largest slot is box-upscaled into a soft 1024 px icon.
+// Both are easy to miss when every file still "generates successfully".
+if (master.width !== master.height)
+  throw new Error(`master icon must be square, got ${master.width}x${master.height}`);
+if (master.width < 1024)
+  throw new Error(`master icon must be at least 1024px (the largest slot), got ${master.width}px`);
 console.log(`decoded ${path.relative(process.cwd(), srcPath)}: ${master.width}x${master.height}`);
 
 const slots = [
