@@ -10,6 +10,24 @@ struct Repository: Identifiable, Hashable, Codable {
     var id: String { path }
     var url: URL { URL(fileURLWithPath: path) }
 
+    /// The path with `~` and `.`/`..` resolved and symlinks chased, for
+    /// identity comparisons. The same working copy can arrive spelled
+    /// differently — NSOpenPanel returns the path as browsed, watch-folder
+    /// discovery resolves symlinks, git's --show-toplevel returns the physical
+    /// path — and storing one folder under two spellings breaks sidebar
+    /// identity (duplicate rows whose selection/equality behaves erratically).
+    var normalizedPath: String {
+        Self.normalizedPath(path)
+    }
+
+    /// Path normalization for identity comparisons. `standardizingPath` alone
+    /// keeps symlinks on modern macOS, so chase them explicitly — discovery
+    /// already does (its URLs go through `resolvingSymlinksInPath`).
+    static func normalizedPath(_ path: String) -> String {
+        let standardized = (path as NSString).standardizingPath
+        return URL(fileURLWithPath: standardized).resolvingSymlinksInPath().path
+    }
+
     init(path: String, name: String) {
         self.path = path
         self.name = name
@@ -122,7 +140,10 @@ final class RepoStore: ObservableObject {
               let decoded = try? JSONDecoder().decode([Repository].self, from: data) else {
             return
         }
-        repositories = decoded
+        // Repair any duplicate spellings of the same folder left behind by
+        // older builds (see normalizedPath): keep the first spelling stored.
+        var seen: Set<String> = []
+        repositories = decoded.filter { seen.insert($0.normalizedPath).inserted }
     }
 
     private func persist() {
@@ -139,6 +160,16 @@ final class RepoStore: ObservableObject {
         UserDefaults.standard.set(Array(starredPaths), forKey: starredKey)
     }
 
+    /// Removes any exclusion for `repo` (any spelling — an exclusion stored
+    /// under one path spelling must not block a re-add under another).
+    private func clearExclusion(for repo: Repository) {
+        let before = excludedPaths.count
+        excludedPaths = excludedPaths.filter {
+            Repository.normalizedPath($0) != repo.normalizedPath
+        }
+        if excludedPaths.count != before { persistExclusions() }
+    }
+
     /// Registers an already-validated repository (validation — the git calls —
     /// is the caller's job and must happen off the main thread; see
     /// AppState.addRepository). A manual add also cancels a previous removal
@@ -151,15 +182,17 @@ final class RepoStore: ObservableObject {
     /// background additions, not user actions.)
     @discardableResult
     func register(_ repo: Repository) -> Repository {
-        if let existing = repositories.first(where: { $0 == repo }) {
-            if excludedPaths.remove(repo.path) != nil { persistExclusions() }
+        if let existing = repositories.first(where: {
+            $0.normalizedPath == repo.normalizedPath
+        }) {
+            clearExclusion(for: existing)
             return existing
         }
         let insertAt = repositories.firstIndex(where: { !starredPaths.contains($0.path) })
             ?? repositories.count
         repositories.insert(repo, at: insertAt)
         persist()
-        if excludedPaths.remove(repo.path) != nil { persistExclusions() }
+        clearExclusion(for: repo)
         return repo
     }
     /// Adds already-validated repository URLs found by folder discovery. Skips
@@ -170,8 +203,14 @@ final class RepoStore: ObservableObject {
         var added = 0
         for url in urls {
             let path = url.path
-            guard !excludedPaths.contains(path),
-                  !repositories.contains(where: { $0.path == path }) else { continue }
+            let normalized = Repository.normalizedPath(path)
+            let excluded = excludedPaths.contains {
+                Repository.normalizedPath($0) == normalized
+            }
+            let existing = repositories.contains {
+                $0.normalizedPath == normalized
+            }
+            guard !excluded, !existing else { continue }
             repositories.append(Repository(path: path, name: url.lastPathComponent))
             added += 1
         }
@@ -180,7 +219,8 @@ final class RepoStore: ObservableObject {
     }
 
     func remove(_ repo: Repository) {
-        repositories.removeAll { $0 == repo }
+        // All spellings of the folder go, not just the exact object passed.
+        repositories.removeAll { $0.normalizedPath == repo.normalizedPath }
         summaries.removeValue(forKey: repo.path)
         excludedPaths.insert(repo.path)
         // The star goes with the repo: starredPaths must only ever contain
@@ -224,9 +264,13 @@ final class RepoStore: ObservableObject {
         // reach this with an unlisted repo (the sidebar stars listed rows only),
         // but the guard keeps starredPaths honest — registered paths only —
         // which remove() already maintains.
-        guard repositories.contains(where: { $0 == repo }) else { return }
-        if !starredPaths.insert(repo.path).inserted {
-            starredPaths.remove(repo.path)
+        guard let registered = repositories.first(where: {
+            $0.normalizedPath == repo.normalizedPath
+        }) else { return }
+        // The registered spelling, not the caller's: starredPaths is matched
+        // against stored rows by exact path.
+        if !starredPaths.insert(registered.path).inserted {
+            starredPaths.remove(registered.path)
         }
         persistStars()
     }

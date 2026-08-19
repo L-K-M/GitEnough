@@ -26,7 +26,14 @@ struct SidebarView: View {
             set: { path in
                 if let path, let repo = store.repositories.first(where: { $0.path == path }) {
                     appState.select(repo)
-                } else {
+                } else if path == nil, let current = appState.selectedRepoPath,
+                          !store.repositories.contains(where: { $0.path == current }) {
+                    // The selected repo is gone for good (removed) — clear the
+                    // dangling selection. A transient nil (the List briefly
+                    // losing the selected row mid re-render) is NOT cleared:
+                    // this List has no deselect gesture, and letting it through
+                    // wiped the selection and — with a logical filter active —
+                    // the clicked repo's row along with it.
                     appState.selectedRepoPath = nil
                 }
             }
@@ -81,9 +88,9 @@ struct SidebarView: View {
     }
 
     /// How many registered repositories the logical filter currently hides
-    /// (shown as a footer hint, so an unexpectedly short list is explainable).
-    /// Suppressed while a text query is active — the search field itself
-    /// explains that narrowing.
+    /// (surfaced in the always-visible bottom bar, so an unexpectedly short
+    /// list is explainable — and clickable). Suppressed while a text query is
+    /// active — the search field itself explains that narrowing.
     private var hiddenByFilterCount: Int {
         guard sidebarFilter != .all, filterText.isEmpty else { return 0 }
         return store.repositories.filter { repo in
@@ -115,10 +122,6 @@ struct SidebarView: View {
                     }
                 } header: {
                     Text("Repositories")
-                } footer: {
-                    if hiddenByFilterCount > 0 {
-                        Text("\(hiddenByFilterCount) hidden by the “\(sidebarFilter.displayName)” filter")
-                    }
                 }
             }
             .listStyle(.sidebar)
@@ -165,12 +168,25 @@ struct SidebarView: View {
             }
             .safeAreaInset(edge: .bottom) {
                 if !store.repositories.isEmpty {
-                    Text("Drop a folder to add it")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 6)
-                        .background(.bar)
+                    VStack(spacing: 2) {
+                        // Always-visible counterpart to the old list footer: a
+                        // repo that "vanished" is usually just filter-hidden,
+                        // and a hint below the fold of a long list explains
+                        // nothing. One click resets to the unfiltered list.
+                        if hiddenByFilterCount > 0 {
+                            Button("\(hiddenByFilterCount) hidden by the “\(sidebarFilter.displayName)” filter — show all") {
+                                filterRaw = SidebarFilter.all.rawValue
+                            }
+                            .buttonStyle(.link)
+                            .font(.caption)
+                        }
+                        Text("Drop a folder to add it")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 6)
+                    .background(.bar)
                 }
             }
         }
