@@ -215,8 +215,10 @@ final class RepoStore: ObservableObject {
 
     /// Stars or unstars `repo`. The stored order is left untouched — the sidebar
     /// displays starred repositories first in every sort order (see
-    /// `starredFirst(_:starred:)`), so unstarring always restores the exact
-    /// manual arrangement there was before.
+    /// `starredFirst(_:starred:)`). Unstarring drops the pin without moving
+    /// anything; the stored order shown then is whatever manual dragging (via
+    /// `moveVisible`) last persisted, which may already be aligned with a
+    /// previously starred view.
     func toggleStar(_ repo: Repository) {
         if !starredPaths.insert(repo.path).inserted {
             starredPaths.remove(repo.path)

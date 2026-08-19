@@ -266,6 +266,7 @@ private struct SidebarRow: View {
                 .buttonStyle(.plain)
                 .opacity(isStarred || isHovering ? 1 : 0)
                 .allowsHitTesting(isStarred || isHovering)
+                .accessibilityHidden(!(isStarred || isHovering))
                 .help(isStarred ? "Unstar this repository" : "Star this repository (pinned to the top)")
                 if summary.isDirty {
                     Circle()
