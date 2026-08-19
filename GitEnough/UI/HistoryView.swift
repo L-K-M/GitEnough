@@ -90,7 +90,8 @@ struct HistoryView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             Divider()
             CommitDetailView(viewModel: viewModel, selectedHash: selectedHash)
-                .frame(width: 360, maxHeight: .infinity)
+                .frame(maxHeight: .infinity)
+                .frame(width: 360)
         }
         .onChange(of: selectedHash) { _, newValue in
             viewModel.selectCommit(newValue)
