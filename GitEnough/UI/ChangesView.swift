@@ -440,6 +440,9 @@ private struct ConflictRow: View {
             }
         }
         .padding(.vertical, 3)
+        .onReceive(NotificationCenter.default.publisher(for: MergeTool.didChangeNotification)) { _ in
+            toolsGeneration += 1
+        }
     }
 }
 
