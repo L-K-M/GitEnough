@@ -5,10 +5,10 @@ import AppKit
 enum GraphMetrics {
     /// Lane spacing while the lane count fits the column's width budget.
     static let laneWidth: CGFloat = 16
-    /// How many lanes fit the budget at full width; beyond this, lanes squeeze.
+    /// How many lanes fit at full width; beyond this, lanes squeeze.
     static let maxUncompressedLanes = 12
-    /// Squeezed lanes never go below this (dots must stay distinguishable).
-    static let minLaneWidth: CGFloat = 7
+    /// Hard cap on the graph column's width (maxUncompressedLanes × laneWidth).
+    static let maxGraphWidth: CGFloat = 192
     static let rowHeight: CGFloat = 27
     static let nodeRadius: CGFloat = 4.5
 
@@ -16,13 +16,17 @@ enum GraphMetrics {
     /// more are active than the width budget allows — otherwise a busy repo's
     /// historical lane high-water mark (30+ over a long history) makes the
     /// graph column hog the pane and pushes the commit text past the edge.
+    /// No floor: the width cap is the invariant that keeps the layout sane —
+    /// past a few dozen lanes the graph is a color smear no matter what, but
+    /// a bounded one.
     static func laneWidth(for columnCount: Int) -> CGFloat {
         let count = max(1, columnCount)
         guard count > maxUncompressedLanes else { return laneWidth }
-        return max(minLaneWidth, CGFloat(maxUncompressedLanes) * laneWidth / CGFloat(count))
+        return maxGraphWidth / CGFloat(count)
     }
 
-    /// Width of the graph column for a graph with `columnCount` lanes.
+    /// Width of the graph column for a graph with `columnCount` lanes — never
+    /// exceeds `maxGraphWidth`.
     static func graphWidth(for columnCount: Int) -> CGFloat {
         CGFloat(max(1, columnCount)) * laneWidth(for: columnCount)
     }
@@ -47,7 +51,11 @@ enum GraphMetrics {
 /// strip's strokes spill half a row BELOW its frame — deliberately not clipped:
 /// the next row's strip picks up exactly where the spill ends, which tiles
 /// seamlessly, and later rows paint later, so nodes always sit on top of the
-/// tails flowing into them.
+/// tails flowing into them. One deliberate consequence of per-row painting: a
+/// passing lane's vertical now paints over the spilled tail of an unrelated
+/// curve from the row above (the old single canvas painted all curves over all
+/// verticals globally) — a sub-pixel crossing difference, and lanes read as
+/// continuous "in front" of joins passing under them.
 struct GraphStripView: View {
 
     let layout: GraphLayout

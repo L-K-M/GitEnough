@@ -280,8 +280,10 @@ final class GraphLayoutTests: XCTestCase {
         // Twice the budgeted lanes → half the spacing…
         XCTAssertEqual(GraphMetrics.laneWidth(for: GraphMetrics.maxUncompressedLanes * 2),
                        GraphMetrics.laneWidth / 2, accuracy: 0.001)
-        // …but never below the floor, so the column width stays bounded.
-        XCTAssertEqual(GraphMetrics.laneWidth(for: 500), GraphMetrics.minLaneWidth)
+        // …and the column width stays capped no matter how pathological the
+        // lane count gets (no floor — the cap is the invariant).
+        XCTAssertEqual(GraphMetrics.graphWidth(for: 500), GraphMetrics.maxGraphWidth,
+                       accuracy: 0.001)
         XCTAssertEqual(GraphMetrics.graphWidth(for: 0), GraphMetrics.laneWidth)
     }
 
