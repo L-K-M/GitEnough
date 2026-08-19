@@ -12,7 +12,10 @@ struct AppCommands: Commands {
     private var active: RepoViewModel? { appState.activeViewModel }
 
     var body: some Commands {
-        CommandGroup(after: .newItem) {
+        // Replacing (not adding after) the New Item group removes the default
+        // "New Window" command: AppState holds a single global selection, so a
+        // second window would just fight the first over the same repository.
+        CommandGroup(replacing: .newItem) {
             Button("Add Repository…") {
                 appState.showingAddRepository = true
             }

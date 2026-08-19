@@ -9,6 +9,15 @@ struct GitEnoughApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var appState = AppState()
 
+    init() {
+        // Warm the merge-tool cache right after launch (main thread, ~18
+        // cheap probes) so neither the first frame nor the first conflict
+        // row pays the one-time detection cost.
+        DispatchQueue.main.async {
+            _ = MergeTool.installed
+        }
+    }
+
     var body: some Scene {
         WindowGroup("GitEnough") {
             ContentView()
