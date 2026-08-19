@@ -251,6 +251,16 @@ final class RepoStoreTests: XCTestCase {
         XCTAssertFalse(store.isStarred(repo))
     }
 
+    func testToggleStarIgnoresUnregisteredRepo() {
+        let store = RepoStore()
+        let repo = Repository(path: "/tmp/repo", name: "repo")
+        store.toggleStar(repo)
+        XCTAssertFalse(store.isStarred(repo))
+        // starredPaths must only ever hold registered paths — nothing leaked
+        // into the persisted set either.
+        XCTAssertFalse(RepoStore().isStarred(repo))
+    }
+
     func testMoveVisibleAppliesDragAndKeepsStarredFirst() {
         let store = RepoStore()
         _ = store.register(Repository(path: "/tmp/a", name: "a"))

@@ -220,6 +220,11 @@ final class RepoStore: ObservableObject {
     /// `moveVisible`) last persisted, which may already be aligned with a
     /// previously starred view.
     func toggleStar(_ repo: Repository) {
+        // Guarded like RepoViewModel.publishBranch: no current call path can
+        // reach this with an unlisted repo (the sidebar stars listed rows only),
+        // but the guard keeps starredPaths honest — registered paths only —
+        // which remove() already maintains.
+        guard repositories.contains(where: { $0 == repo }) else { return }
         if !starredPaths.insert(repo.path).inserted {
             starredPaths.remove(repo.path)
         }
