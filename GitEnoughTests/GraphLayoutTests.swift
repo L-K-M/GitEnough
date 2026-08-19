@@ -248,6 +248,43 @@ final class GraphLayoutTests: XCTestCase {
         }
     }
 
+    // MARK: - Row bucketing (per-row strip rendering)
+
+    /// The UI draws the graph as per-row strips: strip r renders
+    /// `segmentsByRow[r]`. The buckets must partition the segment list exactly
+    /// — every segment spans one row (toRow == fromRow + 1), so bucketing by
+    /// start row loses nothing and duplicates nothing.
+    func testSegmentsByRowPartitionsAllSegments() {
+        let commits = randomHistory(count: 30, seed: 7)
+        let layout = GraphLayout.layout(commits: commits)
+        XCTAssertEqual(layout.segmentsByRow.count, commits.count)
+        for (row, bucket) in layout.segmentsByRow.enumerated() {
+            for segment in bucket {
+                XCTAssertEqual(segment.fromRow, row)
+                XCTAssertEqual(segment.toRow, row + 1)
+            }
+        }
+        XCTAssertEqual(layout.segmentsByRow.flatMap { $0 }.count, layout.segments.count)
+    }
+
+    func testEmptyHistoryHasNoRowBuckets() {
+        XCTAssertTrue(GraphLayout.layout(commits: []).segmentsByRow.isEmpty)
+    }
+
+    // MARK: - Lane compression
+
+    func testLaneWidthSqueezesBeyondTheWidthBudget() {
+        XCTAssertEqual(GraphMetrics.laneWidth(for: 1), GraphMetrics.laneWidth)
+        XCTAssertEqual(GraphMetrics.laneWidth(for: GraphMetrics.maxUncompressedLanes),
+                       GraphMetrics.laneWidth)
+        // Twice the budgeted lanes → half the spacing…
+        XCTAssertEqual(GraphMetrics.laneWidth(for: GraphMetrics.maxUncompressedLanes * 2),
+                       GraphMetrics.laneWidth / 2, accuracy: 0.001)
+        // …but never below the floor, so the column width stays bounded.
+        XCTAssertEqual(GraphMetrics.laneWidth(for: 500), GraphMetrics.minLaneWidth)
+        XCTAssertEqual(GraphMetrics.graphWidth(for: 0), GraphMetrics.laneWidth)
+    }
+
     // MARK: - Colors
 
     func testLaneColorsAreStableAlongALaneAndDistinctAcrossLanes() {

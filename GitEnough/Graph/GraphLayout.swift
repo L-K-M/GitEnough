@@ -36,6 +36,14 @@ struct GraphLayout: Equatable {
 
     private(set) var nodes: [Node] = []
     private(set) var segments: [Segment] = []
+    /// Segments bucketed by start row (every segment spans exactly one row:
+    /// `toRow == fromRow + 1`). The UI draws the graph as per-row strips — row r
+    /// renders `segmentsByRow[r]` in a row-height canvas of its own — instead of
+    /// one history-height Canvas, whose backing store overflows Core Animation's
+    /// layer size limit on long histories (a 500-commit graph is 13,500 pt tall,
+    /// 27,000 px at 2×) and misrenders: content at wrong offsets, e.g. the graph
+    /// appearing under the sidebar instead of beside the commit list.
+    private(set) var segmentsByRow: [[Segment]] = []
     private(set) var columnCount: Int = 0
 
     static let empty = GraphLayout()
@@ -155,6 +163,11 @@ struct GraphLayout: Equatable {
         }
 
         layout.columnCount = lanes.count
+        var byRow = Array(repeating: [Segment](), count: commits.count)
+        for segment in layout.segments {
+            byRow[segment.fromRow].append(segment)
+        }
+        layout.segmentsByRow = byRow
         return layout
     }
 }

@@ -300,4 +300,33 @@ final class RepoStoreTests: XCTestCase {
                           fromOffsets: IndexSet(integer: 0), toOffset: 0)
         XCTAssertEqual(Set(store.repositories.map(\.path)), ["/tmp/a", "/tmp/b"])
     }
+
+    // MARK: - Path identity
+
+    func testRegisterDedupesRespelledPaths() {
+        let store = RepoStore()
+        _ = store.register(Repository(path: "/tmp/some/repo", name: "repo"))
+        // The same folder spelled with a "/./" component (or a symlink, a "~",
+        // a different mount point) is the same repository — registering the
+        // respelling must return the existing entry, not add a second row.
+        let respelled = store.register(Repository(path: "/tmp/./some/repo", name: "repo"))
+        XCTAssertEqual(respelled.path, "/tmp/some/repo")
+        XCTAssertEqual(store.repositories.count, 1)
+    }
+
+    func testAddDiscoveredSkipsRespelledPaths() {
+        let store = RepoStore()
+        _ = store.register(Repository(path: "/tmp/some/repo", name: "repo"))
+        XCTAssertEqual(store.addDiscovered([URL(fileURLWithPath: "/tmp/./some/repo")]), 0)
+        XCTAssertEqual(store.repositories.count, 1)
+    }
+
+    func testLoadDropsDuplicateSpellingsLeftByOlderBuilds() {
+        let repos = [Repository(path: "/tmp/some/repo", name: "repo"),
+                     Repository(path: "/tmp/./some/repo", name: "repo"),
+                     Repository(path: "/tmp/other", name: "other")]
+        UserDefaults.standard.set(try! JSONEncoder().encode(repos), forKey: repositoryKey)
+        let store = RepoStore()
+        XCTAssertEqual(store.repositories.map(\.path), ["/tmp/some/repo", "/tmp/other"])
+    }
 }
