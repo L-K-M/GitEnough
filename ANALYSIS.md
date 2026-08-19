@@ -431,10 +431,11 @@ entries with Apply/Pop/Drop.
 
 ## Aesthetics
 
-### A1 · App icon & empty-state art — S (design) 
-The icon is script-generated. A designed icon playing on the lane-graph motif
-(the app's signature) lifts perceived quality. Empty states share the same
-visual language.
+### A1 · Empty-state art — S (design)
+Done for the icon: `scripts/make-icon.js` now derives every appiconset slot
+from the designed artwork in `media-sources/icon.png` rather than drawing the
+old procedural lane-graph glyph, so regenerating can't revert it. Empty states
+should pick up the same visual language.
 
 ### A2 · Date grouping in history — S/M
 "Today / Yesterday / This week / …" section headers (or subtle separators) in
