@@ -178,7 +178,8 @@ struct HistoryView: View {
             if !isFiltering {
                 GraphStripView(layout: viewModel.layout, row: row,
                                isHeadRow: row == headRow,
-                               isSelected: commit.hash == selectedHash)
+                               isSelected: commit.hash == selectedHash,
+                               clipsTail: row == viewModel.commits.count - 1)
             }
             CommitRowView(commit: commit,
                           isSelected: commit.hash == selectedHash,

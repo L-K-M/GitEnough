@@ -7,8 +7,8 @@ enum GraphMetrics {
     static let laneWidth: CGFloat = 16
     /// How many lanes fit at full width; beyond this, lanes squeeze.
     static let maxUncompressedLanes = 12
-    /// Hard cap on the graph column's width (maxUncompressedLanes × laneWidth).
-    static let maxGraphWidth: CGFloat = 192
+    /// Hard cap on the graph column's width.
+    static let maxGraphWidth: CGFloat = CGFloat(maxUncompressedLanes) * laneWidth
     static let rowHeight: CGFloat = 27
     static let nodeRadius: CGFloat = 4.5
 
@@ -63,6 +63,11 @@ struct GraphStripView: View {
     let row: Int
     let isHeadRow: Bool
     let isSelected: Bool
+    /// True for the last row: its tail spill is clipped exactly at the row's
+    /// bottom edge (what the old single canvas did at its bottom), so the
+    /// "history continues below" stub stops at the list end instead of
+    /// painting into whatever sits below it.
+    let clipsTail: Bool
 
     @Environment(\.colorScheme) private var colorScheme
 
@@ -75,6 +80,14 @@ struct GraphStripView: View {
     }
 
     var body: some View {
+        if clipsTail {
+            strip.clipped()
+        } else {
+            strip
+        }
+    }
+
+    private var strip: some View {
         Canvas { context, _ in
             if isSelected {
                 let rect = CGRect(x: 0, y: 0, width: width, height: GraphMetrics.rowHeight)

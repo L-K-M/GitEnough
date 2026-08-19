@@ -256,9 +256,13 @@ final class RepoStore: ObservableObject {
         // reach this with an unlisted repo (the sidebar stars listed rows only),
         // but the guard keeps starredPaths honest — registered paths only —
         // which remove() already maintains.
-        guard repositories.contains(where: { $0.normalizedPath == repo.normalizedPath }) else { return }
-        if !starredPaths.insert(repo.path).inserted {
-            starredPaths.remove(repo.path)
+        guard let registered = repositories.first(where: {
+            $0.normalizedPath == repo.normalizedPath
+        }) else { return }
+        // The registered spelling, not the caller's: starredPaths is matched
+        // against stored rows by exact path.
+        if !starredPaths.insert(registered.path).inserted {
+            starredPaths.remove(registered.path)
         }
         persistStars()
     }
