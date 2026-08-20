@@ -72,12 +72,15 @@ minutes never appears in the activity log/status bar, has no progress, and no
 cancel. At minimum route it through an activity-log-carrying client; real
 progress is ANALYSIS M9/M12 territory.
 
-### F8 · `git pull --tags` fetches all tags into unrelated remotes' pulls — S, speculative
-`GitClient.pull` hardcodes `--tags` (`GitClient.swift:320-324`). Beyond being
-redundant with the default tag-following behavior, `--tags` historically
-changes fetch semantics (fetch *only* tags refspec on some versions) and can
-fail a pull when a remote moved a tag (refusing to clobber). Consider dropping
-`--tags` from `pull` (fetch already passes it) or making it config-respecting.
+### F8 · `--tags` on pull/fetch hard-fails when a remote moved a tag — S, likely
+`GitClient.pull` hardcodes `--tags` (`GitClient.swift:320-324`) and `fetch`
+passes `--all --prune --tags`. With `--tags`, a tag the remote re-pointed
+(nightly/`latest`-style tags are routinely moved) makes git exit non-zero with
+`! [rejected] … (would clobber existing tag)` — so the whole Pull/Fetch surfaces
+as a failure banner even though the branch update succeeded. Default
+tag-following (no flag) doesn't have this failure mode. **Fix:** drop `--tags`
+from `pull` entirely and reconsider it on `fetch` (or keep it and special-case
+the clobber message into a gentle notice).
 
 ### F9 · Merge-commit cherry-pick/revert still raw-errors **[refines B14]** — S, certain
 Confirmed in current code: `HistoryView.commitContextMenu` offers
@@ -104,9 +107,19 @@ Refinement for G2: when pausing watchers for unselected repos, also move the
 signature polling off the repo queue (it's pure stat calls; it doesn't need
 serialization with git).
 
-### F12 · The GLM-review workflow's `pull_request_target` gate — informational
-`.github/workflows/zai-code-review.yml` correctly gates on same-repo branches;
-no action needed. Recorded so future reviews don't re-audit.
+### F12 · `refreshSummaries` can clobber fresher live summaries — S, likely
+`AppState.refreshSummaries` (`AppState.swift:168-175`) snapshots all repos,
+computes summaries on a detached task, then **replaces the whole
+`store.summaries` dict**. A `onStatusChange` live update (e.g. a commit
+finishing) that lands while the pass is still running is overwritten by the
+pass's older data — the sidebar dirty-dot can briefly resurrect. **Fix:** merge
+per-key instead of wholesale assignment, or timestamp summaries and keep the
+newer one.
+
+**Verified non-issue, kept for the record:** the GLM-review workflow's
+`pull_request_target` gate (`.github/workflows/zai-code-review.yml`) correctly
+restricts the privileged job to same-repo branches; no action needed — don't
+re-audit.
 
 ---
 
