@@ -50,7 +50,7 @@ struct ChangesView: View {
                 commitBox
             }
             .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
-            DiffView(diff: viewModel.selectedFileDiff)
+            diffPane
                 .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
         }
         .onChange(of: selectedFile) { _, file in
@@ -116,6 +116,20 @@ struct ChangesView: View {
 
     private var discardConfirmationPresented: Binding<Bool> {
         Binding(get: { fileToDiscard != nil }, set: { if !$0 { fileToDiscard = nil } })
+    }
+
+    /// The right pane: the selected file's diff. While a load is in flight and
+    /// nothing is on screen yet, a spinner replaces the misleading "No diff"
+    /// empty state; during file-to-file switches the previous diff stays
+    /// visible until the new one arrives, so there is no flash.
+    @ViewBuilder
+    private var diffPane: some View {
+        if viewModel.isLoadingDiff && viewModel.selectedFileDiff.isEmpty {
+            ProgressView()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            DiffView(diff: viewModel.selectedFileDiff)
+        }
     }
 
     // MARK: - File lists
