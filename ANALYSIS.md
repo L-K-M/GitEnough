@@ -24,9 +24,19 @@ implemented or actively being repaired/reviewed; do not start a duplicate
 unless the linked PR is closed or abandoned. Check its current checks, feedback,
 base, and dependencies before relying on it:
 
+**Verified 2026-08-21** (see `docs/open-pr-review.md` for the full record and
+the reproduction of every claim): all 55 open PRs (#36–#90) are green on
+`Build & Test`, and all 55 merge cleanly onto `main` *individually* — but there
+are 50 conflicting pairs *between* them, and pairwise independence does not
+survive stacking. A verified order lands 36 of them with zero conflicts; the
+remaining 15 need hand resolution. Four PRs are superseded duplicates that
+should be closed (#36, #56, #74, #85), and seven cross-PR defects merge without
+a conflict marker and are invisible to every PR's own CI — they are filed as
+X1–X5 below.
+
 | PR | Covers |
 |----|--------|
-| #36/#77 | #77 is stacked on #36: generation guards/loading plus side-aware staged/unstaged selection identity; land or retarget together |
+| #36/#77 | **Close #36.** `pr/36` is a literal git ancestor of `pr/77` — #77 already contains it, plus `ChangeSelection` and the commit-file-diff loading state. Land #77 alone |
 | #37 | `Remote.displayHost` strips only a trailing `.git` (was mangling `user.github.io` and `.git`-containing hostnames) |
 | #38 | `GitParsers.parseDate` formatter data race (configure-once) |
 | #39 | Cherry-pick/revert merge commits via `--mainline` (per-parent menu items; 1-based precondition) |
@@ -37,7 +47,7 @@ base, and dependencies before relying on it:
 | #44 | Make Stash reachable with staged-only changes |
 | #45 | Skip bare repositories and submodules during watch-folder discovery |
 | #46 | Let the Settings window size to content instead of clipping |
-| #47/#74 | Overlapping alternatives for matching branch/remote/tag decorations in history filtering; merge one |
+| #47/#74 | **Close #74.** Near-identical diffs; #47 additionally puts the cheap hash-prefix check ahead of the two localized folds |
 | #48 | Name the real Git command in synthesized GitShell errors |
 | #49 | Add a visible New Branch action to the Branches tab |
 | #50 | Squash / no-fast-forward merge options in the merge dialog |
@@ -46,13 +56,13 @@ base, and dependencies before relying on it:
 | #53 | Copy Name on branch rows; Copy Hash and Subject on commits; shared `NSPasteboard.copyString` |
 | #54 | Per-repo commit-draft persistence (restore on launch, cleanup on repo removal, injectable defaults); restore must never overwrite fresh typing (glm-M4) |
 | #55 | Empty states: zero-commit History, empty Remote Branches section |
-| #56/#59 | #59 is the preferred superset (slash-named locals, full-ref parsing, remote HEAD suppression); #56 is only the local-slash subset |
-| #57/#71/#80/#83 | Complementary guardrail series: menu/toolbar state, context-aware Push/Publish, unborn amend, and central mutation admission; #83 is stacked on #57 |
+| #56/#59 | **Close #56.** #59 is the preferred superset (full-ref parsing, remote HEAD suppression, `HEAD -> tag:`, forge namespaces) and needs no `remoteNames` plumbing. Ordering hazard: plain numeric merge order lands #56 first and permanently blocks #59 |
+| #57/#71/#80/#83 | Complementary guardrail series: menu/toolbar state, context-aware Push/Publish, unborn amend, and central mutation admission. **None is an ancestor of another** (verified) — see X1 for the #57×#83 merge that turns CI red, and X2 for #71/#83's duplicate menu-invalidation mechanisms |
 | #58 | Remove inherited repository-routing Git environment variables from child processes |
 | #60 | Correct literal `.gitignore` escaping, trailing whitespace, and duplicate detection |
 | #61 | Treat conflict-only repositories as dirty and count unique changed paths |
 | #62 | Show useful content instead of “No diff” for an untracked directory |
-| #63/#85 | #63 is the fixed preferred superset for stage/unstage/discard plus copy-source safety; #85 is discard-only and now carries the same copy-source guard (only renames expand to both paths) |
+| #63/#85 | **Close #85.** Confirmed: #63 covers stage/unstage/discard via `affectedPaths` and excludes copies (`if isRename`); #85 is discard-only with the same guard |
 | #64 | Copy structured activity argv as POSIX-shell-safe commands; disable unsafe legacy copies |
 | #65 | Suppress duplicate activation and post-operation refreshes |
 | #66 | Preserve canonical branch identities across local/tag/remote short-name collisions |
@@ -72,7 +82,7 @@ base, and dependencies before relying on it:
 | #86 | Copy a paste-ready cherry-pick command from a history row |
 | #87 | Confirm before aborting an in-progress merge/rebase/cherry-pick/revert (resolutions not yet committed are lost) |
 | #88 | Renames/copies render as "old → new" in the Changes and commit-detail file rows (`FilePathText`, a11y label "Was x, now y") |
-| #89 | Status bar shows the preferred remote (upstream's remote, else origin, else first) with a URL tooltip; pure tested selector |
+| #89 | Status bar shows the preferred remote (upstream's remote, else origin, else first) with a URL tooltip; pure tested selector. **Its new static selector re-introduces the split-at-first-slash bug #73 removes** — see X3 |
 | #90 | Branch lists carry each tip's committer date (`%(committerdate:iso8601-strict)`) and render relative recency next to ahead/behind |
 
 Verified non-issues, kept for the record (don't re-audit):
@@ -85,10 +95,95 @@ Verified non-issues, kept for the record (don't re-audit):
 - **TimelineView minute-boundary alignment** (suggested in #52's review) does
   not help: relative-date rollovers are anchored at each commit's own second,
   not wall-clock minutes, and the staleness bound is <60 s either way.
+- **#58 does not defeat #68.** #58 strips `GIT_LITERAL_PATHSPECS` from the
+  *inherited* environment; #68 sets it as an explicit override for
+  `git mergetool`. Overrides are merged after sanitization
+  (`childEnvironment.merging(overrides) { _, override in override }`).
+- **#64 survives #79.** `GitActivityLog.normalizedArguments` already strips
+  `--no-optional-locks`, so activity display and the paste-safe copy stay
+  correct once the flag is centralized.
+- **#66's non-defaulted `Branch.refName` breaks no fixture.** `Branch(` is
+  constructed in exactly one place in the repo (`GitParsers.swift`); no test
+  builds one directly. (#40 and #90 add defaulted fields. All three still
+  contend over `parseBranches` and should land as one deliberate change.)
+- **#80's mutation gate cannot wedge.** `perform` funnels success and failure
+  through a single `DispatchQueue.main.async`, so `operationGate.finish(id)` is
+  always reached. Its `dispatchPrecondition(.onQueue(.main))` is also safe: the
+  one non-UI caller, `AppState.autoFetchIfDue`, runs on a `RunLoop.main` timer.
+- **#38's formatter change is correct.** `ISO8601DateFormatter`'s default
+  `formatOptions` is exactly `[.withInternetDateTime]`, so dropping the
+  per-call assignment (the actual data race) still parses `%aI`.
 
 ---
 
 ## Correctness & safety
+
+### X1 · #57 × #83: keep the two-branch pull guard or CI goes red — S
+
+Both PRs rewrite `RepoViewModel.pull(rebase:)`, and neither is an ancestor of
+the other. #57's guard distinguishes "no remotes configured" from "no upstream";
+#83 keeps only the no-upstream message. #57 also ships
+`RepoViewModelTests.testPullWithoutUpstreamFailsGracefully`, which asserts the
+message contains `"no remotes"` — and a fresh view model has no remotes, so
+under #83's guard that test fails. Resolving the conflict in favour of #83 (the
+larger, more structural PR) turns `main` red even though both PRs are green
+alone. Resolution: keep #57's two-branch `pull()` guard *and* #83's
+`PushCapability`; they collide only on this wording. #57's push test is
+unaffected — `PushCapability.resolve` already returns `.unavailable(.noRemotes)`
+with matching text.
+
+### X2 · #71 × #83: two mechanisms for stale menu enablement — S
+
+SwiftUI `Commands` observe `AppState`, not the nested `RepoViewModel`, so menu
+items gated on repo state go stale. #71 forwards the *active* view model's
+`objectWillChange` through an `AnyCancellable` re-subscribed on selection
+change; #83 calls `objectWillChange.send()` from `onStatusChange` when the
+changed repo is the selected one. Landing both leaves two overlapping
+mechanisms and double invalidation. Pick one during conflict resolution — #71's
+is the more general, #83's the cheaper — and delete the other.
+
+### X3 · #73 × #89: don't let the newer PR revert the slash-remote fix — S
+
+#73 replaces split-at-first-slash upstream parsing with longest-prefix matching
+against configured remotes (remote names may contain slashes). #89, opened
+later, promotes `preferredRemote` to a property for the status bar and adds a
+new **static** `preferredRemote(upstream:remotes:)` that keeps the old
+`upstream.split(separator: "/").first` logic — reverting #73 and enshrining the
+regression in #89's own unit tests. The two conflict, so resolution is manual:
+keep #89's property/status-bar surface, but route it through
+`Remote.preferred(for:among:)`.
+
+While there: the same longest-prefix rule is currently written three times —
+`Remote.preferred` (#73), `GitClient.deleteRemoteBranch` (#84), and #89's
+static selector. Consolidate on the one helper on `Remote`; three copies of a
+subtle rule is three places to regress it, as #89 already shows.
+
+### X4 · #48 × #79: the fallback error stops naming the command again — S
+
+#79 centralizes the read-only guard by inserting `--no-optional-locks` at
+`argv[2]`, right after the leading `-C <worktree>`. #48's
+`GitShell.displayCommand` strips only leading `-C` pairs and then returns
+`argv.first`, so once both land the synthesized empty-stderr failure reads
+`git --no-optional-locks failed with exit code 128` — naming no command, which
+is the exact bug #48 exists to fix. The files differ, so git reports no
+conflict and both PRs stay green alone. Fix: skip leading global flags too.
+`GitActivityLog.normalizedArguments` (#64) already strips
+`--no-optional-locks` correctly — reuse it rather than duplicating the rule.
+
+Related, cosmetic: #42's `unpushedCommitHashes()` passes `--no-optional-locks`
+inline instead of going through #79's `runRead`. Correct as written, but it is
+precisely the drift #79 centralizes to prevent; route it through `runRead`.
+
+### X5 · #54 × #81: one `didSet`, two required behaviours — S
+
+Both add a `didSet` to `RepoViewModel.draftCommitMessage`: #54 persists the
+draft per repository, #81 bumps the draft revision and invalidates an in-flight
+AI generation so typing cancels a late suggestion. Swift allows one observer,
+so this is a real conflict — but taking either side wholesale silently drops
+the other behaviour, and neither PR's tests cover the other's. The merged
+observer must do both, and #54's init-time restore must keep going through
+`_draftCommitMessage = Published(initialValue:)` so restoring a draft is not
+counted as user typing (which would invalidate a generation at launch).
 
 ### C1 · Make sidebar summaries generation-safe — S/M
 
