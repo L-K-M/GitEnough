@@ -245,7 +245,9 @@ final class GitShell {
     /// the argument list adds noise to an error that already has little signal.
     private static func displayCommand(_ args: [String]) -> String {
         var argv = args
-        if argv.count >= 2, argv[0] == "-C" {
+        // `while`, not `if`: git accepts repeated -C pairs, and the loop
+        // handles them uniformly if one ever reaches this path.
+        while argv.count >= 2, argv[0] == "-C" {
             argv.removeFirst(2)
         }
         return argv.first ?? ""
