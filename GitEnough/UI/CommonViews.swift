@@ -2,6 +2,8 @@ import SwiftUI
 import AppKit
 
 /// One place for the clear-then-write pasteboard dance every Copy action does.
+/// Main-actor like every other AppKit touchpoint in the views.
+@MainActor
 func copyToPasteboard(_ text: String) {
     NSPasteboard.general.clearContents()
     NSPasteboard.general.setString(text, forType: .string)

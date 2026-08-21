@@ -261,9 +261,11 @@ struct HistoryView: View {
             // `git cherry-pick <hash>` for the terminal-hybrid workflow:
             // paste-ready in any shell. Deliberately no -x: it matches the
             // app's own Cherry-pick action, which doesn't record provenance
-            // either. Single-quoted: hex hashes can't contain a quote, and
-            // the quoting makes the shell-safety invariant explicit.
-            copyToPasteboard("git cherry-pick '\(commit.hash)'")
+            // either. Trimmed + single-quoted: %H can never contain whitespace
+            // or a quote, and enforcing that here keeps the shell-safety
+            // invariant independent of the parser.
+            let hash = commit.hash.trimmingCharacters(in: .whitespacesAndNewlines)
+            copyToPasteboard("git cherry-pick '\(hash)'")
         }
         Divider()
         Button("Create Branch Here…") {
