@@ -88,7 +88,7 @@ struct CommitDetailView: View {
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
                     .lineLimit(bodyExpanded ? nil : Self.collapsedBodyLineLimit)
-                if detail.bodyLineCount > Self.collapsedBodyLineLimit {
+                if detail.bodyNeedsExpansionToggle {
                     Button(bodyExpanded ? "Show less" : "Show more") {
                         bodyExpanded.toggle()
                     }
@@ -151,6 +151,11 @@ struct CommitDetailView: View {
 
 private extension CommitDetail {
     var shortHash: String { String(hash.prefix(7)) }
-    /// Body length in lines, for the collapsed/expanded toggle.
-    var bodyLineCount: Int { body.components(separatedBy: "\n").count }
+    /// True when the collapsed view plausibly hides content. lineLimit counts
+    /// *wrapped, rendered* lines while components(separatedBy:) counts logical
+    /// ones, so a short-line-count body of long paragraphs also gets the
+    /// toggle via a character threshold (≈6 wrapped lines at this width).
+    var bodyNeedsExpansionToggle: Bool {
+        body.components(separatedBy: "\n").count > 6 || body.count > 240
+    }
 }
