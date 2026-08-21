@@ -119,6 +119,10 @@ final class GitActivityLogTests: XCTestCase {
         XCTAssertEqual(
             GitClient.readOnlyArguments(["rev-parse", "--show-toplevel"]),
             ["--no-optional-locks", "rev-parse", "--show-toplevel"])
+        XCTAssertEqual(
+            GitActivityLog.displayCommand(for:
+                GitClient.readOnlyArguments(["rev-parse", "--show-toplevel"])),
+            "rev-parse --show-toplevel")
         let guarded = ["-C", "/r", "--no-optional-locks", "status"]
         XCTAssertEqual(GitClient.readOnlyArguments(guarded), guarded)
     }
