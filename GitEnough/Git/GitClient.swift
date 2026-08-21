@@ -32,7 +32,7 @@ final class GitClient {
     @discardableResult
     private func run(_ args: [String], in directory: URL?) throws -> GitResult {
         guard let log = activityLog else { return try shell.run(args, in: directory) }
-        let id = log.begin(command: GitActivityLog.displayCommand(for: args))
+        let id = log.begin(arguments: args)
         do {
             let result = try shell.run(args, in: directory)
             log.finish(id, exitCode: result.exitCode, stderr: result.stderr)
@@ -53,7 +53,7 @@ final class GitClient {
         guard let log = activityLog else {
             return try shell.runChecked(args, in: directory, stdin: stdin)
         }
-        let id = log.begin(command: GitActivityLog.displayCommand(for: args))
+        let id = log.begin(arguments: args)
         do {
             let result = try shell.runChecked(args, in: directory, stdin: stdin)
             log.finish(id, exitCode: result.exitCode, stderr: result.stderr)
