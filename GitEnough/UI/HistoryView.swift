@@ -259,6 +259,12 @@ struct HistoryView: View {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(commit.subject, forType: .string)
         }
+        Button("Copy Cherry-pick Command") {
+            // `git cherry-pick <hash>` for the terminal-hybrid workflow:
+            // paste-ready in any shell.
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString("git cherry-pick \(commit.hash)", forType: .string)
+        }
         Divider()
         Button("Create Branch Here…") {
             branchNameForNewBranch = ""
