@@ -169,6 +169,10 @@ final class GitParsersTests: XCTestCase {
                        "github.com/u/my.gitops")
         XCTAssertEqual(Remote(name: "o", url: "git@github.com:u/plain.git").displayHost,
                        "github.com/u/plain")
+        // ".git" inside the HOST must survive too (the old replace-all
+        // mangled hostnames like my.gitlab.dev).
+        XCTAssertEqual(Remote(name: "o", url: "git@my.gitlab.dev:u/repo.git").displayHost,
+                       "my.gitlab.dev/u/repo")
         XCTAssertEqual(Remote(name: "o", url: "https://example.com/team/repo").displayHost,
                        "example.com/team/repo")
     }
