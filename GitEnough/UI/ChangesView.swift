@@ -158,6 +158,7 @@ struct ChangesView: View {
                         Button("Unstage All") { viewModel.unstage(viewModel.status.staged) }
                             .buttonStyle(.borderless)
                             .font(.caption)
+                            .disabled(viewModel.isBusy)
                     }
                 }
             }
@@ -187,14 +188,14 @@ struct ChangesView: View {
                         Button("Stage All") { viewModel.stageAll() }
                             .buttonStyle(.borderless)
                             .font(.caption)
+                            .disabled(viewModel.isBusy)
                     }
                 }
             } footer: {
-                // One always-visible stash entry point. The old button lived in
-                // the Changes header, which rendered only while unstaged files
-                // existed — a user who had staged everything (the usual
-                // "stage, then stash to switch branches" flow) had no stash
-                // button anywhere.
+                // The stash entry point lives in the section footer so it stays
+                // reachable even when everything is staged (the usual
+                // "stage, then stash to switch branches" flow). It is hidden
+                // only when there is nothing to stash.
                 if !viewModel.status.staged.isEmpty || !viewModel.status.unstaged.isEmpty {
                     HStack {
                         Spacer()
