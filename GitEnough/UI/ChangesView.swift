@@ -367,7 +367,7 @@ private struct FileRow: View {
                 }
             }
             Button {
-                copyToPasteboard(file.path)
+                NSPasteboard.copyString(file.path)
             } label: {
                 Label("Copy Path", systemImage: "doc.on.doc")
             }

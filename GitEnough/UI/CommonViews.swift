@@ -2,11 +2,14 @@ import SwiftUI
 import AppKit
 
 /// One place for the clear-then-write pasteboard dance every Copy action does.
-/// Main-actor like every other AppKit touchpoint in the views.
-@MainActor
-func copyToPasteboard(_ text: String) {
-    NSPasteboard.general.clearContents()
-    NSPasteboard.general.setString(text, forType: .string)
+/// Main-actor like every other AppKit touchpoint in the views; the pasteboard
+/// is injectable so tests can use `NSPasteboard.withUniqueName()`.
+extension NSPasteboard {
+    @MainActor
+    static func copyString(_ text: String, to pasteboard: NSPasteboard = .general) {
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
+    }
 }
 
 /// A small ref chip for the history list: branch heads, remote branches, tags, HEAD.

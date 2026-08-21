@@ -252,10 +252,10 @@ struct HistoryView: View {
     @ViewBuilder
     private func commitContextMenu(_ commit: Commit) -> some View {
         Button("Copy Hash") {
-            copyToPasteboard(commit.hash)
+            NSPasteboard.copyString(commit.hash)
         }
         Button("Copy Message") {
-            copyToPasteboard(commit.subject)
+            NSPasteboard.copyString(commit.subject)
         }
         Button("Copy Cherry-pick Command") {
             // `git cherry-pick <hash>` for the terminal-hybrid workflow:
@@ -265,8 +265,8 @@ struct HistoryView: View {
             // produce anything else, but the invariant is enforced here
             // rather than assumed from the parser.
             let hash = commit.hash.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !hash.isEmpty, hash.allSatisfy(\.isHexDigit) else { return }
-            copyToPasteboard("git cherry-pick '\(hash)'")
+            guard !hash.isEmpty, hash.allSatisfy({ $0.isASCII && $0.isHexDigit }) else { return }
+            NSPasteboard.copyString("git cherry-pick '\(hash)'")
         }
         Divider()
         Button("Create Branch Here…") {

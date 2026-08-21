@@ -40,7 +40,7 @@ struct CommitDetailView: View {
                         }
                         .contextMenu {
                             Button {
-                                copyToPasteboard(file.path)
+                                NSPasteboard.copyString(file.path)
                             } label: {
                                 Label("Copy Path", systemImage: "doc.on.doc")
                             }
@@ -99,7 +99,7 @@ struct CommitDetailView: View {
                     .background(Color.secondary.opacity(0.15))
                     .clipShape(RoundedRectangle(cornerRadius: 4))
                 Button {
-                    copyToPasteboard(detail.hash)
+                    NSPasteboard.copyString(detail.hash)
                 } label: {
                     Image(systemName: "doc.on.doc")
                 }
