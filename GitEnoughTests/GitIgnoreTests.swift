@@ -23,7 +23,9 @@ final class GitIgnoreTests: XCTestCase {
     }
 
     func testEscapeProtectsTrailingWhitespace() {
-        XCTAssertEqual(GitIgnore.escape("notes "), "notes \\")
+        XCTAssertEqual(GitIgnore.escape("notes "), "notes\\ ")
+        XCTAssertEqual(GitIgnore.escape("notes  "), "notes\\ \\ ")
+        XCTAssertEqual(GitIgnore.escape("notes\t "), "notes\\\t\\ ")
     }
 
     func testAppendingToEmptyFileAnchorsAtRoot() {
@@ -41,13 +43,13 @@ final class GitIgnoreTests: XCTestCase {
     func testAppendingIsIdempotent() {
         let once = GitIgnore.appending("report[1].txt", to: "")
         XCTAssertEqual(GitIgnore.appending("report[1].txt", to: once), once)
-        // The unescaped literal form counts as a duplicate too.
+        // An unescaped glob is not equivalent to the literal bracketed name.
         XCTAssertEqual(GitIgnore.appending("report[1].txt", to: "report[1].txt\n"),
-                       "report[1].txt\n")
+                       "report[1].txt\n/report\\[1\\].txt\n")
     }
 
     func testAppendingDetectsDuplicatesInCRLFFiles() {
-        let crlf = "/a.txt\r\n/report[1].txt\r\n"
+        let crlf = "/a.txt\r\n/report\\[1\\].txt\r\n"
         XCTAssertEqual(GitIgnore.appending("report[1].txt", to: crlf), crlf)
     }
 
@@ -71,5 +73,39 @@ final class GitIgnoreTests: XCTestCase {
         let existing = " /build/output\n"
         XCTAssertEqual(GitIgnore.appending("/build/output", to: existing),
                        " /build/output\n//build/output\n")
+    }
+
+    func testGeneratedRulesMatchLiteralNamesWithGit() throws {
+        guard GitShell.shared.isAvailable else {
+            throw XCTSkip("git is not installed")
+        }
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitEnough-ignore-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory,
+                                                withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        _ = try GitShell.shared.runChecked(["init"], in: directory)
+
+        let literalNames = [
+            "report[1].txt", "star*.txt", "question?.txt", "#notes.md",
+            "!keep.txt", "back\\slash.txt", "one space ", "two spaces  ",
+        ]
+        let ignoreContents = literalNames.reduce(into: "") { contents, name in
+            contents = GitIgnore.appending(name, to: contents)
+        }
+        try ignoreContents.write(to: directory.appendingPathComponent(".gitignore"),
+                                 atomically: true, encoding: .utf8)
+
+        for name in literalNames {
+            let result = try GitShell.shared.run(
+                ["check-ignore", "--no-index", "--quiet", "--", name], in: directory)
+            XCTAssertEqual(result.exitCode, 0, "Expected generated rule to ignore \(name)")
+        }
+
+        for nearMiss in ["report1.txt", "star-anything.txt", "questionX.txt", "one space"] {
+            let result = try GitShell.shared.run(
+                ["check-ignore", "--no-index", "--quiet", "--", nearMiss], in: directory)
+            XCTAssertEqual(result.exitCode, 1, "Generated rule unexpectedly ignored \(nearMiss)")
+        }
     }
 }
