@@ -96,13 +96,22 @@ struct HistoryView: View {
                              onSelectCommit: { hash in
                                  // Parent navigation must be able to reveal
                                  // the target: a filter hiding it would leave
-                                 // a selection the list can't show.
-                                 if !filterText.isEmpty {
+                                 // a selection the list can't show. (Both
+                                 // fields: the debounce window can leave
+                                 // filterText set while activeFilter lags.)
+                                 if !filterText.isEmpty || !activeFilter.isEmpty {
                                      filterText = ""
                                      filterDebounceTask?.cancel()
                                      activeFilter = ""
                                  }
-                                 scrollTarget = hash
+                                 // Only scroll when there IS a row to land
+                                 // on — a parent beyond the loaded page still
+                                 // loads its detail (git show needs no list
+                                 // membership), but a scroll would silently
+                                 // no-op.
+                                 if viewModel.commits.contains(where: { $0.hash == hash }) {
+                                     scrollTarget = hash
+                                 }
                                  selectedHash = hash
                              })
                 .frame(maxHeight: .infinity)
@@ -173,9 +182,16 @@ struct HistoryView: View {
                 guard let target else { return }
                 // A beat for the row set to settle (a just-cleared filter
                 // re-keys the ScrollView; the target row must exist first).
+                // The LazyVStack materializes rows on demand, so a far-off
+                // target may still be missing on the first pass — retry once
+                // after layout, then give up silently (the detail pane is
+                // already showing the commit either way).
                 DispatchQueue.main.async {
                     withAnimation { proxy.scrollTo(target, anchor: .center) }
-                    scrollTarget = nil
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                        withAnimation { proxy.scrollTo(target, anchor: .center) }
+                        scrollTarget = nil
+                    }
                 }
             }
         }
