@@ -62,6 +62,15 @@ final class RepoViewModel: ObservableObject, Identifiable {
     /// Commit detail pane.
     @Published private(set) var selectedCommitDetail: CommitDetail?
     @Published private(set) var selectedCommitFileDiff: String = ""
+    /// True when loading the selected commit's detail failed (`git show`
+    /// errored — object rewritten or garbage-collected, corrupt repo). The
+    /// detail pane shows an error state instead of the eternal spinner it
+    /// used to display when the load could never succeed.
+    @Published private(set) var selectedCommitDetailFailed = false
+    /// The failed load's actual error text (git's stderr), shown in the error
+    /// pane so the user sees the real cause instead of a guessed one. Nil when
+    /// git succeeded but the output didn't parse.
+    @Published private(set) var selectedCommitDetailErrorMessage: String?
 
     /// Changes pane: the diff of the currently selected worktree file.
     @Published private(set) var selectedFileDiff: String = ""
@@ -570,16 +579,45 @@ final class RepoViewModel: ObservableObject, Identifiable {
 
     // MARK: - Selections / detail loading
 
+    /// Superseded-load guard for `selectCommit`. Loads run on the serial repo
+    /// queue, so completions can't reorder among themselves — but a completion
+    /// CAN land after the selection has already moved on (most visibly after
+    /// deselecting), and must not write a stale detail or failure over the
+    /// newer state. Main-thread only: bumped here, compared in the completion.
+    private var commitDetailGeneration = 0
+
     func selectCommit(_ hash: String?) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        // A fresh selection starts clean — a failure only ever describes the
+        // most recently completed load.
+        selectedCommitDetailFailed = false
+        selectedCommitDetailErrorMessage = nil
+        commitDetailGeneration += 1
+        let generation = commitDetailGeneration
         guard let hash else {
             selectedCommitDetail = nil
             selectedCommitFileDiff = ""
             return
         }
         queue.async {
-            let detail = try? self.client.commitDetail(hash)
+            let result = Result { try self.client.commitDetail(hash) }
             DispatchQueue.main.async {
-                self.selectedCommitDetail = detail
+                guard generation == self.commitDetailGeneration else { return }
+                switch result {
+                case .success(let detail?):
+                    self.selectedCommitDetail = detail
+                    self.selectedCommitDetailFailed = false
+                    self.selectedCommitDetailErrorMessage = nil
+                case .success(nil):
+                    // git succeeded but the output didn't parse — still a
+                    // failure, just without an error message to show.
+                    self.selectedCommitDetail = nil
+                    self.selectedCommitDetailFailed = true
+                case .failure(let error):
+                    self.selectedCommitDetail = nil
+                    self.selectedCommitDetailFailed = true
+                    self.selectedCommitDetailErrorMessage = error.localizedDescription
+                }
                 self.selectedCommitFileDiff = ""
             }
         }

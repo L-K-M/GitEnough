@@ -13,6 +13,14 @@ struct CommitDetailView: View {
         if let hash = selectedHash, let detail = viewModel.selectedCommitDetail,
            detail.hash == hash {
             detailView(detail)
+        } else if selectedHash != nil, viewModel.selectedCommitDetailFailed {
+            // A failed `git show` used to leave this pane spinning forever —
+            // the load will never arrive, so say so, with git's actual error
+            // when there is one.
+            EmptyPane(systemImage: "exclamationmark.triangle",
+                      title: "Couldn't load this commit",
+                      subtitle: viewModel.selectedCommitDetailErrorMessage
+                          ?? "Couldn't read this commit's details. Refresh (⌘R) and select it again.")
         } else if selectedHash != nil {
             ProgressView()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
