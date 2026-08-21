@@ -254,16 +254,21 @@ final class RepoViewModel: ObservableObject, Identifiable {
     /// remote, a quiet queue, and no in-progress sequencer operation (pull
     /// would die on "You have not concluded your merge", push on "not
     /// currently on a branch" mid-rebase).
-    var canPull: Bool {
+    private var canSyncWithUpstream: Bool {
         !isBusy && !remotes.isEmpty && status.upstream != nil && !mergeState.isInProgress
     }
 
-    var canPush: Bool {
-        !isBusy && !remotes.isEmpty && status.upstream != nil && !mergeState.isInProgress
-    }
+    var canPull: Bool { canSyncWithUpstream }
 
+    var canPush: Bool { canSyncWithUpstream }
+
+    /// `push -u <remote> HEAD` on an unborn HEAD fails with "src refspec HEAD
+    /// does not match any", and on a detached HEAD it does something
+    /// surprising — so Publish gates on having a real branch, not just on
+    /// `upstream == nil`.
     var canPublish: Bool {
-        !isBusy && !remotes.isEmpty && status.upstream == nil && !mergeState.isInProgress
+        !isBusy && !remotes.isEmpty && status.upstream == nil
+            && !status.isUnborn && !status.isDetached && !mergeState.isInProgress
     }
 
     /// Push -u <publishRemoteName> HEAD for a branch with no upstream yet — which

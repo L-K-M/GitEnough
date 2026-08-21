@@ -110,6 +110,10 @@ struct RepoDetailView: View {
                     .disabled(!viewModel.canPublish)
                     .help(viewModel.mergeState.isInProgress
                           ? "Finish or abort the in-progress operation first"
+                          : viewModel.status.isDetached
+                          ? "Check out a branch before publishing"
+                          : viewModel.status.isUnborn
+                          ? "Make a commit before publishing"
                           : "Push and set upstream to \(viewModel.publishRemoteName)")
                 } else {
                     Button {
