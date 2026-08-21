@@ -48,7 +48,7 @@ struct BranchesView: View {
                     // the two causes have different remedies.
                     Text(viewModel.remotes.isEmpty
                          ? "This repository has no remotes — add one in the terminal (git remote add), then Fetch."
-                         : "Nothing fetched yet — Fetch to load remote branches, or Publish the current branch to create one.")
+                         : "No remote branches yet — Fetch to load them, or Publish the current branch to create one.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } else {

@@ -133,20 +133,19 @@ struct HistoryView: View {
         let visible = visibleCommits
         let showsUnbornEmptyState = viewModel.status.isUnborn && viewModel.commits.isEmpty
         return VStack(spacing: 0) {
-            // No filter bar over the empty state — there is nothing to filter.
-            if !showsUnbornEmptyState {
-                filterBar(matchCount: visible.count)
-                Divider()
-            }
             if showsUnbornEmptyState {
-                // A fresh `git init` used to render a silent blank pane here.
-                // (Gated on isUnborn, not on the commit list alone — an empty
-                // list is also the initial-load state of a normal repo.)
+                // A fresh `git init` used to render a silent blank pane here —
+                // and a filter bar over it would be noise, so the whole layout
+                // branches on one condition. (Gated on isUnborn, not on the
+                // commit list alone — an empty list is also the initial-load
+                // state of a normal repo.)
                 EmptyPane(systemImage: "clock.arrow.circlepath",
                           title: "No commits yet",
                           subtitle: "The history graph starts with your first commit — stage your files in the Changes tab and commit.")
                     .background(Color(nsColor: .textBackgroundColor))
             } else {
+                filterBar(matchCount: visible.count)
+                Divider()
                 ScrollView {
                     VStack(spacing: 0) {
                         commitRows(visible)
