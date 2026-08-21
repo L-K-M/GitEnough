@@ -8,11 +8,19 @@ enum GitParsers {
     static let fieldSep = "\u{1F}"
     static let recordSep = "\u{1E}"
 
-    private static let iso = ISO8601DateFormatter()
+    /// Configured once and never mutated afterwards: `parseDate` runs on every
+    /// repo's serial queue, so with several repositories refreshing at once the
+    /// old per-call `formatOptions` assignment was a genuine data race on
+    /// shared state (ISO8601DateFormatter is only thread-safe while treated as
+    /// immutable).
+    private static let iso: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }()
 
     static func parseDate(_ raw: String) -> Date? {
-        iso.formatOptions = [.withInternetDateTime]
-        return iso.date(from: raw)
+        iso.date(from: raw)
     }
 
     // MARK: - git log
