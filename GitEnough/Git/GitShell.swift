@@ -230,11 +230,23 @@ final class GitShell {
         guard result.exitCode == 0 else {
             let message = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
             throw GitError(message: message.isEmpty
-                           ? "git \(args.first ?? "") failed with exit code \(result.exitCode)."
+                           ? "git \(Self.displayCommand(args)) failed with exit code \(result.exitCode)."
                            : message,
                            exitCode: result.exitCode)
         }
         return result
+    }
+
+    /// The command name for the synthesized failure message, with the leading
+    /// `-C <worktree>` pair every GitClient call starts with stripped — without
+    /// it the message read "git -C failed with exit code 128", which names no
+    /// command at all.
+    private static func displayCommand(_ args: [String]) -> String {
+        var argv = args
+        if argv.count >= 2, argv[0] == "-C" {
+            argv.removeFirst(2)
+        }
+        return argv.joined(separator: " ")
     }
 
     /// Separate entry point because `standardInput` must be assigned before `run()`.
