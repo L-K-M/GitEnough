@@ -194,6 +194,39 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertEqual(content, "one\n")
     }
 
+    func testDiscardStagedRenameRestoresBothSides() throws {
+        // git mv stages a rename as delete-old + add-new. Discarding it via
+        // both paths (what RepoViewModel.discard passes for a renamed change)
+        // must restore the original and keep the renamed file as untracked —
+        // resetting only the new path would leave the original's deletion
+        // staged and its file gone.
+        try run(["mv", "a.txt", "renamed.txt"])
+        // Pin the precondition this test exists for: the rename is staged and
+        // the status parser pairs it (originalPath is what the view-model fix
+        // keys on). Without this, the assertions below pass vacuously even if
+        // nothing was staged or rename pairing regresses.
+        let stagedChanges = try client.status().staged
+        XCTAssertEqual(stagedChanges.count, 1)
+        XCTAssertEqual(stagedChanges.first?.path, "renamed.txt")
+        XCTAssertEqual(stagedChanges.first?.originalPath, "a.txt")
+        // Discard via the view model's production mapping, not a hand-built
+        // literal, so the end-to-end guarantee fails loudly if the derivation
+        // ever regresses (the pure unit test covers the mapping itself).
+        try client.discard(paths: RepoViewModel.trackedPathsToDiscard(in: stagedChanges))
+
+        let status = try client.status()
+        XCTAssertTrue(status.staged.isEmpty)
+        XCTAssertEqual(status.unstaged.count, 1)
+        XCTAssertEqual(status.unstaged.first?.path, "renamed.txt")
+        XCTAssertTrue(status.unstaged.first?.isUntracked ?? false)
+        XCTAssertEqual(try String(contentsOf: repoURL.appendingPathComponent("a.txt"),
+                                  encoding: .utf8), "one\n")
+        // The "kept, not destroyed" half of the contract: the renamed file
+        // survives intact as untracked.
+        XCTAssertEqual(try String(contentsOf: repoURL.appendingPathComponent("renamed.txt"),
+                                  encoding: .utf8), "one\n")
+    }
+
     func testDiscardMixedBatchOfStagedNewAndTrackedModified() throws {
         // One call, two kinds of paths: the tracked file is restored to HEAD,
         // the staged-new file survives as untracked (the ls-files split).

@@ -508,13 +508,33 @@ final class RepoViewModel: ObservableObject, Identifiable {
     /// (recoverable, unlike a hard delete).
     func discard(_ changes: [FileChange]) {
         perform("Discarding changes…", includeHistory: false) { client in
-            let tracked = changes.filter { !$0.isUntracked }.map(\.path)
+            let tracked = Self.trackedPathsToDiscard(in: changes)
             if !tracked.isEmpty { try client.discard(paths: tracked) }
             for change in changes where change.isUntracked {
                 let url = self.repo.url.appendingPathComponent(change.path)
                 try? FileManager.default.trashItem(at: url, resultingItemURL: nil)
             }
         }
+    }
+
+    /// The paths `discard(_:)` resets via git. Pure (and unit-tested) because
+    /// it's the piece the staged-rename fix lives in: a rename (`git mv old
+    /// new`) must reset BOTH sides — resetting only the new path leaves the
+    /// original's deletion staged and its worktree file gone, the rename
+    /// restaged as two pieces. Resetting both restores the original; the
+    /// renamed file stays on disk as untracked (kept, like a discarded
+    /// staged-new file, rather than destroyed).
+    ///
+    /// RENAMES ONLY: a staged copy (`C`) also carries originalPath, but its
+    /// source is untouched by the change — resetting it would clobber the
+    /// source file's unrelated worktree edits. Output is deduplicated (first
+    /// occurrence wins) so overlapping changes can't double-reset a path.
+    static func trackedPathsToDiscard(in changes: [FileChange]) -> [String] {
+        var seen = Set<String>()
+        return changes.filter { !$0.isUntracked }.flatMap { change -> [String] in
+            let original = change.stagedStatus == .renamed ? change.originalPath : nil
+            return [change.path] + (original.map { [$0] } ?? [])
+        }.filter { seen.insert($0).inserted }
     }
 
     func commit() {
