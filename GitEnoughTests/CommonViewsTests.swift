@@ -1,3 +1,4 @@
+import AppKit
 import XCTest
 @testable import GitEnough
 
@@ -10,9 +11,28 @@ final class CommonViewsTests: XCTestCase {
     @MainActor
     func testCopyStringReplacesPasteboardContents() {
         let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
         NSPasteboard.copyString("first", to: pasteboard)
         XCTAssertEqual(pasteboard.string(forType: .string), "first")
+
+        // Pollute with an unrelated type: a clear-then-write must remove it,
+        // not just overwrite the string type.
+        XCTAssertTrue(pasteboard.setData(Data([0x00]), forType: .pdf))
         NSPasteboard.copyString("second", to: pasteboard)
         XCTAssertEqual(pasteboard.string(forType: .string), "second")
+        XCTAssertNil(pasteboard.data(forType: .pdf), "clearContents must drop prior types")
+    }
+
+    /// The cherry-pick command is paste-executed verbatim, so only clean
+    /// ASCII hex ever makes it into the quoted string.
+    func testCherryPickCommandValidation() {
+        let hash = String(repeating: "a1b2c3", count: 7) // 42 chars, trimmed below
+        XCTAssertEqual(CommitCommands.cherryPickCommand(forHash: " \(hash.dropLast(2)) \n"),
+                       "git cherry-pick '\(hash.dropLast(2))'")
+        XCTAssertNil(CommitCommands.cherryPickCommand(forHash: ""))
+        XCTAssertNil(CommitCommands.cherryPickCommand(forHash: "   "))
+        XCTAssertNil(CommitCommands.cherryPickCommand(forHash: "abc'; rm -rf ~ #"))
+        // isHexDigit alone would accept fullwidth digits — must not.
+        XCTAssertNil(CommitCommands.cherryPickCommand(forHash: "１２３４５６７"))
     }
 }
