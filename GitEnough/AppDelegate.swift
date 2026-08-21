@@ -23,7 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // EPIPE returns instead of dying from SIGPIPE — git handles EPIPE
         // fine; keep it in mind for other piped tools.
         super.init()
-        signal(SIGPIPE, SIG_IGN)
+        _ = signal(SIGPIPE, SIG_IGN)
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
