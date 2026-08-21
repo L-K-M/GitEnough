@@ -86,6 +86,49 @@ final class RepoDiscoveryTests: XCTestCase {
         let found = RepoDiscovery.findRepositories(in: root, maxDepth: 2, maxVisitedDirectories: 3)
         XCTAssertTrue(found.isEmpty)
     }
+
+    /// A bare repository (`.git` is a directory with `core.bare = true`) has no
+    /// worktree to open — it must not be offered in the sidebar.
+    func testSkipsBareRepositories() throws {
+        let bare = try makeRepo("bare")
+        try "[core]\n\tbare = true\n".write(
+            to: bare.appendingPathComponent(".git/config"), atomically: true, encoding: .utf8)
+        try makeRepo("normal")
+
+        XCTAssertEqual(canonicalPaths(RepoDiscovery.findRepositories(in: root)),
+                       canonicalPaths([root.appendingPathComponent("normal")]))
+    }
+
+    /// A submodule's `.git` is a file whose gitdir points into the parent
+    /// repo's modules store — its parent already covers it, so it must not be
+    /// offered as its own sidebar entry. (The realistic case: the parent repo
+    /// lives outside the watch folder, so the submodule would otherwise be
+    /// recorded on its own.)
+    func testSkipsSubmodules() throws {
+        try makeRepo("normal")
+        // Parent repo lives outside the scan — only its submodule is in here.
+        let sub = root.appendingPathComponent("submodule")
+        try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: true)
+        try "gitdir: /elsewhere/.git/modules/submodule\n"
+            .write(to: sub.appendingPathComponent(".git"), atomically: true, encoding: .utf8)
+
+        XCTAssertEqual(canonicalPaths(RepoDiscovery.findRepositories(in: root)),
+                       canonicalPaths([root.appendingPathComponent("normal")]))
+    }
+
+    /// A linked worktree's `.git` file points at the main repo's worktree
+    /// store (no `modules/`) — it is a real, openable working copy and must
+    /// still be found (guards against over-eager submodule skipping).
+    func testStillFindsLinkedWorktrees() throws {
+        let main = try makeRepo("main")
+        let worktree = root.appendingPathComponent("worktree")
+        try FileManager.default.createDirectory(at: worktree, withIntermediateDirectories: true)
+        try "gitdir: \(main.path)/.git/worktrees/dev\n"
+            .write(to: worktree.appendingPathComponent(".git"), atomically: true, encoding: .utf8)
+
+        XCTAssertEqual(canonicalPaths(RepoDiscovery.findRepositories(in: root)),
+                       canonicalPaths([main, worktree]))
+    }
 }
 
 /// Tests the sidebar store's discovery bookkeeping: dedupe, and the "removal
