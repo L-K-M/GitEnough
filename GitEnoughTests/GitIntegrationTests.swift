@@ -423,9 +423,10 @@ final class GitIntegrationTests: XCTestCase {
     }
 
     func testDeleteRemoteBranchOnSlashNamedRemote() throws {
-        // Remote names may contain "/": "up/stream/feature" must split into
-        // remote "up/stream" + branch "feature" (longest-prefix match), never
-        // remote "up" + branch "stream/feature".
+        // Remote names may contain "/": "up/stream/port" must split into
+        // remote "up/stream" + branch "port" (longest-prefix match), never
+        // remote "up" + branch "stream/port". (Branch name "port": the shared
+        // fixture already has a "feature" branch.)
         let upURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("GitEnoughTests-up-\(UUID().uuidString)")
         let upStreamURL = FileManager.default.temporaryDirectory
@@ -439,21 +440,21 @@ final class GitIntegrationTests: XCTestCase {
         try run(["remote", "add", "up", upURL.path])
         try run(["remote", "add", "up/stream", upStreamURL.path])
 
-        try run(["checkout", "-b", "feature"])
+        try run(["checkout", "-b", "port"])
         try client.push(setUpstream: true, remote: "up/stream")
-        try run(["push", "up", "feature"])   // the same branch on both remotes
+        try run(["push", "up", "port"])   // the same branch on both remotes
         try run(["checkout", "main"])
 
-        try client.deleteRemoteBranch("up/stream/feature")
+        try client.deleteRemoteBranch("up/stream/port")
 
         // Gone from up/stream …
         let upStreamRefs = try GitShell.shared.runChecked(
             ["-C", upStreamURL.path, "for-each-ref", "--format=%(refname)"], in: nil).stdout
-        XCTAssertFalse(upStreamRefs.contains("refs/heads/feature"))
+        XCTAssertFalse(upStreamRefs.contains("refs/heads/port"))
         // … but untouched on up.
         let upRefs = try GitShell.shared.runChecked(
             ["-C", upURL.path, "for-each-ref", "--format=%(refname)"], in: nil).stdout
-        XCTAssertTrue(upRefs.contains("refs/heads/feature"))
+        XCTAssertTrue(upRefs.contains("refs/heads/port"))
     }
 
     func testCreateTagLightweightAndAnnotated() throws {
