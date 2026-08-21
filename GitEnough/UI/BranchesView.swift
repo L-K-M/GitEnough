@@ -222,7 +222,8 @@ private struct BranchRecencyText: View {
             RelativeDateText(date: date)
                 .font(.caption)
                 .foregroundStyle(.tertiary)
-                .frame(width: 90, alignment: .trailing)
+                .frame(minWidth: 90, alignment: .trailing)
+                .lineLimit(1)
         }
     }
 }
