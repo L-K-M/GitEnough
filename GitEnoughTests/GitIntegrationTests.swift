@@ -201,6 +201,14 @@ final class GitIntegrationTests: XCTestCase {
         // resetting only the new path would leave the original's deletion
         // staged and its file gone.
         try run(["mv", "a.txt", "renamed.txt"])
+        // Pin the precondition this test exists for: the rename is staged and
+        // the status parser pairs it (originalPath is what the view-model fix
+        // keys on). Without this, the assertions below pass vacuously even if
+        // nothing was staged or rename pairing regresses.
+        let stagedChanges = try client.status().staged
+        XCTAssertEqual(stagedChanges.count, 1)
+        XCTAssertEqual(stagedChanges.first?.path, "renamed.txt")
+        XCTAssertEqual(stagedChanges.first?.originalPath, "a.txt")
         try client.discard(paths: ["renamed.txt", "a.txt"])
 
         let status = try client.status()
@@ -209,6 +217,10 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertEqual(status.unstaged.first?.path, "renamed.txt")
         XCTAssertTrue(status.unstaged.first?.isUntracked ?? false)
         XCTAssertEqual(try String(contentsOf: repoURL.appendingPathComponent("a.txt"),
+                                  encoding: .utf8), "one\n")
+        // The "kept, not destroyed" half of the contract: the renamed file
+        // survives intact as untracked.
+        XCTAssertEqual(try String(contentsOf: repoURL.appendingPathComponent("renamed.txt"),
                                   encoding: .utf8), "one\n")
     }
 
