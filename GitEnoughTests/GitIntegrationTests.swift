@@ -411,12 +411,49 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertTrue(try client.branches().contains { $0.name == "to-delete" && !$0.isRemote })
     }
 
-    func testDeleteRemoteBranchRejectsInvalidRefs() {
-        // Guard paths: no git invocation happens for any of these.
-        XCTAssertThrowsError(try client.deleteRemoteBranch("noremote"))
+    func testDeleteRemoteBranchRejectsInvalidRefs() throws {
+        // Guard paths: no push happens for any of these. (A remote must exist
+        // so the prefix-matching guard, not just "no configured remote", is
+        // what rejects the malformed inputs.)
+        try run(["remote", "add", "origin", "https://example.com/x/y.git"])
+        XCTAssertThrowsError(try client.deleteRemoteBranch("noremote/branch"))
+        XCTAssertThrowsError(try client.deleteRemoteBranch("origin/"))
         XCTAssertThrowsError(try client.deleteRemoteBranch("origin/HEAD"))
         XCTAssertThrowsError(try client.deleteRemoteBranch("origin/-dash"))
-        XCTAssertThrowsError(try client.deleteRemoteBranch("-origin/main"))
+    }
+
+    func testDeleteRemoteBranchOnSlashNamedRemote() throws {
+        // Remote names may contain "/": "up/stream/feature" must split into
+        // remote "up/stream" + branch "feature" (longest-prefix match), never
+        // remote "up" + branch "stream/feature".
+        let upURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitEnoughTests-up-\(UUID().uuidString)")
+        let upStreamURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitEnoughTests-upstream-\(UUID().uuidString)")
+        defer {
+            try? FileManager.default.removeItem(at: upURL)
+            try? FileManager.default.removeItem(at: upStreamURL)
+        }
+        try run(["init", "--bare", upURL.path])
+        try run(["init", "--bare", upStreamURL.path])
+        try run(["remote", "add", "up", upURL.path])
+        try run(["remote", "add", "up/stream", upStreamURL.path])
+
+        try run(["checkout", "-b", "feature"])
+        try client.push(setUpstream: true, remote: "up/stream")
+        try run(["push", "up", "feature"])   // the same branch on both remotes
+        try run(["checkout", "main"])
+
+        try client.deleteRemoteBranch("up/stream/feature")
+
+        // Gone from up/stream …
+        let upStreamRefs = try GitShell.shared.runChecked(
+            ["-C", upStreamURL.path, "for-each-ref", "--format=%(refname)"], in: nil).stdout
+        XCTAssertFalse(upStreamRefs.contains("refs/heads/feature"))
+        // … but untouched on up.
+        let upRefs = try GitShell.shared.runChecked(
+            ["-C", upURL.path, "for-each-ref", "--format=%(refname)"], in: nil).stdout
+        XCTAssertTrue(upRefs.contains("refs/heads/feature"))
     }
 
     func testCreateTagLightweightAndAnnotated() throws {
