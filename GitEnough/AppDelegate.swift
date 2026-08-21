@@ -16,7 +16,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // disposition kills the whole app. Ignore it process-wide so the
         // write surfaces as an ordinary error instead; nothing in the app
         // relies on SIGPIPE semantics. Installed in init (the adaptor runs it
-        // during bootstrap) so no early startup work can race ahead of it.
+        // during bootstrap) so no early startup work can race ahead of it;
+        // GitShell installs the same disposition lazily on first use, so tests
+        // and future entry points are covered even without this delegate.
         // Caveat: ignored dispositions survive exec(), so spawned tools see
         // EPIPE returns instead of dying from SIGPIPE — git handles EPIPE
         // fine; keep it in mind for other piped tools.

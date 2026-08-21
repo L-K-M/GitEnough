@@ -33,6 +33,12 @@ final class GitShell {
     /// Shared instance; the shell is stateless (every call takes the working dir).
     static let shared = GitShell()
 
+    /// Process-wide and idempotent: a child that exits before draining stdin
+    /// must not let a broken-pipe write kill the process driving it (see
+    /// runWithStdin). Installed here — not only in AppDelegate — so tests and
+    /// any future entry point that drives GitShell get it too.
+    private static let ignoreSIGPIPE: Void = signal(SIGPIPE, SIG_IGN)
+
     /// Resolved path to a working git binary, or nil when Xcode CLT is missing.
     private(set) var gitURL: URL?
 
@@ -167,6 +173,7 @@ final class GitShell {
     /// throwing on non-zero exit. Throws only when git can't be executed at all.
     @discardableResult
     func run(_ args: [String], in directory: URL?) throws -> GitResult {
+        _ = Self.ignoreSIGPIPE
         guard let gitURL else {
             throw GitError(message: "git is not installed. Install the Xcode Command Line Tools (`xcode-select --install`) and relaunch GitEnough.", exitCode: -1)
         }
@@ -239,6 +246,7 @@ final class GitShell {
 
     /// Separate entry point because `standardInput` must be assigned before `run()`.
     private func runWithStdin(_ args: [String], in directory: URL?, stdin: String) throws -> GitResult {
+        _ = Self.ignoreSIGPIPE
         guard let gitURL else {
             throw GitError(message: "git is not installed. Install the Xcode Command Line Tools (`xcode-select --install`) and relaunch GitEnough.", exitCode: -1)
         }
@@ -290,7 +298,7 @@ final class GitShell {
                 // EPIPE is expected when the child exits before draining
                 // stdin; its exit status carries the real error. Log so a
                 // failed commit can still be correlated with the write.
-                NSLog("[GitShell] stdin write to git failed: \(error.localizedDescription)")
+                NSLog("[GitShell] stdin write to git failed: %@", error.localizedDescription)
             }
             try? inPipe.fileHandleForWriting.close()
             group.leave()
