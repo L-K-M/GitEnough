@@ -520,7 +520,10 @@ final class RepoViewModel: ObservableObject, Identifiable {
     func commit() {
         let message = draftCommitMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !message.isEmpty else { return }
-        let amend = amendLastCommit
+        // Amending an unborn HEAD dies on git's "You have nothing to amend" —
+        // the UI disables the toggle, but a stale true (orphan checkout) must
+        // not reach the command line either.
+        let amend = amendLastCommit && !status.isUnborn
         // Only clear the box on success — a rejected hook must not eat the message.
         perform("Committing…", onSuccess: {
             self.draftCommitMessage = ""

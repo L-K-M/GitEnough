@@ -262,11 +262,15 @@ struct ChangesView: View {
 
                 Spacer()
 
-                Toggle("Amend", isOn: $viewModel.amendLastCommit)
+                Toggle("Amend", isOn: viewModel.status.isUnborn
+                       ? .constant(false) : $viewModel.amendLastCommit)
                     .toggleStyle(.checkbox)
                     // Nothing to amend before the first commit; without the
                     // guard the commit dies on git's raw "You have nothing to
-                    // amend" error.
+                    // amend" error. The constant-false binding also
+                    // neutralizes a stale true (e.g. after checking out an
+                    // orphan branch); the view model's commit() guards the
+                    // same way.
                     .disabled(viewModel.status.isUnborn)
                     .help("Amend the last commit instead of creating a new one")
 

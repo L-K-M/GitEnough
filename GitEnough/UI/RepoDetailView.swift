@@ -109,8 +109,7 @@ struct RepoDetailView: View {
                     } label: {
                         Label("Publish", systemImage: "arrow.up.to.line")
                     }
-                    .disabled(viewModel.isBusy || viewModel.remotes.isEmpty
-                              || viewModel.mergeState.isInProgress)
+                    .disabled(viewModel.isBusy || viewModel.mergeState.isInProgress)
                     .help(viewModel.mergeState.isInProgress
                           ? "Finish or abort the in-progress operation first"
                           : "Push and set upstream to \(viewModel.publishRemoteName)")
