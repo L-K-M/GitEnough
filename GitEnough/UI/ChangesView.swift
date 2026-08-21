@@ -122,7 +122,10 @@ struct ChangesView: View {
 
     private var fileList: some View {
         List {
-            if conflictUIActive {
+            // No "Conflicted Files (0)" header over zero rows: once the last
+            // conflict is resolved the section has nothing left to show, and
+            // the operation banner already offers Continue.
+            if conflictUIActive && !conflicts.isEmpty {
                 Section {
                     ForEach(conflicts) { file in
                         ConflictRow(path: file.path, viewModel: viewModel)
@@ -261,6 +264,10 @@ struct ChangesView: View {
 
                 Toggle("Amend", isOn: $viewModel.amendLastCommit)
                     .toggleStyle(.checkbox)
+                    // Nothing to amend before the first commit; without the
+                    // guard the commit dies on git's raw "You have nothing to
+                    // amend" error.
+                    .disabled(viewModel.status.isUnborn)
                     .help("Amend the last commit instead of creating a new one")
 
                 Button("Commit") {

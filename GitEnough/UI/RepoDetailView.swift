@@ -92,10 +92,16 @@ struct RepoDetailView: View {
                 Button {
                     viewModel.pull(rebase: pullRebase)
                 } label: {
-                    Label("Pull", systemImage: "arrow.down.to.line")
+                    Label(viewModel.status.behind > 0
+                          ? "Pull (\(viewModel.status.behind))" : "Pull",
+                          systemImage: "arrow.down.to.line")
                 }
-                .disabled(viewModel.isBusy || viewModel.remotes.isEmpty || viewModel.status.upstream == nil)
-                .help(pullRebase ? "Pull with rebase (⇧⌘L)" : "Pull (⇧⌘L)")
+                .disabled(viewModel.isBusy || viewModel.remotes.isEmpty
+                          || viewModel.status.upstream == nil
+                          || viewModel.mergeState.isInProgress)
+                .help(viewModel.mergeState.isInProgress
+                      ? "Finish or abort the in-progress operation first"
+                      : pullRebase ? "Pull with rebase (⇧⌘L)" : "Pull (⇧⌘L)")
 
                 if viewModel.status.upstream == nil && !viewModel.remotes.isEmpty {
                     Button {
@@ -103,16 +109,23 @@ struct RepoDetailView: View {
                     } label: {
                         Label("Publish", systemImage: "arrow.up.to.line")
                     }
-                    .disabled(viewModel.isBusy || viewModel.remotes.isEmpty)
-                    .help("Push and set upstream to \(viewModel.publishRemoteName)")
+                    .disabled(viewModel.isBusy || viewModel.remotes.isEmpty
+                              || viewModel.mergeState.isInProgress)
+                    .help(viewModel.mergeState.isInProgress
+                          ? "Finish or abort the in-progress operation first"
+                          : "Push and set upstream to \(viewModel.publishRemoteName)")
                 } else {
                     Button {
                         viewModel.push()
                     } label: {
-                        Label("Push", systemImage: "arrow.up.to.line")
+                        Label(viewModel.status.ahead > 0
+                              ? "Push (\(viewModel.status.ahead))" : "Push",
+                              systemImage: "arrow.up.to.line")
                     }
-                    .disabled(viewModel.isBusy || viewModel.remotes.isEmpty)
-                    .help("Push (⇧⌘P)")
+                    .disabled(viewModel.isBusy || viewModel.remotes.isEmpty
+                              || viewModel.mergeState.isInProgress)
+                    .help(viewModel.mergeState.isInProgress
+                          ? "Finish or abort the in-progress operation first" : "Push (⇧⌘P)")
                 }
 
                 Button {

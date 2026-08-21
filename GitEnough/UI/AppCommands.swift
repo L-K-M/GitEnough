@@ -29,11 +29,11 @@ struct AppCommands: Commands {
 
             Button(pullRebase ? "Pull (Rebase)" : "Pull") { active?.pull(rebase: pullRebase) }
                 .keyboardShortcut("l", modifiers: [.shift, .command])
-                .disabled(active == nil)
+                .disabled(active == nil || active?.mergeState.isInProgress == true)
 
             Button("Push") { active?.push() }
                 .keyboardShortcut("p", modifiers: [.shift, .command])
-                .disabled(active == nil)
+                .disabled(active == nil || active?.mergeState.isInProgress == true)
 
             Button("Open Pull Request…") { active?.openPullRequest() }
                 .keyboardShortcut("p", modifiers: [.option, .command])
