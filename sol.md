@@ -143,8 +143,11 @@ rename.
 
 For an unstage, pass both source and destination literal pathspecs. For discard,
 restore the source and make the destination outcome explicit and recoverable;
-do not silently delete a newly created destination. Add staged rename and copy
-integration tests, including spaces and pathspec characters.
+do not silently delete a newly created destination. Crucially, porcelain copy
+records also carry `originalPath`, but their source is independent: only true
+`.renamed` entries may expand to two action paths. Add rename tests plus copy
+regressions proving Stage/Unstage/Discard never alter a separately modified
+source, including spaces and pathspec characters.
 
 ### S07 · Derive branch names from full refs, not ambiguous short refs — high
 
@@ -271,7 +274,8 @@ Use a single selection value containing path plus staged/unstaged side and a
 request generation. Immediately represent the new request as loading, discard
 old completions, and refresh content when the selected side's status revision
 changes. This complements, rather than duplicates, generic stale-request token
-work.
+work. Use a typed failure state as well: `try? ?? ""` must not turn a Git/read
+failure into a legitimate-looking “No diff.”
 
 ### S18 · Make conflict-marker verification fail closed — high
 
@@ -716,4 +720,3 @@ not communicate a combined spoken state; file badges speak raw letters.
 6. Do the responsive/accessibility pass on real macOS hardware.
 7. Add workflow features in the order listed, using measured process counts and
    accessibility acceptance criteria for each.
-
