@@ -18,7 +18,13 @@ enum GitParsers {
     // MARK: - git log
 
     /// Parses records of `%H %P %an %ae %aI %D %s` joined by \x1F, separated by \x1E.
-    static func parseLog(_ output: String) -> [Commit] {
+    ///
+    /// `remoteNames` (the repo's configured remotes) disambiguates decorated
+    /// refs: local branch names may contain slashes ("feature/auth"), so a
+    /// slash alone doesn't make a decoration a remote branch. When the set is
+    /// empty — callers that don't know the remotes — a slash-containing part
+    /// falls back to the remote-branch heuristic.
+    static func parseLog(_ output: String, remoteNames: Set<String> = []) -> [Commit] {
         var commits: [Commit] = []
         for record in output.components(separatedBy: recordSep) {
             let trimmed = record.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -34,14 +40,21 @@ enum GitParsers {
                 email: fields[3],
                 date: parseDate(fields[4]),
                 subject: fields[6],
-                decorations: parseDecorations(fields[5])
+                decorations: parseDecorations(fields[5], remoteNames: remoteNames)
             ))
         }
         return commits
     }
 
     /// Parses `%D` output: "HEAD -> main, origin/main, tag: v1.0".
-    static func parseDecorations(_ raw: String) -> [RefDecoration] {
+    ///
+    /// Classification: "HEAD -> x" yields the HEAD marker plus the local
+    /// branch; "tag: x" a tag; a part starting with a configured
+    /// `remoteName + "/"` a remote branch; any other part a local branch —
+    /// including slash-named ones ("feature/auth"). With no remoteNames given,
+    /// a slash-containing part is *assumed* to be a remote branch (the common
+    /// case; remote-tracking decorations like "origin/main" dominate).
+    static func parseDecorations(_ raw: String, remoteNames: Set<String> = []) -> [RefDecoration] {
         let trimmed = raw.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return [] }
         var decorations: [RefDecoration] = []
@@ -54,13 +67,28 @@ enum GitParsers {
                 decorations.append(RefDecoration(kind: .head, name: "HEAD"))
             } else if part.hasPrefix("tag: ") {
                 decorations.append(RefDecoration(kind: .tag, name: String(part.dropFirst(5))))
-            } else if part.contains("/") {
+            } else if isRemoteBranchName(part, remoteNames: remoteNames) {
                 decorations.append(RefDecoration(kind: .remoteBranch, name: part))
             } else {
                 decorations.append(RefDecoration(kind: .localBranch, name: part))
             }
         }
         return decorations
+    }
+
+    /// True when a decorated ref name belongs to a remote-tracking branch of
+    /// one of `remoteNames` ("origin/…" for the origin remote). Without known
+    /// remotes, the historical heuristic applies: any slash makes it a remote
+    /// branch (remote-tracking decorations dominate, and mislabeling a slash
+    /// named local branch was the rarer failure — now fixed by callers that
+    /// pass their remotes).
+    private static func isRemoteBranchName(_ name: String, remoteNames: Set<String>) -> Bool {
+        if remoteNames.isEmpty {
+            return name.contains("/")
+        }
+        return remoteNames.contains { remote in
+            name.hasPrefix(remote + "/")
+        }
     }
 
     // MARK: - git status --porcelain=v2 --branch
