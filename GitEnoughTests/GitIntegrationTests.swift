@@ -247,6 +247,46 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertTrue(diff.contains("+brand new"))
     }
 
+    func testUntrackedDirectoryDiffListsContents() throws {
+        // status --untracked-files=normal collapses a fully-untracked directory
+        // to a single "dir/" entry; diffing it with --no-index against /dev/null
+        // fails ("Could not access 'dir/null'"), so directories get a listing.
+        try FileManager.default.createDirectory(
+            at: repoURL.appendingPathComponent("newdir/sub"), withIntermediateDirectories: true)
+        try write("one\n", to: "newdir/one.txt")
+        try write("two\n", to: "newdir/two.txt")
+        // Nested untracked directories are recursed into, and ignore rules are
+        // honored so the listing matches what status considers untracked.
+        try write("three\n", to: "newdir/sub/three.txt")
+        try write("*.log\n", to: "newdir/.gitignore")
+        try write("log\n", to: "newdir/ignored.log")
+
+        let status = try client.status()
+        XCTAssertTrue(status.unstaged.contains { $0.path == "newdir/" && $0.isUntracked })
+
+        let listing = try client.diffForUntracked(path: "newdir/")
+        XCTAssertTrue(listing.contains("newdir/one.txt"))
+        XCTAssertTrue(listing.contains("newdir/two.txt"))
+        XCTAssertTrue(listing.contains("newdir/sub/three.txt"))
+        XCTAssertFalse(listing.contains("ignored.log"))
+
+        // Staging the directory works through the collapsed path, too.
+        try client.stage(paths: ["newdir/"])
+        XCTAssertEqual(try client.status().staged.count, 4)
+    }
+
+    func testUntrackedDirectoryListingIsCapped() throws {
+        let directory = repoURL.appendingPathComponent("huge")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        for index in 0..<210 {
+            try write("x\n", to: "huge/f\(String(format: "%03d", index)).txt")
+        }
+        let listing = try client.diffForUntracked(path: "huge/")
+        XCTAssertTrue(listing.contains("… and 10 more"))
+        XCTAssertTrue(listing.contains("huge/f000.txt"))
+        XCTAssertFalse(listing.contains("huge/f209.txt"))
+    }
+
     func testCommitViaStdinMessage() throws {
         try write("four\n", to: "d.txt")
         try client.stage(paths: ["d.txt"])
