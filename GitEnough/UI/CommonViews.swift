@@ -1,6 +1,12 @@
 import SwiftUI
 import AppKit
 
+/// One place for the clear-then-write pasteboard dance every Copy action does.
+func copyToPasteboard(_ text: String) {
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString(text, forType: .string)
+}
+
 /// A small ref chip for the history list: branch heads, remote branches, tags, HEAD.
 struct RefChip: View {
 

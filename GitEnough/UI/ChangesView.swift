@@ -367,8 +367,7 @@ private struct FileRow: View {
                 }
             }
             Button {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(file.path, forType: .string)
+                copyToPasteboard(file.path)
             } label: {
                 Label("Copy Path", systemImage: "doc.on.doc")
             }
