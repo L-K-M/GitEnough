@@ -624,6 +624,7 @@ final class RepoViewModel: ObservableObject, Identifiable {
             return
         }
         isLoadingDiff = true
+        selectedFileDiff = ""
         queue.async {
             let diff: String
             if change.isUntracked {

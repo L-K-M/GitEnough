@@ -8,8 +8,7 @@ struct ChangesView: View {
 
     @ObservedObject var viewModel: RepoViewModel
 
-    @State private var selectedFile: FileChange?
-    @State private var selectionIsStaged = false
+    @State private var selection: ChangeSelection?
     @State private var fileToDiscard: FileChange?
     @State private var showingStashSheet = false
     @State private var showingAmendPushedConfirmation = false
@@ -53,8 +52,8 @@ struct ChangesView: View {
             diffPane
                 .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
         }
-        .onChange(of: selectedFile) { _, file in
-            viewModel.selectFile(file, staged: selectionIsStaged)
+        .onChange(of: selection) { _, selection in
+            viewModel.selectFile(selection?.file, staged: selection?.isStaged ?? false)
         }
         .onChange(of: viewModel.status) { _, status in
             // Keep the selection pointed at the file as it moves between the
@@ -62,26 +61,8 @@ struct ChangesView: View {
             // columns, so comparing whole values would drop the selection on
             // every stage/unstage); clear it only when the file is gone from
             // both lists (committed, discarded, resolved).
-            guard let selected = selectedFile else { return }
-            let stagedMatch = status.staged.first { $0.path == selected.path }
-            let unstagedMatch = status.unstaged.first { $0.path == selected.path }
-            switch (stagedMatch, unstagedMatch) {
-            case (nil, nil):
-                selectedFile = nil
-            case (nil, let unstaged?):
-                // Unstaged it: follow the file into the Changes list.
-                selectionIsStaged = false
-                selectedFile = unstaged
-            case (let staged?, nil):
-                // Staged it: follow the file into the Staged list.
-                selectionIsStaged = true
-                selectedFile = staged
-            case (let staged?, let unstaged?):
-                // In both lists (partially staged file): keep the current side,
-                // refreshing the cached value so status-column changes don't
-                // leave it stale (assigning an equal value is a no-op).
-                selectedFile = selectionIsStaged ? staged : unstaged
-            }
+            guard let selection else { return }
+            self.selection = selection.updated(for: status)
         }
         .confirmationDialog("Discard changes?",
                             isPresented: discardConfirmationPresented,
@@ -118,13 +99,11 @@ struct ChangesView: View {
         Binding(get: { fileToDiscard != nil }, set: { if !$0 { fileToDiscard = nil } })
     }
 
-    /// The right pane: the selected file's diff. While a load is in flight and
-    /// nothing is on screen yet, a spinner replaces the misleading "No diff"
-    /// empty state; during file-to-file switches the previous diff stays
-    /// visible until the new one arrives, so there is no flash.
+    /// The right pane never associates a previous patch with a newly selected
+    /// row. A spinner covers the content until that exact side finishes loading.
     @ViewBuilder
     private var diffPane: some View {
-        if viewModel.isLoadingDiff && viewModel.selectedFileDiff.isEmpty {
+        if viewModel.isLoadingDiff {
             ProgressView()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
@@ -151,11 +130,11 @@ struct ChangesView: View {
                 ForEach(viewModel.status.staged) { file in
                     FileRow(file: file,
                             repoURL: viewModel.repo.url,
-                            isSelected: selectedFile?.path == file.path && selectionIsStaged,
+                            isSelected: selection?.file.path == file.path
+                                && selection?.isStaged == true,
                             actionIcon: "minus.circle",
                             actionHelp: "Unstage") {
-                        selectedFile = file
-                        selectionIsStaged = true
+                        selection = ChangeSelection(file: file, isStaged: true)
                     } onAction: {
                         viewModel.unstage([file])
                     } onIgnore: {
@@ -180,11 +159,11 @@ struct ChangesView: View {
                 ForEach(viewModel.status.unstaged) { file in
                     FileRow(file: file,
                             repoURL: viewModel.repo.url,
-                            isSelected: selectedFile?.path == file.path && !selectionIsStaged,
+                            isSelected: selection?.file.path == file.path
+                                && selection?.isStaged == false,
                             actionIcon: "plus.circle",
                             actionHelp: "Stage") {
-                        selectedFile = file
-                        selectionIsStaged = false
+                        selection = ChangeSelection(file: file, isStaged: false)
                     } onAction: {
                         viewModel.stage([file])
                     } onIgnore: {
