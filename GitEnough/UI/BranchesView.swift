@@ -119,7 +119,19 @@ struct BranchesView: View {
                     viewModel.merge(branch: branch)
                 }
             }
+            Button("Merge (No Fast-Forward)") {
+                if let branch = branchToMerge {
+                    viewModel.merge(branch: branch, noFastForward: true)
+                }
+            }
+            Button("Squash Merge (Stage Only)") {
+                if let branch = branchToMerge {
+                    viewModel.merge(branch: branch, squash: true)
+                }
+            }
             Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("“No fast-forward” always records a merge commit. “Squash” stages the combined changes without committing — you write the commit yourself in the Changes tab.")
         }
         .confirmationDialog("Drop this stash entry?",
                             isPresented: dropConfirmationPresented,

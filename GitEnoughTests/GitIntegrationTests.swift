@@ -505,6 +505,50 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertFalse(try client.status().isDirty)
     }
 
+    func testSquashMergeStagesWithoutCommitting() throws {
+        // A fresh divergence on top of the setup repo: side gets e.txt,
+        // main gets f.txt.
+        try run(["checkout", "-b", "side"])
+        try write("side change\n", to: "e.txt")
+        try run(["add", "e.txt"])
+        try run(["commit", "-m", "Add e on side"])
+        try run(["checkout", "main"])
+        try write("main change\n", to: "f.txt")
+        try run(["add", "f.txt"])
+        try run(["commit", "-m", "Add f on main"])
+        let commitsBefore = try client.log(limit: 50).count
+
+        try client.merge("side", squash: true)
+
+        // Changes staged, nothing committed, no sequencer state left behind.
+        let status = try client.status()
+        XCTAssertEqual(status.staged.map(\.path), ["e.txt"])
+        XCTAssertNil(client.inProgressOperation())
+        XCTAssertEqual(try client.log(limit: 50).count, commitsBefore)
+
+        // The normal commit-box flow then lands a single-parent commit.
+        try client.commit(message: "Squash side into main")
+        let head = try XCTUnwrap(try client.log(limit: 1).first)
+        XCTAssertEqual(head.parents.count, 1)
+        XCTAssertEqual(head.subject, "Squash side into main")
+    }
+
+    func testNoFastForwardMergeCreatesMergeCommit() throws {
+        // ff-side is strictly ahead of main — a plain merge would fast-forward
+        // and record no merge commit.
+        try run(["checkout", "-b", "ff-side"])
+        try write("ff change\n", to: "g.txt")
+        try run(["add", "g.txt"])
+        try run(["commit", "-m", "Add g on ff-side"])
+        try run(["checkout", "main"])
+
+        try client.merge("ff-side", noFastForward: true)
+
+        let head = try XCTUnwrap(try client.log(limit: 1).first)
+        XCTAssertEqual(head.parents.count, 2)
+        XCTAssertFalse(try client.status().isDirty)
+    }
+
     func testValidationHelpers() throws {
         XCTAssertTrue(GitClient.isRepository(at: repoURL))
         // git reports the physical path; temporaryDirectory may sit behind the
