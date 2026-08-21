@@ -34,5 +34,8 @@ final class CommonViewsTests: XCTestCase {
         XCTAssertNil(CommitCommands.cherryPickCommand(forHash: "abc'; rm -rf ~ #"))
         // isHexDigit alone would accept fullwidth digits — must not.
         XCTAssertNil(CommitCommands.cherryPickCommand(forHash: "１２３４５６７"))
+        // Uppercase hex is unusual but valid — accepted.
+        XCTAssertEqual(CommitCommands.cherryPickCommand(forHash: hash.uppercased()),
+                       "git cherry-pick '\(hash.uppercased())'")
     }
 }
