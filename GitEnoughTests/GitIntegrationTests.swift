@@ -109,6 +109,7 @@ final class GitIntegrationTests: XCTestCase {
     }
 
     func testRemoteBranchAndTagCollisionKeepsCanonicalRemoteRef() throws {
+        try run(["remote", "add", "origin", "https://example.com/acme/widget.git"])
         try run(["update-ref", "refs/remotes/origin/same", "refs/heads/main"])
         try run(["tag", "origin/same"])
         let branch = try XCTUnwrap(
