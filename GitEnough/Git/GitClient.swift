@@ -188,6 +188,18 @@ final class GitClient {
         return GitParsers.parseCommitDetail(result.stdout)
     }
 
+    /// Hashes of the commits `git push` would send: HEAD's commits that its
+    /// upstream doesn't have (`rev-list @{upstream}..HEAD`). Empty when no
+    /// upstream is configured, on a detached/unborn HEAD, or on any error —
+    /// the history markers built from this are best-effort decoration.
+    func unpushedCommitHashes() throws -> Set<String> {
+        let result = try run(
+            ["-C", worktree.path, "--no-optional-locks",
+             "rev-list", "@{upstream}..HEAD"], in: nil)
+        guard result.exitCode == 0 else { return [] }
+        return Set(result.stdout.split(separator: "\n").map(String.init))
+    }
+
     // MARK: - Diffs
 
     /// Unified diff for one worktree/index path.

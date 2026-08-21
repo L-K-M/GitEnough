@@ -63,6 +63,9 @@ struct GraphStripView: View {
     let row: Int
     let isHeadRow: Bool
     let isSelected: Bool
+    /// True when this row's commit hasn't reached the upstream yet (what
+    /// `git push` would send) — its dot renders hollow instead of filled.
+    let isUnpushedRow: Bool
     /// True for the last row: its tail spill is clipped exactly at the row's
     /// bottom edge (what the old single canvas did at its bottom), so the
     /// "history continues below" stub stops at the list end instead of
@@ -194,11 +197,21 @@ struct GraphStripView: View {
         let rect = CGRect(x: center.x - radius, y: center.y - radius,
                           width: radius * 2, height: radius * 2)
         let color = laneColor(node.colorIndex)
-        context.fill(Path(ellipseIn: rect), with: .color(color))
-        // Thin halo so the dot reads against overlapping lines.
-        context.stroke(Path(ellipseIn: rect.insetBy(dx: -1, dy: -1)),
-                       with: .color(Color(nsColor: .textBackgroundColor).opacity(0.6)),
-                       lineWidth: 1)
+        if isUnpushedRow {
+            // Unpushed commits render hollow — "not on the remote yet" at a
+            // glance. The interior is filled with the list background so lane
+            // lines passing into the dot don't show through the ring.
+            context.fill(Path(ellipseIn: rect),
+                         with: .color(Color(nsColor: .textBackgroundColor)))
+            context.stroke(Path(ellipseIn: rect.insetBy(dx: 0.75, dy: 0.75)),
+                           with: .color(color), lineWidth: 1.5)
+        } else {
+            context.fill(Path(ellipseIn: rect), with: .color(color))
+            // Thin halo so the dot reads against overlapping lines.
+            context.stroke(Path(ellipseIn: rect.insetBy(dx: -1, dy: -1)),
+                           with: .color(Color(nsColor: .textBackgroundColor).opacity(0.6)),
+                           lineWidth: 1)
+        }
         // HEAD gets the IntelliJ-style double ring.
         if isHeadRow {
             let outer = rect.insetBy(dx: -3.5, dy: -3.5)

@@ -38,6 +38,9 @@ final class RepoViewModel: ObservableObject, Identifiable {
     @Published private(set) var mergeState = MergeState(operation: nil, operationLabel: nil,
                                                         conflictedFiles: [])
     @Published private(set) var canLoadMoreHistory = false
+    /// Hashes `git push` would send (HEAD ahead of its upstream). History rows
+    /// on these hashes draw a hollow graph dot. Empty without an upstream.
+    @Published private(set) var unpushedHashes: Set<String> = []
 
     @Published private(set) var isBusy = false
     @Published private(set) var activity: String?
@@ -124,6 +127,10 @@ final class RepoViewModel: ObservableObject, Identifiable {
         let commits: [Commit]?
         let layout: GraphLayout?
         let canLoadMore: Bool
+        /// Only collected with history (nil otherwise): staging-type refreshes
+        /// can't change what's unpushed, and every push/commit/fetch refresh
+        /// includes history.
+        let unpushed: Set<String>?
     }
 
     /// Must be called on `queue`.
@@ -142,6 +149,7 @@ final class RepoViewModel: ObservableObject, Identifiable {
         )
         var commits: [Commit]?
         var layout: GraphLayout?
+        var unpushed: Set<String>?
         var canLoadMore = canLoadMoreHistory
         if includeHistory {
             // Load one extra commit to know whether "Load more" should be offered.
@@ -150,10 +158,11 @@ final class RepoViewModel: ObservableObject, Identifiable {
             let trimmed = Array(loaded.prefix(historyLimit))
             commits = trimmed
             layout = GraphLayout.layout(commits: trimmed)
+            unpushed = (try? client.unpushedCommitHashes()) ?? []
         }
         return Snapshot(status: status, branches: branches, remotes: remotes, stash: stash,
                         mergeState: mergeState, commits: commits, layout: layout,
-                        canLoadMore: canLoadMore)
+                        canLoadMore: canLoadMore, unpushed: unpushed)
     }
 
     /// Must be called on the main thread.
@@ -166,6 +175,7 @@ final class RepoViewModel: ObservableObject, Identifiable {
         canLoadMoreHistory = snapshot.canLoadMore
         if let commits = snapshot.commits { self.commits = commits }
         if let layout = snapshot.layout { self.layout = layout }
+        if let unpushed = snapshot.unpushed { self.unpushedHashes = unpushed }
         onStatusChange?(RepoSummary(status: snapshot.status))
     }
 
