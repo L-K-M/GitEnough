@@ -588,7 +588,10 @@ final class GitClient {
     /// 1 = first parent, the branch merged *into*) to pick its diff.
     func cherryPick(_ hash: String, mainline: Int? = nil) throws {
         var args = ["-C", worktree.path, "cherry-pick"]
-        if let mainline { args.append(contentsOf: ["-m", String(mainline)]) }
+        if let mainline {
+            precondition(mainline >= 1, "mainline is a 1-based parent index")
+            args.append(contentsOf: ["-m", String(mainline)])
+        }
         args.append(hash)
         try runChecked(args, in: nil)
     }
@@ -607,7 +610,10 @@ final class GitClient {
     /// commit needs the parent to revert against (1 = first parent).
     func revert(_ hash: String, mainline: Int? = nil) throws {
         var args = ["-C", worktree.path, "revert", "--no-edit"]
-        if let mainline { args.append(contentsOf: ["-m", String(mainline)]) }
+        if let mainline {
+            precondition(mainline >= 1, "mainline is a 1-based parent index")
+            args.append(contentsOf: ["-m", String(mainline)])
+        }
         args.append(hash)
         try runChecked(args, in: nil)
     }
