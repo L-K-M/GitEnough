@@ -24,4 +24,16 @@ final class RepoViewModelTests: XCTestCase {
         XCTAssertEqual(RepoViewModel.trackedPathsToDiscard(in: [rename, modified, untracked]),
                        ["renamed.txt", "a.txt", "b.txt"])
     }
+
+    /// Overlapping changes (a rename whose new path another change also
+    /// carries) must not double-reset a path: output is deduplicated with
+    /// first-occurrence order preserved.
+    func testTrackedPathsToDiscardDeduplicates() {
+        let rename = FileChange(path: "b.txt", originalPath: "a.txt",
+                                stagedStatus: .renamed, unstagedStatus: nil)
+        let alsoB = FileChange(path: "b.txt", originalPath: nil,
+                               stagedStatus: nil, unstagedStatus: .modified)
+        XCTAssertEqual(RepoViewModel.trackedPathsToDiscard(in: [rename, alsoB]),
+                       ["b.txt", "a.txt"])
+    }
 }
