@@ -94,6 +94,8 @@ publishes the GitHub Release, and byte-verifies the uploaded assets. See
 ## Privacy
 
 GitEnough talks to exactly two kinds of hosts: your git remotes (via `git`
-itself, with your own credentials) and — only when you press ✨ Generate — the
-configured LLM endpoint, which receives the staged diff. API keys are stored in
-the macOS Keychain. There is no telemetry, no analytics, no crash reporting.
+itself, with your own credentials) and the configured LLM endpoint only when
+you explicitly press ✨ Generate, Load Models, or Test Connection. Generate and
+Test Connection send diff text; Load Models requests the provider's model list.
+Simply opening Settings makes no request. API keys are stored in the macOS
+Keychain. There is no telemetry, no analytics, no crash reporting.
