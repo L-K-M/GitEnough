@@ -99,6 +99,10 @@ struct RepoDetailView: View {
                 .disabled(!viewModel.canPull)
                 .help(viewModel.mergeState.isInProgress
                       ? "Finish or abort the in-progress operation first"
+                      : viewModel.remotes.isEmpty
+                      ? "No remotes configured"
+                      : viewModel.status.upstream == nil
+                      ? "No upstream branch — publish first"
                       : pullRebase ? "Pull with rebase (⇧⌘L)" : "Pull (⇧⌘L)")
 
                 if viewModel.status.upstream == nil && !viewModel.remotes.isEmpty {
@@ -125,7 +129,10 @@ struct RepoDetailView: View {
                     }
                     .disabled(!viewModel.canPush)
                     .help(viewModel.mergeState.isInProgress
-                          ? "Finish or abort the in-progress operation first" : "Push (⇧⌘P)")
+                          ? "Finish or abort the in-progress operation first"
+                          : viewModel.remotes.isEmpty
+                          ? "No remotes configured"
+                          : "Push (⇧⌘P)")
                 }
 
                 Button {
