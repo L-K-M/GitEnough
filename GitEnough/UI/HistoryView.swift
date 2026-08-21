@@ -23,10 +23,13 @@ struct HistoryView: View {
 
     private var isFiltering: Bool { !activeFilter.isEmpty }
 
-    /// Commits matching the filter (subject / author / hash prefix).
-    /// `localizedStandardContains` is Finder-style: case- *and*
+    /// Commits matching the filter (subject / author / hash prefix / ref
+    /// names). `localizedStandardContains` is Finder-style: case- *and*
     /// diacritic-insensitive, so "muller" finds "Müller". Only searches the
     /// loaded pages — "Load older commits…" widens the searchable set.
+    /// Ref-name matching (branch / remote / tag decorations) means searching
+    /// "feature-x" finds every commit on that branch, not just the ones whose
+    /// subject happens to mention it.
     private var visibleCommits: [Commit] {
         guard isFiltering else { return viewModel.commits }
         let needle = activeFilter.lowercased()
@@ -34,6 +37,9 @@ struct HistoryView: View {
             $0.subject.localizedStandardContains(activeFilter)
                 || $0.author.localizedStandardContains(activeFilter)
                 || $0.hash.lowercased().hasPrefix(needle)
+                || $0.decorations.contains {
+                    $0.name.localizedStandardContains(activeFilter)
+                }
         }
     }
 
@@ -215,7 +221,7 @@ struct HistoryView: View {
         HStack(spacing: 6) {
             Image(systemName: "line.3.horizontal.decrease.circle")
                 .foregroundStyle(.secondary)
-            TextField("Filter by subject, author, or hash", text: $filterText)
+            TextField("Filter by subject, author, hash, or branch", text: $filterText)
                 .textFieldStyle(.plain)
                 .autocorrectionDisabled()
             if isFiltering {
