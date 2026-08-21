@@ -78,6 +78,16 @@ final class GitParsersTests: XCTestCase {
         XCTAssertEqual(decorations[2], RefDecoration(kind: .localBranch, name: "stable"))
     }
 
+    func testParseLogDecorationsDropUnknownRefNamespaces() {
+        // refs/ namespaces that are neither branches nor tags (forge-specific
+        // refs survive the hiddenRefs exclusion) must not become bogus
+        // remote-branch chips bearing the full refname.
+        XCTAssertTrue(GitParsers.parseDecorations("refs/stash").isEmpty)
+        let decorations = GitParsers.parseDecorations(
+            "refs/remotes/origin/main, refs/changes/12/345/1, refs/merge-requests/7/head")
+        XCTAssertEqual(decorations, [RefDecoration(kind: .remoteBranch, name: "origin/main")])
+    }
+
     func testParseLogToleratesBlankRecords() {
         XCTAssertEqual(GitParsers.parseLog("").count, 0)
         XCTAssertEqual(GitParsers.parseLog("\n\(r)\n").count, 0)

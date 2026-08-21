@@ -90,6 +90,14 @@ enum GitParsers {
             // branch, and branches() skips it too.
             return name.hasSuffix("/HEAD") ? nil : RefDecoration(kind: .remoteBranch, name: name)
         }
+        // Unknown refs/ namespace (refs/stash, refs/bisect, refs/notes,
+        // Gerrit's refs/changes, GitLab's refs/merge-requests): neither a
+        // branch nor a tag the user can act on — drop instead of guessing.
+        // (The stash & tool refs in hiddenRefs never reach here — they're
+        // excluded from the log — but forge-specific namespaces aren't.)
+        if part.hasPrefix("refs/") {
+            return nil
+        }
         // Short-form fallback (no --decorate=full): a "/" guesses remote.
         if part.contains("/") {
             return part.hasSuffix("/HEAD") ? nil : RefDecoration(kind: .remoteBranch, name: part)
