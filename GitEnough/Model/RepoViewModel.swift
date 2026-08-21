@@ -587,6 +587,7 @@ final class RepoViewModel: ObservableObject, Identifiable {
     private var commitDetailGeneration = 0
 
     func selectCommit(_ hash: String?) {
+        dispatchPrecondition(condition: .onQueue(.main))
         // A fresh selection starts clean — a failure only ever describes the
         // most recently completed load.
         selectedCommitDetailFailed = false
@@ -606,6 +607,7 @@ final class RepoViewModel: ObservableObject, Identifiable {
                 case .success(let detail?):
                     self.selectedCommitDetail = detail
                     self.selectedCommitDetailFailed = false
+                    self.selectedCommitDetailErrorMessage = nil
                 case .success(nil):
                     // git succeeded but the output didn't parse — still a
                     // failure, just without an error message to show.

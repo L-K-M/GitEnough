@@ -20,7 +20,7 @@ struct CommitDetailView: View {
             EmptyPane(systemImage: "exclamationmark.triangle",
                       title: "Couldn't load this commit",
                       subtitle: viewModel.selectedCommitDetailErrorMessage
-                          ?? "The commit may no longer exist. Refresh (⌘R) and select it again.")
+                          ?? "Couldn't read this commit's details. Refresh (⌘R) and select it again.")
         } else if selectedHash != nil {
             ProgressView()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
