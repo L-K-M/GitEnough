@@ -240,13 +240,15 @@ final class GitShell {
     /// The command name for the synthesized failure message, with the leading
     /// `-C <worktree>` pair every GitClient call starts with stripped — without
     /// it the message read "git -C failed with exit code 128", which names no
-    /// command at all.
+    /// command at all. Only the subcommand itself is returned ("pull", not the
+    /// full "pull --tags"): the message is the rare empty-stderr fallback, and
+    /// the argument list adds noise to an error that already has little signal.
     private static func displayCommand(_ args: [String]) -> String {
         var argv = args
         if argv.count >= 2, argv[0] == "-C" {
             argv.removeFirst(2)
         }
-        return argv.joined(separator: " ")
+        return argv.first ?? ""
     }
 
     /// Separate entry point because `standardInput` must be assigned before `run()`.
