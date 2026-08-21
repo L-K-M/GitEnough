@@ -163,12 +163,14 @@ private extension CommitDetail {
     /// True when the collapsed view plausibly hides content. lineLimit counts
     /// *wrapped, rendered* lines while components(separatedBy:) counts logical
     /// ones, so a short-line-count body of long paragraphs also gets the
-    /// toggle via a character threshold (≈40 chars per rendered line at the
-    /// detail-pane width). Trimmed first: a trailing newline must not inflate
-    /// the line count into a no-op toggle.
+    /// toggle via a character threshold — deliberately conservative (≈32
+    /// chars per rendered line: wide glyphs and monospace runs fit fewer than
+    /// the pane's proportional-font average) so under-detection is impossible.
+    /// Trimmed first: a trailing newline must not inflate the line count into
+    /// a no-op toggle.
     func bodyNeedsExpansionToggle(collapsedLineLimit: Int) -> Bool {
         let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.components(separatedBy: "\n").count > collapsedLineLimit
-            || trimmed.count > collapsedLineLimit * 40
+            || trimmed.count > collapsedLineLimit * 32
     }
 }
