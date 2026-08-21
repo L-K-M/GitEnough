@@ -209,7 +209,10 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertEqual(stagedChanges.count, 1)
         XCTAssertEqual(stagedChanges.first?.path, "renamed.txt")
         XCTAssertEqual(stagedChanges.first?.originalPath, "a.txt")
-        try client.discard(paths: ["renamed.txt", "a.txt"])
+        // Discard via the view model's production mapping, not a hand-built
+        // literal, so the end-to-end guarantee fails loudly if the derivation
+        // ever regresses (the pure unit test covers the mapping itself).
+        try client.discard(paths: RepoViewModel.trackedPathsToDiscard(in: stagedChanges))
 
         let status = try client.status()
         XCTAssertTrue(status.staged.isEmpty)
