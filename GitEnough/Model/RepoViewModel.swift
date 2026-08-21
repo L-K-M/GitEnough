@@ -67,8 +67,21 @@ final class RepoViewModel: ObservableObject, Identifiable {
     @Published private(set) var selectedFileDiff: String = ""
     @Published private(set) var isLoadingDiff = false
 
-    /// Commit box.
-    @Published var draftCommitMessage: String = ""
+    /// Commit box. The draft persists per repository (UserDefaults) so an app
+    /// restart doesn't eat a half-written message; a successful commit clears
+    /// it through the existing onSuccess hook. UserDefaults keeps values in
+    /// memory and flushes asynchronously, so the per-keystroke write is cheap.
+    @Published var draftCommitMessage: String = "" {
+        didSet {
+            guard draftCommitMessage != oldValue else { return }
+            let key = Self.commitDraftKey(for: repo.path)
+            if draftCommitMessage.isEmpty {
+                UserDefaults.standard.removeObject(forKey: key)
+            } else {
+                UserDefaults.standard.set(draftCommitMessage, forKey: key)
+            }
+        }
+    }
     @Published var amendLastCommit = false
     @Published private(set) var isGeneratingMessage = false
     @Published var messageGenerationError: String?
@@ -80,11 +93,20 @@ final class RepoViewModel: ObservableObject, Identifiable {
         amendLastCommit && status.upstream != nil && status.ahead == 0
     }
 
+    /// UserDefaults key for a repository's persisted commit-box draft.
+    private static func commitDraftKey(for path: String) -> String {
+        "commitDraft." + path
+    }
+
     init(repo: Repository, historyLimit: Int = RepoViewModel.historyPageSize) {
         self.repo = repo
         self.client = GitClient(worktree: repo.url)
         self.queue = DispatchQueue(label: "gitenough.repo.\(repo.name)", qos: .userInitiated)
         self.historyLimit = historyLimit
+        // Restore via the backing storage: a plain assignment could re-run
+        // didSet and re-persist what was just loaded.
+        _draftCommitMessage = Published(initialValue:
+            UserDefaults.standard.string(forKey: Self.commitDraftKey(for: repo.path)) ?? "")
         self.queue.setSpecific(key: queueKey, value: 1)
         client.activityLog = activityLog
         activityLog.onChange = { [weak self] entries in
