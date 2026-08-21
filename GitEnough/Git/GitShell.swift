@@ -300,10 +300,15 @@ final class GitShell {
             } catch {
                 // EPIPE is expected when the child exits before draining
                 // stdin; its exit status carries the real error. Log the full
-                // error (domain/code/underlying POSIX errno) so the expected
-                // broken-pipe case is distinguishable from genuinely
-                // unexpected write failures.
-                NSLog("[GitShell] stdin write to git failed: %@", String(describing: error))
+                // error (domain/code/underlying POSIX errno), tagging the
+                // expected case so genuinely unexpected write failures
+                // (EIO, EBADF, ENOSPC) stand out in the log.
+                let nsError = error as NSError
+                let isExpectedEPIPE = nsError.domain == NSPOSIXErrorDomain
+                    && nsError.code == Int(EPIPE)
+                NSLog("[GitShell] stdin write to git failed (%@): %@",
+                      isExpectedEPIPE ? "expected EPIPE" : "unexpected",
+                      String(describing: error))
             }
             try? inPipe.fileHandleForWriting.close()
             group.leave()
