@@ -236,6 +236,12 @@ final class RepoViewModel: ObservableObject, Identifiable {
 
     func push() { perform("Pushing…") { try $0.push(setUpstream: false) } }
 
+    /// Force push with lease. The UI gates this behind an explicit
+    /// confirmation dialog — it rewrites the remote branch.
+    func forcePush() {
+        perform("Force pushing…") { try $0.push(setUpstream: false, forceWithLease: true) }
+    }
+
     /// The remote a branch without an upstream should be published to — "origin"
     /// when it exists (it's the natural target even alongside other remotes),
     /// otherwise the first configured remote.

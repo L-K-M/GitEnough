@@ -13,6 +13,7 @@ struct RepoDetailView: View {
     @State private var newBranchName = ""
     @State private var checkoutNewBranch = true
     @State private var showingActivityLog = false
+    @State private var showingForcePushConfirmation = false
 
     private var localBranches: [Branch] {
         viewModel.branches.filter { !$0.isRemote }
@@ -106,13 +107,19 @@ struct RepoDetailView: View {
                     .disabled(viewModel.isBusy || viewModel.remotes.isEmpty)
                     .help("Push and set upstream to \(viewModel.publishRemoteName)")
                 } else {
-                    Button {
-                        viewModel.push()
+                    // Split button: click pushes; the menu half holds the
+                    // rarely needed (and confirmed) force push.
+                    Menu {
+                        Button("Force Push (with Lease)…") {
+                            showingForcePushConfirmation = true
+                        }
                     } label: {
                         Label("Push", systemImage: "arrow.up.to.line")
+                    } primaryAction: {
+                        viewModel.push()
                     }
                     .disabled(viewModel.isBusy || viewModel.remotes.isEmpty)
-                    .help("Push (⇧⌘P)")
+                    .help("Push (⇧⌘P) — the menu offers force push with lease")
                 }
 
                 Button {
@@ -128,6 +135,16 @@ struct RepoDetailView: View {
         }
         .sheet(isPresented: $appState.showingNewBranch) {
             newBranchSheet
+        }
+        .confirmationDialog("Force push “\(viewModel.status.head ?? "")”?",
+                            isPresented: $showingForcePushConfirmation,
+                            titleVisibility: .visible) {
+            Button("Force Push (with Lease)", role: .destructive) {
+                viewModel.forcePush()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This rewrites the remote branch to match your local history. “With lease” refuses to overwrite commits you haven't fetched yet, so a teammate's new work can't be lost silently — but anyone who pulled the old history will have to recover.")
         }
     }
 

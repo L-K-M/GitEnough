@@ -323,8 +323,14 @@ final class GitClient {
         try runChecked(args, in: nil)
     }
 
-    func push(setUpstream: Bool, remote: String = "origin") throws {
+    /// `forceWithLease` rewrites the remote branch to the local history, but —
+    /// unlike a bare --force — refuses when the remote moved past what this
+    /// repo last fetched, so a teammate's unpulled commits can't be clobbered
+    /// silently.
+    func push(setUpstream: Bool, remote: String = "origin",
+              forceWithLease: Bool = false) throws {
         var args = ["-C", worktree.path, "push"]
+        if forceWithLease { args.append("--force-with-lease") }
         if setUpstream {
             args.append(contentsOf: ["-u", remote, "HEAD"])
         }

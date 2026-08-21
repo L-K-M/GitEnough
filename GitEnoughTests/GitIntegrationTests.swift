@@ -389,6 +389,31 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertEqual(main.upstream, "work/main")
     }
 
+    func testForcePushWithLease() throws {
+        let remoteURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitEnoughTests-remote-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: remoteURL) }
+        try run(["init", "--bare", remoteURL.path])
+        try run(["remote", "add", "origin", remoteURL.path])
+        try client.push(setUpstream: true, remote: "origin")
+
+        // Rewrite local history so local and remote diverge.
+        try write("amended\n", to: "a.txt")
+        try client.stage(paths: ["a.txt"])
+        try client.commit(message: "Amended tip", amend: true)
+
+        // A plain push is refused (non-fast-forward)…
+        XCTAssertThrowsError(try client.push(setUpstream: false))
+        // …the lease push succeeds, and the remote tip matches local HEAD.
+        try client.push(setUpstream: false, forceWithLease: true)
+        let localHead = try GitShell.shared.runChecked(["rev-parse", "HEAD"], in: repoURL)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let remoteHead = try GitShell.shared.runChecked(
+            ["-C", remoteURL.path, "rev-parse", "refs/heads/main"], in: nil)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        XCTAssertEqual(localHead, remoteHead)
+    }
+
     func testCreateTagLightweightAndAnnotated() throws {
         let head = try XCTUnwrap(try client.log(limit: 1).first?.hash)
         try client.createTag(name: "v1.0", message: nil, at: head)
