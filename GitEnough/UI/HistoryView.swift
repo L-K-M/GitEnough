@@ -252,18 +252,17 @@ struct HistoryView: View {
     @ViewBuilder
     private func commitContextMenu(_ commit: Commit) -> some View {
         Button("Copy Hash") {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(commit.hash, forType: .string)
+            copyToPasteboard(commit.hash)
         }
         Button("Copy Message") {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(commit.subject, forType: .string)
+            copyToPasteboard(commit.subject)
         }
         Button("Copy Cherry-pick Command") {
             // `git cherry-pick <hash>` for the terminal-hybrid workflow:
-            // paste-ready in any shell.
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString("git cherry-pick \(commit.hash)", forType: .string)
+            // paste-ready in any shell. Deliberately no -x: it matches the
+            // app's own Cherry-pick action, which doesn't record provenance
+            // either.
+            copyToPasteboard("git cherry-pick \(commit.hash)")
         }
         Divider()
         Button("Create Branch Here…") {
@@ -289,6 +288,13 @@ struct HistoryView: View {
         Button("Reset Current Branch to Here…") {
             commitToReset = commit
         }
+    }
+
+    /// One place for the clear-then-write pasteboard dance every Copy action
+    /// in the context menu does.
+    private func copyToPasteboard(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
     }
 
     private func newBranchSheet(for commit: Commit) -> some View {
