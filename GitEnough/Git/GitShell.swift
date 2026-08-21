@@ -36,8 +36,11 @@ final class GitShell {
     /// Process-wide and idempotent: a child that exits before draining stdin
     /// must not let a broken-pipe write kill the process driving it (see
     /// runWithStdin). Installed here — not only in AppDelegate — so tests and
-    /// any future entry point that drives GitShell get it too.
-    private static let ignoreSIGPIPE: Void = signal(SIGPIPE, SIG_IGN)
+    /// any future entry point that drives GitShell get it too. (signal()
+    /// returns the previous disposition, hence the closure to discard it.)
+    private static let ignoreSIGPIPE: Void = {
+        _ = signal(SIGPIPE, SIG_IGN)
+    }()
 
     /// Resolved path to a working git binary, or nil when Xcode CLT is missing.
     private(set) var gitURL: URL?
