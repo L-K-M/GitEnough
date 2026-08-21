@@ -38,6 +38,16 @@ final class RepoWatcher {
         }
     }
 
+    /// Re-baselines the signature so a change the app itself just made (and
+    /// already snapshotted) doesn't trip the watcher into a redundant second
+    /// full refresh one poll later: `RepoViewModel.perform` ends with a fresh
+    /// snapshot, and its git commands dirty exactly the files this watcher
+    /// polls. Must be called on the timer's queue (the repo's serial queue),
+    /// so it serializes with ticks.
+    func restamp() {
+        lastSignature = Self.signature(gitDir: gitDir, worktree: worktree)
+    }
+
     /// Modification times of the git-dir files that signal "something changed".
     /// Includes the worktree root's mtime (catches top-level adds/removes; deeper
     /// edits are picked up by the view model's activation refresh).
