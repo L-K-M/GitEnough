@@ -31,7 +31,9 @@ struct AppCommands: Commands {
                 .keyboardShortcut("l", modifiers: [.shift, .command])
                 .disabled(active == nil)
 
-            Button("Push") { active?.push() }
+            // Shared entry point with the toolbar's Publish/Push button: with no
+            // upstream this publishes the branch instead of a raw `git push`.
+            Button("Push") { active?.pushOrPublish() }
                 .keyboardShortcut("p", modifiers: [.shift, .command])
                 .disabled(active == nil)
 
