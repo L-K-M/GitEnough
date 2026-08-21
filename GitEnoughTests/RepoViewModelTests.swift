@@ -1,0 +1,27 @@
+import XCTest
+@testable import GitEnough
+
+/// Unit tests for the pure pieces of RepoViewModel. (The async/queue
+/// choreography has no test seam yet — see ANALYSIS.md G9.)
+final class RepoViewModelTests: XCTestCase {
+
+    /// The mapping the staged-rename discard fix lives in: a staged rename
+    /// must reset both its paths, a plain tracked change only its own, and
+    /// an untracked file none (the caller moves those to the Trash).
+    func testTrackedPathsToDiscardExpandsRenames() {
+        let rename = FileChange(path: "renamed.txt", originalPath: "a.txt",
+                                stagedStatus: .renamed, unstagedStatus: nil)
+        let modified = FileChange(path: "b.txt", originalPath: nil,
+                                  stagedStatus: nil, unstagedStatus: .modified)
+        let untracked = FileChange(path: "c.txt", originalPath: nil,
+                                   stagedStatus: nil, unstagedStatus: .untracked)
+
+        XCTAssertEqual(RepoViewModel.trackedPathsToDiscard(in: [rename]),
+                       ["renamed.txt", "a.txt"])
+        XCTAssertEqual(RepoViewModel.trackedPathsToDiscard(in: [modified]),
+                       ["b.txt"])
+        XCTAssertTrue(RepoViewModel.trackedPathsToDiscard(in: [untracked]).isEmpty)
+        XCTAssertEqual(RepoViewModel.trackedPathsToDiscard(in: [rename, modified, untracked]),
+                       ["renamed.txt", "a.txt", "b.txt"])
+    }
+}
