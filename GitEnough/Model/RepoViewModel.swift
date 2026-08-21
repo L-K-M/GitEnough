@@ -344,8 +344,11 @@ final class RepoViewModel: ObservableObject, Identifiable {
         perform("Deleting \(branch.name)…") { try $0.deleteBranch(branch.name, force: force) }
     }
 
-    func merge(branch: Branch) {
-        perform("Merging \(branch.name)…") { try $0.merge(branch.name) }
+    func merge(branch: Branch, squash: Bool = false, noFastForward: Bool = false) {
+        let verb = squash ? "Squash merging" : "Merging"
+        perform("\(verb) \(branch.name)…") {
+            try $0.merge(branch.name, squash: squash, noFastForward: noFastForward)
+        }
     }
 
     func renameBranch(_ branch: Branch, to newName: String) {
