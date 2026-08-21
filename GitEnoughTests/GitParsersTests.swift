@@ -159,6 +159,24 @@ final class GitParsersTests: XCTestCase {
         XCTAssertEqual(remotes[1].displayHost, "github.com/apple/swift")
     }
 
+    func testDisplayHostStripsOnlyTrailingGitSuffix() {
+        // ".git" occurring inside the name must survive — only a suffix goes.
+        XCTAssertEqual(Remote(name: "o", url: "https://github.com/u/u.github.io.git").displayHost,
+                       "github.com/u/u.github.io")
+        XCTAssertEqual(Remote(name: "o", url: "https://github.com/u/u.github.io").displayHost,
+                       "github.com/u/u.github.io")
+        XCTAssertEqual(Remote(name: "o", url: "git@github.com:u/my.gitops.git").displayHost,
+                       "github.com/u/my.gitops")
+        XCTAssertEqual(Remote(name: "o", url: "git@github.com:u/plain.git").displayHost,
+                       "github.com/u/plain")
+        // ".git" inside the HOST must survive too (the old replace-all
+        // mangled hostnames like my.gitlab.dev).
+        XCTAssertEqual(Remote(name: "o", url: "git@my.gitlab.dev:u/repo.git").displayHost,
+                       "my.gitlab.dev/u/repo")
+        XCTAssertEqual(Remote(name: "o", url: "https://example.com/team/repo").displayHost,
+                       "example.com/team/repo")
+    }
+
     // MARK: - Stash
 
     func testParseStash() {

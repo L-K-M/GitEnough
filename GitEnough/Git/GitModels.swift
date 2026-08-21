@@ -63,16 +63,24 @@ struct Remote: Identifiable, Hashable {
 
     /// Short host-ish label for the status bar, e.g. "github.com/L-K-M/GitEnough".
     var displayHost: String {
-        var text = url
+        let text = url
         if let range = text.range(of: #"^git@([^:]+):"#, options: .regularExpression) {
             let host = text[range].dropFirst(4).dropLast(1)
             let pathPart = text[range.upperBound...]
-            return "\(host)/\(pathPart)".replacingOccurrences(of: ".git", with: "")
+            return "\(host)/\(Self.strippingGitSuffix(String(pathPart)))"
         }
         if let parsed = URL(string: text), let host = parsed.host {
-            return host + parsed.path.replacingOccurrences(of: ".git", with: "")
+            return host + Self.strippingGitSuffix(parsed.path)
         }
         return text
+    }
+
+    /// Strips one trailing ".git" — and only a trailing one. Replacing every
+    /// occurrence would mangle names that merely contain it: a GitHub Pages
+    /// remote "user.github.io.git" must become "user.github.io", not
+    /// "userhub.io".
+    private static func strippingGitSuffix(_ path: String) -> String {
+        path.hasSuffix(".git") ? String(path.dropLast(4)) : path
     }
 }
 
