@@ -212,6 +212,42 @@ final class GitIntegrationTests: XCTestCase {
             atPath: repoURL.appendingPathComponent("b-new.txt").path))
     }
 
+    func testUnstageStagedRenameIncludesOriginalPath() throws {
+        try run(["mv", "a.txt", "renamed.txt"])
+        var status = try client.status()
+        let rename = try XCTUnwrap(status.staged.first { $0.stagedStatus == .renamed })
+        XCTAssertEqual(rename.path, "renamed.txt")
+        XCTAssertEqual(rename.originalPath, "a.txt")
+
+        try client.unstage(paths: rename.affectedPaths)
+
+        status = try client.status()
+        XCTAssertTrue(status.staged.isEmpty)
+        XCTAssertEqual(Set(status.unstaged.map(\.path)), ["a.txt", "renamed.txt"])
+    }
+
+    func testDiscardStagedRenameRestoresSourceAndPreservesDestination() throws {
+        try run(["mv", "a.txt", "renamed.txt"])
+        let rename = try XCTUnwrap(
+            try client.status().staged.first { $0.stagedStatus == .renamed })
+
+        try client.discard(paths: rename.affectedPaths)
+
+        let status = try client.status()
+        XCTAssertTrue(status.staged.isEmpty)
+        XCTAssertEqual(status.unstaged.map(\.path), ["renamed.txt"])
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: repoURL.appendingPathComponent("a.txt").path))
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: repoURL.appendingPathComponent("renamed.txt").path))
+        let original = try String(
+            contentsOf: repoURL.appendingPathComponent("a.txt"), encoding: .utf8)
+        let destination = try String(
+            contentsOf: repoURL.appendingPathComponent("renamed.txt"), encoding: .utf8)
+        XCTAssertEqual(original, "one\n")
+        XCTAssertEqual(destination, "one\n")
+    }
+
     func testDiscardTreatsGlobCharactersInFilenamesLiterally() throws {
         try write("star\n", to: "a*.txt")
         try write("plain\n", to: "abc.txt")

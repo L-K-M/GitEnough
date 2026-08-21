@@ -458,7 +458,9 @@ final class RepoViewModel: ObservableObject, Identifiable {
     // MARK: Staging / commit
 
     func stage(_ changes: [FileChange]) {
-        perform("Staging…", includeHistory: false) { try $0.stage(paths: changes.map(\.path)) }
+        perform("Staging…", includeHistory: false) {
+            try $0.stage(paths: changes.flatMap(\.affectedPaths))
+        }
     }
 
     func stageAll() {
@@ -466,7 +468,9 @@ final class RepoViewModel: ObservableObject, Identifiable {
     }
 
     func unstage(_ changes: [FileChange]) {
-        perform("Unstaging…", includeHistory: false) { try $0.unstage(paths: changes.map(\.path)) }
+        perform("Unstaging…", includeHistory: false) {
+            try $0.unstage(paths: changes.flatMap(\.affectedPaths))
+        }
     }
 
     /// Adds an untracked file's path to the repo's root `.gitignore` (creating
@@ -508,7 +512,7 @@ final class RepoViewModel: ObservableObject, Identifiable {
     /// (recoverable, unlike a hard delete).
     func discard(_ changes: [FileChange]) {
         perform("Discarding changes…", includeHistory: false) { client in
-            let tracked = changes.filter { !$0.isUntracked }.map(\.path)
+            let tracked = changes.filter { !$0.isUntracked }.flatMap(\.affectedPaths)
             if !tracked.isEmpty { try client.discard(paths: tracked) }
             for change in changes where change.isUntracked {
                 let url = self.repo.url.appendingPathComponent(change.path)
