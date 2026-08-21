@@ -314,11 +314,11 @@ final class GitClient {
 
     func fetch() throws {
         try runChecked(
-            ["-C", worktree.path, "fetch", "--all", "--prune", "--tags"], in: nil)
+            ["-C", worktree.path, "fetch", "--all", "--prune"], in: nil)
     }
 
     func pull(rebase: Bool) throws {
-        var args = ["-C", worktree.path, "pull", "--tags"]
+        var args = ["-C", worktree.path, "pull"]
         args.append(rebase ? "--rebase" : "--no-rebase")
         try runChecked(args, in: nil)
     }
