@@ -229,6 +229,61 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertEqual(untouched, "plain changed\n")
     }
 
+    func testPathTakingCommandsTreatGitPathspecSyntaxLiterally() throws {
+        let pairs = [
+            (target: "star*.txt", decoy: "star-hit.txt"),
+            (target: "question?.txt", decoy: "question1.txt"),
+            (target: "bracket[1].txt", decoy: "bracket1.txt"),
+            (target: ":(glob)magic*.txt", decoy: "magic-hit.txt"),
+        ]
+
+        for (index, pair) in pairs.enumerated() {
+            try write("base target \(index)\n", to: pair.target)
+            try write("base decoy \(index)\n", to: pair.decoy)
+        }
+        try run(["add", "-A"])
+        try run(["commit", "-m", "Add pathspec fixtures"])
+
+        for (index, pair) in pairs.enumerated() {
+            try write("changed target \(index)\n", to: pair.target)
+            try write("changed decoy \(index)\n", to: pair.decoy)
+        }
+
+        let targets = pairs.map { $0.target }
+        let decoys = pairs.map { $0.decoy }
+        try client.stage(paths: targets)
+
+        var status = try client.status()
+        XCTAssertEqual(Set(status.staged.map(\.path)), Set(targets))
+        XCTAssertEqual(Set(status.unstaged.map(\.path)), Set(decoys))
+        for (index, pair) in pairs.enumerated() {
+            let patch = try client.diff(path: pair.target, staged: true)
+            XCTAssertTrue(patch.contains("+changed target \(index)"), pair.target)
+            XCTAssertFalse(patch.contains("+changed decoy \(index)"), pair.target)
+        }
+
+        try client.unstage(paths: targets)
+        status = try client.status()
+        XCTAssertTrue(status.staged.isEmpty)
+        XCTAssertEqual(Set(status.unstaged.map(\.path)), Set(targets + decoys))
+        for (index, pair) in pairs.enumerated() {
+            let patch = try client.diff(path: pair.target, staged: false)
+            XCTAssertTrue(patch.contains("+changed target \(index)"), pair.target)
+            XCTAssertFalse(patch.contains("+changed decoy \(index)"), pair.target)
+        }
+
+        // Put target and lookalike changes in the same commit: a commit-file
+        // diff must still return only the exact filename selected in the UI.
+        try run(["add", "-A"])
+        try run(["commit", "-m", "Change pathspec fixtures"])
+        let hash = try XCTUnwrap(client.log(limit: 1).first?.hash)
+        for (index, pair) in pairs.enumerated() {
+            let patch = try client.commitFileDiff(hash: hash, path: pair.target)
+            XCTAssertTrue(patch.contains("+changed target \(index)"), pair.target)
+            XCTAssertFalse(patch.contains("+changed decoy \(index)"), pair.target)
+        }
+    }
+
     func testDiffRoundTrip() throws {
         try write("one\nchanged\n", to: "a.txt")
         let diff = try client.diff(path: "a.txt", staged: false)
@@ -357,6 +412,46 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertNil(try client.mergeHead())
         let content = try String(contentsOf: repoURL.appendingPathComponent("a.txt"), encoding: .utf8)
         XCTAssertEqual(content, "from main\n")
+    }
+
+    func testConflictActionsTreatPathspecsLiterally() throws {
+        let paths = ["tool*.txt", "tool-one.txt",
+                     "resolve*.txt", "resolve-one.txt",
+                     "mark?.txt", "mark1.txt"]
+        for path in paths { try write("base\n", to: path) }
+        try run(["add", "-A"])
+        try run(["commit", "-m", "Add conflict pathspec fixtures"])
+
+        try run(["checkout", "-b", "pathspec-conflicter"])
+        for path in paths { try write("from other branch\n", to: path) }
+        try run(["add", "-A"])
+        try run(["commit", "-m", "Change conflict fixtures on branch"])
+
+        try run(["checkout", "main"])
+        for path in paths { try write("from main\n", to: path) }
+        try run(["add", "-A"])
+        try run(["commit", "-m", "Change conflict fixtures on main"])
+        XCTAssertThrowsError(try client.merge("pathspec-conflicter"))
+        XCTAssertEqual(Set(try client.conflictedPaths()), Set(paths))
+
+        // A deterministic custom mergetool chooses the other branch's version.
+        // Its wildcard-looking target must not resolve the lookalike conflict.
+        try run(["config", "mergetool.pathspec-test.cmd", "cp \"$REMOTE\" \"$MERGED\""])
+        try run(["config", "mergetool.pathspec-test.trustExitCode", "true"])
+        try client.runMergeTool("pathspec-test", path: "tool*.txt")
+        XCTAssertEqual(
+            Set(try client.conflictedPaths()),
+            Set(paths.filter { $0 != "tool*.txt" }))
+
+        try client.resolveConflict(path: "resolve*.txt", ours: true)
+        XCTAssertEqual(
+            Set(try client.conflictedPaths()),
+            Set(paths.filter { $0 != "tool*.txt" && $0 != "resolve*.txt" }))
+
+        try write("resolved by hand\n", to: "mark?.txt")
+        try client.markResolved(path: "mark?.txt")
+        XCTAssertEqual(Set(try client.conflictedPaths()),
+                       Set(["tool-one.txt", "resolve-one.txt", "mark1.txt"]))
     }
 
     func testRemoteDefaultBranch() throws {

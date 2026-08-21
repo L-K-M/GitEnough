@@ -4,8 +4,9 @@ import Foundation
 /// GitShell) — `RepoViewModel` calls them from its serial background queue.
 ///
 /// All repo-scoped commands run as `git -C <worktree> <cmd>` with arguments passed
-/// as an array (never through a shell), so paths with spaces or shell metacharacters
-/// are safe. `--` separates pathspecs from revisions everywhere a path is involved.
+/// as an array (never through a shell), so spaces and shell metacharacters are safe.
+/// Repo-reported paths also use literal pathspec magic: `--` ends option parsing,
+/// but does not stop git from interpreting `*`, `?`, `[` or `:(...)` in a filename.
 final class GitClient {
 
     let shell: GitShell
@@ -24,17 +25,34 @@ final class GitClient {
         self.shell = shell
     }
 
+    /// A path reported by git, forced to use literal pathspec semantics when it
+    /// is handed back to a git command. `--` only ends option parsing: without
+    /// this prefix, filenames containing `*`, `?`, `[` or a `:(...)` signature
+    /// can select other paths (or fail to select themselves).
+    static func literalPathspec(_ path: String) -> String {
+        ":(literal)" + path
+    }
+
+    private static func literalPathspecs(_ paths: [String]) -> [String] {
+        paths.map { literalPathspec($0) }
+    }
+
     // MARK: - Logging wrappers
 
     /// Every call below goes through these two wrappers instead of touching
     /// `shell` directly, so the activity log always reflects reality — when a
     /// pre-commit hook hangs, the log shows `commit -F -` running for minutes.
     @discardableResult
-    private func run(_ args: [String], in directory: URL?) throws -> GitResult {
-        guard let log = activityLog else { return try shell.run(args, in: directory) }
+    private func run(_ args: [String], in directory: URL?,
+                     environmentOverrides: [String: String] = [:]) throws -> GitResult {
+        guard let log = activityLog else {
+            return try shell.run(
+                args, in: directory, environmentOverrides: environmentOverrides)
+        }
         let id = log.begin(command: GitActivityLog.displayCommand(for: args))
         do {
-            let result = try shell.run(args, in: directory)
+            let result = try shell.run(
+                args, in: directory, environmentOverrides: environmentOverrides)
             log.finish(id, exitCode: result.exitCode, stderr: result.stderr)
             return result
         } catch {
@@ -49,13 +67,18 @@ final class GitClient {
 
     @discardableResult
     private func runChecked(_ args: [String], in directory: URL?,
-                            stdin: String? = nil) throws -> GitResult {
+                            stdin: String? = nil,
+                            environmentOverrides: [String: String] = [:]) throws -> GitResult {
         guard let log = activityLog else {
-            return try shell.runChecked(args, in: directory, stdin: stdin)
+            return try shell.runChecked(
+                args, in: directory, stdin: stdin,
+                environmentOverrides: environmentOverrides)
         }
         let id = log.begin(command: GitActivityLog.displayCommand(for: args))
         do {
-            let result = try shell.runChecked(args, in: directory, stdin: stdin)
+            let result = try shell.runChecked(
+                args, in: directory, stdin: stdin,
+                environmentOverrides: environmentOverrides)
             log.finish(id, exitCode: result.exitCode, stderr: result.stderr)
             return result
         } catch {
@@ -194,7 +217,7 @@ final class GitClient {
     func diff(path: String, staged: Bool) throws -> String {
         var args = ["-C", worktree.path, "diff", "--no-color", "--no-ext-diff"]
         if staged { args.append("--staged") }
-        args.append(contentsOf: ["--", path])
+        args.append(contentsOf: ["--", Self.literalPathspec(path)])
         return try runChecked(args, in: nil).stdout
     }
 
@@ -215,7 +238,7 @@ final class GitClient {
     func commitFileDiff(hash: String, path: String) throws -> String {
         try runChecked(
             ["-C", worktree.path, "show", "-m", "--first-parent",
-             "--format=", "--no-color", hash, "--", path],
+             "--format=", "--no-color", hash, "--", Self.literalPathspec(path)],
             in: nil).stdout
     }
 
@@ -244,7 +267,8 @@ final class GitClient {
 
     func stage(paths: [String]) throws {
         guard !paths.isEmpty else { return }
-        try runChecked(["-C", worktree.path, "add", "--"] + paths, in: nil)
+        try runChecked(
+            ["-C", worktree.path, "add", "--"] + Self.literalPathspecs(paths), in: nil)
     }
 
     func stageAll() throws {
@@ -253,12 +277,17 @@ final class GitClient {
 
     func unstage(paths: [String]) throws {
         guard !paths.isEmpty else { return }
+        let literalSpecs = Self.literalPathspecs(paths)
         do {
-            try runChecked(["-C", worktree.path, "restore", "--staged", "--"] + paths, in: nil)
+            try runChecked(
+                ["-C", worktree.path, "restore", "--staged", "--"] + literalSpecs, in: nil)
         } catch {
             // On an unborn HEAD (no commits yet) `restore --staged` has nothing to
             // resolve HEAD against; `rm --cached` is the equivalent there.
-            try runChecked(["-C", worktree.path, "rm", "--cached", "-r", "--ignore-unmatch", "--"] + paths, in: nil)
+            try runChecked(
+                ["-C", worktree.path, "rm", "--cached", "-r", "--ignore-unmatch", "--"]
+                    + literalSpecs,
+                in: nil)
         }
     }
 
@@ -280,7 +309,7 @@ final class GitClient {
         // Git pathspecs glob by default: a file literally named "a*.txt" would
         // make these commands also match unrelated tracked files (abc.txt…).
         // Force literal matching everywhere a real path is passed.
-        let literalSpecs = paths.map { ":(literal)" + $0 }
+        let literalSpecs = Self.literalPathspecs(paths)
         // Check for an unborn HEAD explicitly instead of inferring it from a
         // `reset` failure: a blanket catch would turn a genuine reset error
         // (corrupt ref, unwritable index) into an unintended `rm --cached`,
@@ -300,7 +329,10 @@ final class GitClient {
         let tracked = try runChecked(["-C", worktree.path, "ls-files", "-z", "--"] + literalSpecs, in: nil).stdout
         let stillTracked = tracked.components(separatedBy: "\0").filter { !$0.isEmpty }
         if !stillTracked.isEmpty {
-            try runChecked(["-C", worktree.path, "checkout", "--"] + stillTracked.map { ":(literal)" + $0 }, in: nil)
+            try runChecked(
+                ["-C", worktree.path, "checkout", "--"]
+                    + Self.literalPathspecs(stillTracked),
+                in: nil)
         }
     }
 
@@ -432,17 +464,28 @@ final class GitClient {
     /// (or git's "was the merge successful?" prompt, which gets a headless EOF)
     /// didn't stage the file, the UI still offers “Mark Resolved”.
     func runMergeTool(_ tool: String, path: String) throws {
+        // git-mergetool is a shell script. Even after its initial git command
+        // selects a literal path, it expands the returned filename with an
+        // unquoted `set -- $files`; `*`, `?`, and `[` can therefore open and
+        // stage lookalike conflicts. Run that script with shell globbing off,
+        // and force literal semantics for every nested git command it launches.
+        // (macOS /bin/sh is Bash and imports SHELLOPTS on startup.)
+        let literalEnvironment = [
+            "GIT_LITERAL_PATHSPECS": "1",
+            "SHELLOPTS": "noglob",
+        ]
         try runChecked(
             ["-C", worktree.path,
              "-c", "mergetool.keepBackup=false",   // don't litter .orig files
              "mergetool", "--no-prompt", "--tool=\(tool)", "--", path],
-            in: nil)
+            in: nil, environmentOverrides: literalEnvironment)
     }
 
     /// Marks a conflicted path resolved (for when the user fixed it by hand or in
     /// a tool that didn't stage it).
     func markResolved(path: String) throws {
-        try runChecked(["-C", worktree.path, "add", "--", path], in: nil)
+        try runChecked(
+            ["-C", worktree.path, "add", "--", Self.literalPathspec(path)], in: nil)
     }
 
     /// True when the file still contains git conflict markers (`<<<<<<<`,
@@ -466,10 +509,12 @@ final class GitClient {
 
     /// Resolves a conflicted path by checking out one side and staging it.
     func resolveConflict(path: String, ours: Bool) throws {
+        let literalSpec = Self.literalPathspec(path)
         try runChecked(
-            ["-C", worktree.path, "checkout", ours ? "--ours" : "--theirs", "--", path],
+            ["-C", worktree.path, "checkout", ours ? "--ours" : "--theirs", "--",
+             literalSpec],
             in: nil)
-        try runChecked(["-C", worktree.path, "add", "--", path], in: nil)
+        try runChecked(["-C", worktree.path, "add", "--", literalSpec], in: nil)
     }
 
     // MARK: - Sequencer state (merge / rebase / cherry-pick / revert)
