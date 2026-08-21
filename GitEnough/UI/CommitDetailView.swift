@@ -61,7 +61,12 @@ struct CommitDetailView: View {
                 .listStyle(.inset)
                 .frame(minHeight: 120)
             }
-            DiffView(diff: viewModel.selectedCommitFileDiff)
+            if viewModel.isLoadingCommitFileDiff {
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                DiffView(diff: viewModel.selectedCommitFileDiff)
+            }
         }
         .onChange(of: selectedHash) { _, _ in
             selectedFile = nil

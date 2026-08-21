@@ -62,6 +62,7 @@ final class RepoViewModel: ObservableObject, Identifiable {
     /// Commit detail pane.
     @Published private(set) var selectedCommitDetail: CommitDetail?
     @Published private(set) var selectedCommitFileDiff: String = ""
+    @Published private(set) var isLoadingCommitFileDiff = false
 
     /// Changes pane: the diff of the currently selected worktree file.
     @Published private(set) var selectedFileDiff: String = ""
@@ -585,24 +586,50 @@ final class RepoViewModel: ObservableObject, Identifiable {
         }
     }
 
+    /// Generation tokens for the two diff loads below. Selecting enqueues a
+    /// load on the serial repo queue; without a token, deselecting (or
+    /// switching files) while a load is in flight lets the stale completion
+    /// write the *previous* file's diff back into the published state —
+    /// resurrecting a diff for a file that is no longer selected. Main-thread
+    /// only: bumped by the select methods (UI callbacks) and compared in the
+    /// completion's main-queue hop.
+    private var commitFileDiffGeneration = 0
+    private var fileDiffGeneration = 0
+
     func selectCommitFile(hash: String, path: String?) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        commitFileDiffGeneration += 1
+        let generation = commitFileDiffGeneration
         guard let path else {
             selectedCommitFileDiff = ""
+            isLoadingCommitFileDiff = false
             return
         }
+        selectedCommitFileDiff = ""
+        isLoadingCommitFileDiff = true
         queue.async {
             let diff = (try? self.client.commitFileDiff(hash: hash, path: path)) ?? ""
-            DispatchQueue.main.async { self.selectedCommitFileDiff = diff }
+            DispatchQueue.main.async {
+                guard generation == self.commitFileDiffGeneration else { return }
+                self.selectedCommitFileDiff = diff
+                self.isLoadingCommitFileDiff = false
+            }
         }
     }
 
     /// Loads the worktree/index diff for the file selected in the Changes pane.
     func selectFile(_ change: FileChange?, staged: Bool) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        fileDiffGeneration += 1
+        let generation = fileDiffGeneration
         guard let change else {
             selectedFileDiff = ""
+            // A dropped in-flight load can no longer clear the flag — do it here.
+            isLoadingDiff = false
             return
         }
         isLoadingDiff = true
+        selectedFileDiff = ""
         queue.async {
             let diff: String
             if change.isUntracked {
@@ -611,6 +638,7 @@ final class RepoViewModel: ObservableObject, Identifiable {
                 diff = (try? self.client.diff(path: change.path, staged: staged)) ?? ""
             }
             DispatchQueue.main.async {
+                guard generation == self.fileDiffGeneration else { return }
                 self.selectedFileDiff = diff
                 self.isLoadingDiff = false
             }
