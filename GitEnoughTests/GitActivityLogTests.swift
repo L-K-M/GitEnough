@@ -105,6 +105,24 @@ final class GitActivityLogTests: XCTestCase {
             "status --porcelain=v2")
     }
 
+    func testReadOnlyArgumentsKeepWorktreeSwitchFirst() {
+        XCTAssertEqual(
+            GitClient.readOnlyArguments(["-C", "/r", "log", "--all"]),
+            ["-C", "/r", "--no-optional-locks", "log", "--all"])
+        XCTAssertEqual(
+            GitActivityLog.displayCommand(for:
+                GitClient.readOnlyArguments(["-C", "/r", "log", "--all"])),
+            "log --all")
+    }
+
+    func testReadOnlyArgumentsWithoutWorktreeArePrefixedAndIdempotent() {
+        XCTAssertEqual(
+            GitClient.readOnlyArguments(["rev-parse", "--show-toplevel"]),
+            ["--no-optional-locks", "rev-parse", "--show-toplevel"])
+        let guarded = ["-C", "/r", "--no-optional-locks", "status"]
+        XCTAssertEqual(GitClient.readOnlyArguments(guarded), guarded)
+    }
+
     func testStderrTailHasCredentialsRedacted() {
         let log = GitActivityLog()
         let id = log.begin(command: "fetch")
