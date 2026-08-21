@@ -187,9 +187,24 @@ struct ChangesView: View {
                         Button("Stage All") { viewModel.stageAll() }
                             .buttonStyle(.borderless)
                             .font(.caption)
+                    }
+                }
+            } footer: {
+                // One always-visible stash entry point. The old button lived in
+                // the Changes header, which rendered only while unstaged files
+                // existed — a user who had staged everything (the usual
+                // "stage, then stash to switch branches" flow) had no stash
+                // button anywhere.
+                if !viewModel.status.staged.isEmpty || !viewModel.status.unstaged.isEmpty {
+                    HStack {
+                        Spacer()
                         Button("Stash…") { showingStashSheet = true }
                             .buttonStyle(.borderless)
                             .font(.caption)
+                            .disabled(conflictUIActive)
+                            .help(conflictUIActive
+                                  ? "Stash is unavailable while a merge/rebase is in progress"
+                                  : "Stash your changes and restore them later")
                     }
                 }
             }
