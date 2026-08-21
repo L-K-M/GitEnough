@@ -583,8 +583,14 @@ final class GitClient {
 
     // MARK: - Commit-targeted actions
 
-    func cherryPick(_ hash: String) throws {
-        try runChecked(["-C", worktree.path, "cherry-pick", hash], in: nil)
+    /// Cherry-picks one commit. For a merge commit git refuses to guess which
+    /// parent's changes to replay — pass `mainline` (1-based parent index;
+    /// 1 = first parent, the branch merged *into*) to pick its diff.
+    func cherryPick(_ hash: String, mainline: Int? = nil) throws {
+        var args = ["-C", worktree.path, "cherry-pick"]
+        if let mainline { args.append(contentsOf: ["-m", String(mainline)]) }
+        args.append(hash)
+        try runChecked(args, in: nil)
     }
 
     enum ResetMode: String {
@@ -597,8 +603,13 @@ final class GitClient {
         try runChecked(["-C", worktree.path, "reset", mode.rawValue, hash], in: nil)
     }
 
-    func revert(_ hash: String) throws {
-        try runChecked(["-C", worktree.path, "revert", "--no-edit", hash], in: nil)
+    /// Reverts one commit. Same `mainline` contract as `cherryPick` — a merge
+    /// commit needs the parent to revert against (1 = first parent).
+    func revert(_ hash: String, mainline: Int? = nil) throws {
+        var args = ["-C", worktree.path, "revert", "--no-edit"]
+        if let mainline { args.append(contentsOf: ["-m", String(mainline)]) }
+        args.append(hash)
+        try runChecked(args, in: nil)
     }
 
     // MARK: - Clone

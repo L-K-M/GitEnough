@@ -273,11 +273,15 @@ struct HistoryView: View {
             commitToCheckout = commit
         }
         Divider()
-        Button("Cherry-pick onto Current Branch") {
-            viewModel.cherryPick(commit.hash)
+        // Merge commits need a parent to diff against; the app always uses the
+        // first parent (the branch the merge landed on) — the label says so.
+        Button(commit.isMerge
+               ? "Cherry-pick onto Current Branch (vs. First Parent)"
+               : "Cherry-pick onto Current Branch") {
+            viewModel.cherryPick(commit.hash, mainline: commit.isMerge ? 1 : nil)
         }
-        Button("Revert Commit") {
-            viewModel.revert(commit.hash)
+        Button(commit.isMerge ? "Revert Merge (vs. First Parent)" : "Revert Commit") {
+            viewModel.revert(commit.hash, mainline: commit.isMerge ? 1 : nil)
         }
         Divider()
         Button("Reset Current Branch to Here…") {
