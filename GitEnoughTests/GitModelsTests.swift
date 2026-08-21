@@ -8,6 +8,8 @@ final class GitModelsTests: XCTestCase {
             path: "new.txt", originalPath: "old.txt",
             stagedStatus: .renamed, unstagedStatus: nil)
 
+        XCTAssertTrue(rename.isRename)
+        XCTAssertFalse(rename.isCopy)
         XCTAssertEqual(rename.affectedPaths, ["new.txt", "old.txt"])
     }
 
@@ -16,6 +18,8 @@ final class GitModelsTests: XCTestCase {
             path: "copy.txt", originalPath: "source.txt",
             stagedStatus: .copied, unstagedStatus: nil)
 
+        XCTAssertFalse(copy.isRename)
+        XCTAssertTrue(copy.isCopy)
         XCTAssertEqual(copy.affectedPaths, ["copy.txt"])
     }
 
