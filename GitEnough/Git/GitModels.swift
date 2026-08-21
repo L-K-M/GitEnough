@@ -41,6 +41,13 @@ struct Branch: Identifiable, Hashable {
     let upstream: String?       // e.g. "origin/main"
     let ahead: Int
     let behind: Int
+    /// True when the branch still has an upstream *configured* but the remote
+    /// ref no longer exists (deleted on the remote, then pruned) —
+    /// `%(upstream:track)` reports `[gone]`. Pull against it fails (push
+    /// simply re-creates the remote branch), so the UI flags it. Defaulted so
+    /// call sites without tracking data (and the memberwise initializer's
+    /// existing callers) stay unchanged.
+    var upstreamGone: Bool = false
 
     var id: String { (isRemote ? "remote/" : "local/") + name }
 
