@@ -284,7 +284,14 @@ final class GitShell {
         // and the child's own exit status carries the real error.
         group.enter()
         DispatchQueue.global(qos: .userInitiated).async {
-            try? inPipe.fileHandleForWriting.write(contentsOf: Data(stdin.utf8))
+            do {
+                try inPipe.fileHandleForWriting.write(contentsOf: Data(stdin.utf8))
+            } catch {
+                // EPIPE is expected when the child exits before draining
+                // stdin; its exit status carries the real error. Log so a
+                // failed commit can still be correlated with the write.
+                NSLog("[GitShell] stdin write to git failed: \(error.localizedDescription)")
+            }
             try? inPipe.fileHandleForWriting.close()
             group.leave()
         }

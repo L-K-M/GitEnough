@@ -17,6 +17,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // write surfaces as an ordinary error instead; nothing in the app
         // relies on SIGPIPE semantics. Installed in init (the adaptor runs it
         // during bootstrap) so no early startup work can race ahead of it.
+        // Caveat: ignored dispositions survive exec(), so spawned tools see
+        // EPIPE returns instead of dying from SIGPIPE — git handles EPIPE
+        // fine; keep it in mind for other piped tools.
         super.init()
         signal(SIGPIPE, SIG_IGN)
     }
