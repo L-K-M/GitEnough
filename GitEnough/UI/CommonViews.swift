@@ -58,6 +58,39 @@ struct RefChip: View {
     }
 }
 
+/// A file path label that renders renames/copies as "old → new" — the
+/// convention every other git client uses; without it a staged rename is an
+/// inscrutable "R new-path" row with no hint of the source name.
+struct FilePathText: View {
+
+    let path: String
+    var originalPath: String?
+
+    var body: some View {
+        if let originalPath, originalPath != path {
+            HStack(spacing: 4) {
+                Text(originalPath)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Image(systemName: "arrow.right")
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+                Text(path)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .layoutPriority(1)
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("\(originalPath) renamed to \(path)")
+        } else {
+            Text(path)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+    }
+}
+
 /// The one/two-letter status badge on a changed-file row (A, M, D, R, ?).
 struct FileStatusBadge: View {
 
