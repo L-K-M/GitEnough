@@ -76,12 +76,16 @@ final class RepoViewModel: ObservableObject, Identifiable {
             guard draftCommitMessage != oldValue else { return }
             let key = Self.commitDraftKey(for: repo.path)
             if draftCommitMessage.isEmpty {
-                UserDefaults.standard.removeObject(forKey: key)
+                defaults.removeObject(forKey: key)
             } else {
-                UserDefaults.standard.set(draftCommitMessage, forKey: key)
+                defaults.set(draftCommitMessage, forKey: key)
             }
         }
     }
+
+    /// Injected so draft persistence is testable against an isolated suite;
+    /// production call sites use `.standard`.
+    private let defaults: UserDefaults
     @Published var amendLastCommit = false
     @Published private(set) var isGeneratingMessage = false
     @Published var messageGenerationError: String?
@@ -98,15 +102,25 @@ final class RepoViewModel: ObservableObject, Identifiable {
         "commitDraft." + path
     }
 
-    init(repo: Repository, historyLimit: Int = RepoViewModel.historyPageSize) {
+    /// Clears a repository's persisted commit-box draft. Called when the repo
+    /// is removed from the sidebar, so keys can't orphan — and a repo removed
+    /// and later re-added starts with a clean box instead of a stale draft.
+    static func removePersistedDraft(for path: String,
+                                     in defaults: UserDefaults = .standard) {
+        defaults.removeObject(forKey: commitDraftKey(for: path))
+    }
+
+    init(repo: Repository, historyLimit: Int = RepoViewModel.historyPageSize,
+         defaults: UserDefaults = .standard) {
         self.repo = repo
         self.client = GitClient(worktree: repo.url)
         self.queue = DispatchQueue(label: "gitenough.repo.\(repo.name)", qos: .userInitiated)
         self.historyLimit = historyLimit
+        self.defaults = defaults
         // Restore via the backing storage: a plain assignment could re-run
         // didSet and re-persist what was just loaded.
         _draftCommitMessage = Published(initialValue:
-            UserDefaults.standard.string(forKey: Self.commitDraftKey(for: repo.path)) ?? "")
+            defaults.string(forKey: Self.commitDraftKey(for: repo.path)) ?? "")
         self.queue.setSpecific(key: queueKey, value: 1)
         client.activityLog = activityLog
         activityLog.onChange = { [weak self] entries in
