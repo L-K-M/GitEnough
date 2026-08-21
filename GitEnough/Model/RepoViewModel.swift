@@ -508,7 +508,15 @@ final class RepoViewModel: ObservableObject, Identifiable {
     /// (recoverable, unlike a hard delete).
     func discard(_ changes: [FileChange]) {
         perform("Discarding changes…", includeHistory: false) { client in
-            let tracked = changes.filter { !$0.isUntracked }.map(\.path)
+            // A staged rename (git mv old new) must reset BOTH sides: resetting
+            // only the new path leaves the original's deletion staged and its
+            // worktree file gone — the rename the user asked to throw away,
+            // restaged as two pieces. Resetting both restores the original;
+            // the renamed file stays on disk as untracked (kept, like a
+            // discarded staged-new file, rather than destroyed).
+            let tracked = changes.filter { !$0.isUntracked }.flatMap { change -> [String] in
+                [change.path] + (change.originalPath.map { [$0] } ?? [])
+            }
             if !tracked.isEmpty { try client.discard(paths: tracked) }
             for change in changes where change.isUntracked {
                 let url = self.repo.url.appendingPathComponent(change.path)

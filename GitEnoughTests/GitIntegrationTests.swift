@@ -194,6 +194,24 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertEqual(content, "one\n")
     }
 
+    func testDiscardStagedRenameRestoresBothSides() throws {
+        // git mv stages a rename as delete-old + add-new. Discarding it via
+        // both paths (what RepoViewModel.discard passes for a renamed change)
+        // must restore the original and keep the renamed file as untracked —
+        // resetting only the new path would leave the original's deletion
+        // staged and its file gone.
+        try run(["mv", "a.txt", "renamed.txt"])
+        try client.discard(paths: ["renamed.txt", "a.txt"])
+
+        let status = try client.status()
+        XCTAssertTrue(status.staged.isEmpty)
+        XCTAssertEqual(status.unstaged.count, 1)
+        XCTAssertEqual(status.unstaged.first?.path, "renamed.txt")
+        XCTAssertTrue(status.unstaged.first?.isUntracked ?? false)
+        XCTAssertEqual(try String(contentsOf: repoURL.appendingPathComponent("a.txt"),
+                                  encoding: .utf8), "one\n")
+    }
+
     func testDiscardMixedBatchOfStagedNewAndTrackedModified() throws {
         // One call, two kinds of paths: the tracked file is restored to HEAD,
         // the staged-new file survives as untracked (the ls-files split).
