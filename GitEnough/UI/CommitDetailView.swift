@@ -111,6 +111,7 @@ struct CommitDetailView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     ForEach(detail.parents, id: \.self) { parent in
+                        let shortParent = String(parent.prefix(7))
                         Button {
                             // Reset eagerly: the .onChange reset lives inside
                             // the detail branch, which unmounts while the
@@ -121,7 +122,7 @@ struct CommitDetailView: View {
                             bodyExpanded = false
                             onSelectCommit?(parent)
                         } label: {
-                            Text(String(parent.prefix(7)))
+                            Text(shortParent)
                                 .font(.system(.caption, design: .monospaced))
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 2)
@@ -129,8 +130,8 @@ struct CommitDetailView: View {
                                 .clipShape(RoundedRectangle(cornerRadius: 4))
                         }
                         .buttonStyle(.plain)
-                        .help("Select parent \(parent.prefix(7)) in the history")
-                        .accessibilityLabel("Select parent commit \(parent.prefix(7))")
+                        .help("Select parent \(shortParent) in the history")
+                        .accessibilityLabel("Select parent commit \(shortParent)")
                     }
                 }
             }
@@ -163,9 +164,11 @@ private extension CommitDetail {
     /// *wrapped, rendered* lines while components(separatedBy:) counts logical
     /// ones, so a short-line-count body of long paragraphs also gets the
     /// toggle via a character threshold (≈40 chars per rendered line at the
-    /// detail-pane width).
+    /// detail-pane width). Trimmed first: a trailing newline must not inflate
+    /// the line count into a no-op toggle.
     func bodyNeedsExpansionToggle(collapsedLineLimit: Int) -> Bool {
-        body.components(separatedBy: "\n").count > collapsedLineLimit
-            || body.count > collapsedLineLimit * 40
+        let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.components(separatedBy: "\n").count > collapsedLineLimit
+            || trimmed.count > collapsedLineLimit * 40
     }
 }

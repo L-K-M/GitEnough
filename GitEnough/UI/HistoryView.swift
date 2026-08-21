@@ -20,6 +20,9 @@ struct HistoryView: View {
     @State private var commitToTag: Commit?
     @State private var tagName = ""
     @State private var tagMessage = ""
+    /// Set by parent-chip navigation: the row the list should scroll into
+    /// view (consumed by the ScrollViewReader in historyList).
+    @State private var scrollTarget: String?
 
     private var isFiltering: Bool { !activeFilter.isEmpty }
 
@@ -90,7 +93,18 @@ struct HistoryView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             Divider()
             CommitDetailView(viewModel: viewModel, selectedHash: selectedHash,
-                             onSelectCommit: { selectedHash = $0 })
+                             onSelectCommit: { hash in
+                                 // Parent navigation must be able to reveal
+                                 // the target: a filter hiding it would leave
+                                 // a selection the list can't show.
+                                 if !filterText.isEmpty {
+                                     filterText = ""
+                                     filterDebounceTask?.cancel()
+                                     activeFilter = ""
+                                 }
+                                 scrollTarget = hash
+                                 selectedHash = hash
+                             })
                 .frame(maxHeight: .infinity)
                 .frame(width: 360)
         }
@@ -132,27 +146,38 @@ struct HistoryView: View {
         // Evaluated once per body evaluation and shared by the list, the
         // empty-state check, and the filter bar's counter.
         let visible = visibleCommits
-        return VStack(spacing: 0) {
-            filterBar(matchCount: visible.count)
-            Divider()
-            ScrollView {
-                VStack(spacing: 0) {
-                    commitRows(visible)
-                    if viewModel.canLoadMoreHistory {
-                        Button("Load older commits…") {
-                            viewModel.loadMoreHistory()
+        return ScrollViewReader { proxy in
+            VStack(spacing: 0) {
+                filterBar(matchCount: visible.count)
+                Divider()
+                ScrollView {
+                    VStack(spacing: 0) {
+                        commitRows(visible)
+                        if viewModel.canLoadMoreHistory {
+                            Button("Load older commits…") {
+                                viewModel.loadMoreHistory()
+                            }
+                            .buttonStyle(.link)
+                            .padding(.vertical, 10)
+                            .frame(maxWidth: .infinity)
                         }
-                        .buttonStyle(.link)
-                        .padding(.vertical, 10)
-                        .frame(maxWidth: .infinity)
                     }
                 }
+                .background(Color(nsColor: .textBackgroundColor))
+                // Reset the scroll offset whenever the (debounced) filter changes —
+                // otherwise a deep scroll position can land the shorter result
+                // list in blank space. Constant ("") while unfiltered.
+                .id(activeFilter)
             }
-            .background(Color(nsColor: .textBackgroundColor))
-            // Reset the scroll offset whenever the (debounced) filter changes —
-            // otherwise a deep scroll position can land the shorter result
-            // list in blank space. Constant ("") while unfiltered.
-            .id(activeFilter)
+            .onChange(of: scrollTarget) { _, target in
+                guard let target else { return }
+                // A beat for the row set to settle (a just-cleared filter
+                // re-keys the ScrollView; the target row must exist first).
+                DispatchQueue.main.async {
+                    withAnimation { proxy.scrollTo(target, anchor: .center) }
+                    scrollTarget = nil
+                }
+            }
         }
     }
 
@@ -194,6 +219,8 @@ struct HistoryView: View {
         .contextMenu {
             commitContextMenu(commit)
         }
+        // Stable identity for ScrollViewProxy.scrollTo (parent navigation).
+        .id(commit.hash)
     }
 
     private var emptyFilterState: some View {
