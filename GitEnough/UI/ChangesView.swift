@@ -332,10 +332,8 @@ private struct FileRow: View {
     var body: some View {
         HStack(spacing: 6) {
             FileStatusBadge(status: file.displayStatus)
-            Text(file.path)
+            FilePathText(path: file.path, originalPath: file.originalPath)
                 .font(.callout)
-                .lineLimit(1)
-                .truncationMode(.middle)
             Spacer()
             Button(action: onAction) {
                 Image(systemName: actionIcon)
