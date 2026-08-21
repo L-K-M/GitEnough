@@ -2,10 +2,10 @@
 
 A living, shovel-ready backlog for GitEnough: every entry below is a concrete,
 self-contained task with suggested approach and test plan, ready for an LLM (or
-human) to pick up. This document consolidates three independent full-codebase
-reviews (`glm.md`, `kimi.md`, and `fable.md`, each kept unedited on its review
-branch as the record) with everything learned while implementing the first two
-waves of fixes.
+human) to pick up. This document consolidates four independent full-codebase
+reviews (`glm.md`, `kimi.md`, `fable.md`, and `flash.md`, each kept unedited on
+its review branch as the record) with everything learned while implementing the
+first three waves of fixes.
 **Maintenance rule:** when an entry ships, delete it here (the git history
 preserves it); when a new issue is found, add it with the same level of
 concreteness.
@@ -30,6 +30,12 @@ overlapping:
 | #41 | Commit-detail load-failure state (kills the eternal spinner; real git error in the pane; superseded-load guard) |
 | #42 | Unpushed-commit markers: hollow graph dots from `rev-list @{upstream}..HEAD` |
 | #43 | Force Push (with lease) as a Push split-button + confirmation |
+| #44 | Stash reachable with staged-only changes (button moved to a list footer, disabled mid-op/mid-merge) — flash review B-NEW-1 |
+| #45 | Watch-folder discovery skips bare repos and submodules (`.git/modules/` + `core.bare` checks, pure FS) — flash review B-NEW-2 |
+| #46 | Settings window sizes to content instead of clipping the AI tab — flash review B-NEW-3 |
+| #47 | History filter matches branch/tag/remote ref names (cheapest predicate first) — flash review M-NEW-1 |
+| #48 | `GitShell` synthesized failure message names the real subcommand (was "git -C failed…") — flash review B-NEW-4 |
+| #49 | "New Branch…" button in the Branches tab's local-branches header — flash review M-NEW-5 |
 | #50 | Squash / no-fast-forward merge options in the merge dialog |
 | #51 | Error banner: expandable long output + copy button |
 | #52 | Relative dates tick via per-minute TimelineView |
@@ -99,6 +105,15 @@ is unnecessary — FileMerge/Kaleidoscope happily open multiple windows.
 **Fix:** track open tools in a `Set<String>` of paths (main-thread guarded),
 drop the blanket refusal, keep one refresh per tool exit.
 
+### F45 · Conflicted-file rows show no diff — S
+`ConflictRow` in `ChangesView` offers Ours/Theirs/Merge Tool but selecting a
+conflicted file shows nothing in the diff pane (`selectFile` only serves the
+staged/unstaged lists). Facing 20 conflicted files, there is no way to even
+*see* the conflict markers in-app before picking a side. **Fix:** make
+`ConflictRow` selectable and serve the plain `git diff` output for the path
+(the conflict diff already renders fine through `DiffView`); Q7's ghost
+preview builds on the same path. (flash review B-NEW-10.)
+
 ### G8 · Detached-HEAD "Publish" semantics unclear — S
 `push -u origin HEAD` in detached HEAD does something surprising (creates/uses a
 remote branch literally derived from HEAD's state; git's behavior differs by
@@ -127,7 +142,18 @@ silently disable signing (`-c commit.gpgsign=false` only behind a user toggle).
 `Array(visible.enumerated())` (300+ tuples) per pass. Fine at one page,
 degrades after several "Load more"s. **Fix:** compare a cheap derived value
 (count + first/last hash) in the `onChange`, and let `ForEach` iterate indices
-directly.
+directly. Note: while a filter is active, `visibleCommits` also re-runs the
+full predicate over every loaded commit on *every* body evaluation — including
+pure selection changes (each row tap). Memoize on `(activeFilter, commits)`.
+(flash review P-NEW-2.)
+
+### F46 · `DiffView.ParseCache` compares the whole diff string per render — S
+The memoized parse (from #30) is keyed by `key == diff` — an O(n) equality
+over up to 4 000 lines on every body evaluation (the parent re-renders on
+every snapshot while the repo is dirty). Cheap relative to the parse it
+avoids, but it is the hottest path in the app (2.5 s watcher × dirty repo).
+**Fix:** key the cache on a hash, or have the view model publish a monotonically
+increasing diff revision alongside the string. (flash review P-NEW-1.)
 
 ---
 
@@ -256,7 +282,15 @@ all).
 `CommitDetailView` file rows: no way to view the file's content at that commit
 (`git show hash:path` → temp file → Quick Look or editor) nor to export a
 patch (`git format-patch -1 hash` / copy the loaded file diff). Two small,
-high-leverage archaeology features.
+high-leverage archaeology features. Add "Copy Diff" alongside (the diff pane
+and the commit-detail file list both lack it — the Changes list has Copy Path
+and Open in External Editor, the detail list only has Finder/Copy Path).
+(flash review M-NEW-3.)
+
+### F47 · Diffstat bars in the commit-detail file list — S
+The commit-detail file list shows status + path only. A tiny per-file `+N −M`
+(from `git show --numstat` — one more pure, testable parse) or GitHub-style
+diffstat bar makes archaeology much faster at a glance. (flash review M-NEW-4.)
 
 ### F20 · Check for Updates (zero-dep) — S/M
 The app ships DMGs via GitHub Releases but has no update check. A manual
@@ -459,6 +493,12 @@ Graph strip and row text each paint their own `accentColor.opacity(0.20)`
 (`GraphStripView` + `CommitRowView`), meeting at a visible seam when lane
 counts squeeze widths. Paint one full-row background behind an HStack of
 [strip, row] instead.
+
+### F51 · WelcomeView is static — S
+On a machine with 20 registered repos it shows one button and a hint. A
+"recently opened" row list (the store already tracks `lastOpenedAt`) or a
+"resume where you left off" affordance would make the empty pane useful
+instead of decorative. (flash review V-NEW-8.)
 
 ---
 
@@ -694,6 +734,24 @@ box that has no persisted draft.
 Optional `MenuBarExtra` listing repos that are dirty/behind (from the summary
 cache — zero extra git calls), one click to open. Off by default per the
 no-nagging philosophy (Q9's spirit).
+
+### F48 · Hover tooltip on graph nodes — S
+Hovering a dot in the graph shows the commit subject in a small popover (the
+rows already know the commits; the strip just needs a hit-test for its node's
+row). Delightful for dense graphs where the subject truncates. (flash review
+Q-NEW-4.)
+
+### F49 · "N new commits on origin/main since your last fetch" — S/M
+After a fetch that moved the default remote branch, show a subtle one-shot
+banner: "origin/main moved: 3 new commits" with a click-to-jump to the first
+new one. Turns an invisible event into awareness; pairs with Q16's
+"fetched N min ago". Related but distinct from F38 (per-repo-open digest).
+(flash review Q-NEW-5.)
+
+### F50 · Keyboard-shortcut cheat sheet (⌘/) — S
+A ⌘/ popover listing the app's shortcuts (≈15 now, growing). Tiny,
+discoverable, and it makes every future shortcut land better. (flash review
+Q-NEW-7.)
 
 ---
 
