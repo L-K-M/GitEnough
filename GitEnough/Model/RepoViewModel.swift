@@ -166,6 +166,11 @@ final class RepoViewModel: ObservableObject, Identifiable {
         canLoadMoreHistory = snapshot.canLoadMore
         if let commits = snapshot.commits { self.commits = commits }
         if let layout = snapshot.layout { self.layout = layout }
+        // Nothing to amend on an unborn HEAD — and a stale true must not
+        // survive the orphan's first commit either (it would silently amend
+        // the commit just made). commit() guards independently; this clears
+        // the flag regardless of which tab is mounted.
+        if snapshot.status.isUnborn, amendLastCommit { amendLastCommit = false }
         onStatusChange?(RepoSummary(status: snapshot.status))
     }
 
