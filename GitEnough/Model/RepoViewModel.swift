@@ -248,6 +248,24 @@ final class RepoViewModel: ObservableObject, Identifiable {
         remotes.first { $0.name == "origin" }?.name ?? remotes.first?.name ?? "origin"
     }
 
+    /// Single source of truth for the toolbar's and the menus' enablement, so
+    /// the two surfaces can't drift apart. Pull needs an upstream; plain Push
+    /// needs one too (its slot shows Publish otherwise); everything needs a
+    /// remote, a quiet queue, and no in-progress sequencer operation (pull
+    /// would die on "You have not concluded your merge", push on "not
+    /// currently on a branch" mid-rebase).
+    var canPull: Bool {
+        !isBusy && !remotes.isEmpty && status.upstream != nil && !mergeState.isInProgress
+    }
+
+    var canPush: Bool {
+        !isBusy && !remotes.isEmpty && status.upstream != nil && !mergeState.isInProgress
+    }
+
+    var canPublish: Bool {
+        !isBusy && !remotes.isEmpty && status.upstream == nil && !mergeState.isInProgress
+    }
+
     /// Push -u <publishRemoteName> HEAD for a branch with no upstream yet — which
     /// is not necessarily a remote named "origin". Guarded: with no remotes at
     /// all there is nothing to publish to (the Publish button hides, but no call

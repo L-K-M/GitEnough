@@ -96,9 +96,7 @@ struct RepoDetailView: View {
                           ? "Pull (\(viewModel.status.behind))" : "Pull",
                           systemImage: "arrow.down.to.line")
                 }
-                .disabled(viewModel.isBusy || viewModel.remotes.isEmpty
-                          || viewModel.status.upstream == nil
-                          || viewModel.mergeState.isInProgress)
+                .disabled(!viewModel.canPull)
                 .help(viewModel.mergeState.isInProgress
                       ? "Finish or abort the in-progress operation first"
                       : pullRebase ? "Pull with rebase (⇧⌘L)" : "Pull (⇧⌘L)")
@@ -109,7 +107,7 @@ struct RepoDetailView: View {
                     } label: {
                         Label("Publish", systemImage: "arrow.up.to.line")
                     }
-                    .disabled(viewModel.isBusy || viewModel.mergeState.isInProgress)
+                    .disabled(!viewModel.canPublish)
                     .help(viewModel.mergeState.isInProgress
                           ? "Finish or abort the in-progress operation first"
                           : "Push and set upstream to \(viewModel.publishRemoteName)")
@@ -121,8 +119,7 @@ struct RepoDetailView: View {
                               ? "Push (\(viewModel.status.ahead))" : "Push",
                               systemImage: "arrow.up.to.line")
                     }
-                    .disabled(viewModel.isBusy || viewModel.remotes.isEmpty
-                              || viewModel.mergeState.isInProgress)
+                    .disabled(!viewModel.canPush)
                     .help(viewModel.mergeState.isInProgress
                           ? "Finish or abort the in-progress operation first" : "Push (⇧⌘P)")
                 }
