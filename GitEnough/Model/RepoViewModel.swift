@@ -17,6 +17,7 @@ final class RepoViewModel: ObservableObject, Identifiable {
     let queue: DispatchQueue
     private var watcher: RepoWatcher?
     private var historyLimit: Int
+    private var operationGate = RepoOperationGate()
 
     /// Called on the main thread after each applied snapshot, so the sidebar
     /// summary (branch, dirty dot, ahead/behind) tracks repo operations live
@@ -202,6 +203,8 @@ final class RepoViewModel: ObservableObject, Identifiable {
                          includeHistory: Bool = true,
                          onSuccess: (() -> Void)? = nil,
                          _ work: @escaping (GitClient) throws -> Void) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard let operationID = operationGate.begin() else { return }
         isBusy = true
         self.activity = activity
         errorMessage = nil
@@ -214,6 +217,7 @@ final class RepoViewModel: ObservableObject, Identifiable {
             }
             let snapshot = self.collectSnapshot(includeHistory: includeHistory)
             DispatchQueue.main.async {
+                guard self.operationGate.finish(operationID) else { return }
                 self.apply(snapshot)
                 self.isBusy = false
                 self.activity = nil

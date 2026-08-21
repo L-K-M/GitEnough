@@ -96,6 +96,7 @@ struct BranchesView: View {
             }
         }
         .listStyle(.inset)
+        .disabled(viewModel.isBusy)
         .confirmationDialog("Delete branch “\(branchToDelete?.name ?? "")”?",
                             isPresented: deleteConfirmationPresented,
                             titleVisibility: .visible) {
