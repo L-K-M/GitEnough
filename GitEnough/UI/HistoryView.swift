@@ -34,9 +34,12 @@ struct HistoryView: View {
         guard isFiltering else { return viewModel.commits }
         let needle = activeFilter.lowercased()
         return viewModel.commits.filter {
-            $0.subject.localizedStandardContains(activeFilter)
+            // Cheapest predicate first: the plain hash-prefix check runs for
+            // every commit before the localized folds (which are noticeably
+            // more expensive) get a chance to.
+            $0.hash.lowercased().hasPrefix(needle)
+                || $0.subject.localizedStandardContains(activeFilter)
                 || $0.author.localizedStandardContains(activeFilter)
-                || $0.hash.lowercased().hasPrefix(needle)
                 || $0.decorations.contains {
                     $0.name.localizedStandardContains(activeFilter)
                 }
