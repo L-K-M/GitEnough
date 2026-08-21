@@ -6,8 +6,13 @@ struct CommitDetailView: View {
 
     @ObservedObject var viewModel: RepoViewModel
     let selectedHash: String?
+    /// Selects another commit in the history list (parent-chip navigation).
+    var onSelectCommit: ((String) -> Void)? = nil
 
     @State private var selectedFile: CommitFile?
+    @State private var bodyExpanded = false
+
+    private static let collapsedBodyLineLimit = 6
 
     var body: some View {
         if let hash = selectedHash, let detail = viewModel.selectedCommitDetail,
@@ -65,6 +70,7 @@ struct CommitDetailView: View {
         }
         .onChange(of: selectedHash) { _, _ in
             selectedFile = nil
+            bodyExpanded = false
         }
         .onChange(of: selectedFile) { _, file in
             viewModel.selectCommitFile(hash: detail.hash, path: file?.path)
@@ -81,7 +87,14 @@ struct CommitDetailView: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
-                    .lineLimit(6)
+                    .lineLimit(bodyExpanded ? nil : Self.collapsedBodyLineLimit)
+                if detail.bodyNeedsExpansionToggle(collapsedLineLimit: Self.collapsedBodyLineLimit) {
+                    Button(bodyExpanded ? "Show less" : "Show more") {
+                        bodyExpanded.toggle()
+                    }
+                    .buttonStyle(.link)
+                    .font(.caption)
+                }
             }
             HStack(spacing: 12) {
                 Label(detail.author, systemImage: "person")
@@ -92,6 +105,36 @@ struct CommitDetailView: View {
             }
             .font(.caption)
             .foregroundStyle(.secondary)
+            if !detail.parents.isEmpty {
+                HStack(spacing: 6) {
+                    Text(detail.parents.count > 1 ? "Merge of" : "Parent")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    ForEach(detail.parents, id: \.self) { parent in
+                        let shortParent = String(parent.prefix(7))
+                        Button {
+                            // Reset eagerly: the .onChange reset lives inside
+                            // the detail branch, which unmounts while the
+                            // parent loads — don't rely on view-state lifecycle
+                            // for either per-commit state to follow the
+                            // navigation.
+                            selectedFile = nil
+                            bodyExpanded = false
+                            onSelectCommit?(parent)
+                        } label: {
+                            Text(shortParent)
+                                .font(.system(.caption, design: .monospaced))
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.secondary.opacity(0.15))
+                                .clipShape(RoundedRectangle(cornerRadius: 4))
+                        }
+                        .buttonStyle(.plain)
+                        .help("Select parent \(shortParent) in the history")
+                        .accessibilityLabel("Select parent commit \(shortParent)")
+                    }
+                }
+            }
             HStack(spacing: 6) {
                 Text(detail.shortHash)
                     .font(.system(.caption, design: .monospaced))
@@ -117,4 +160,17 @@ struct CommitDetailView: View {
 
 private extension CommitDetail {
     var shortHash: String { String(hash.prefix(7)) }
+    /// True when the collapsed view plausibly hides content. lineLimit counts
+    /// *wrapped, rendered* lines while components(separatedBy:) counts logical
+    /// ones, so a short-line-count body of long paragraphs also gets the
+    /// toggle via a character threshold — deliberately conservative (≈32
+    /// chars per rendered line: wide glyphs and monospace runs fit fewer than
+    /// the pane's proportional-font average) so under-detection is impossible.
+    /// Trimmed first: a trailing newline must not inflate the line count into
+    /// a no-op toggle.
+    func bodyNeedsExpansionToggle(collapsedLineLimit: Int) -> Bool {
+        let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.components(separatedBy: "\n").count > collapsedLineLimit
+            || trimmed.count > collapsedLineLimit * 32
+    }
 }
