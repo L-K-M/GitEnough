@@ -61,6 +61,19 @@ struct Remote: Identifiable, Hashable {
 
     var id: String { name }
 
+    /// Selects the remote named by an upstream (`remote/branch`). Remote names
+    /// may themselves contain slashes, so split-at-first-slash is ambiguous;
+    /// the longest configured prefix is the exact match.
+    static func preferred(for upstream: String?, among remotes: [Remote]) -> Remote? {
+        if let upstream,
+           let matched = remotes
+            .filter({ upstream.hasPrefix($0.name + "/") })
+            .max(by: { $0.name.count < $1.name.count }) {
+            return matched
+        }
+        return remotes.first { $0.name == "origin" } ?? remotes.first
+    }
+
     /// Short host-ish label for the status bar, e.g. "github.com/L-K-M/GitEnough".
     var displayHost: String {
         var text = url

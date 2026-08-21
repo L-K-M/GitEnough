@@ -316,12 +316,7 @@ final class RepoViewModel: ObservableObject, Identifiable {
     /// The remote a pull request would live on: the branch's upstream remote
     /// when one is configured, else "origin", else the first configured remote.
     private func preferredRemote() -> Remote? {
-        if let upstream = status.upstream,
-           let remoteName = upstream.split(separator: "/").first.map(String.init),
-           let remote = remotes.first(where: { $0.name == remoteName }) {
-            return remote
-        }
-        return remotes.first { $0.name == "origin" } ?? remotes.first
+        Remote.preferred(for: status.upstream, among: remotes)
     }
 
     // MARK: Branches
