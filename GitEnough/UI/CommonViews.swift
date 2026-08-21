@@ -9,7 +9,11 @@ extension NSPasteboard {
     @MainActor
     func copyString(_ text: String) {
         clearContents()
-        _ = setString(text, forType: .string)
+        // A string write to a private pasteboard can't meaningfully fail —
+        // but if it ever does, the failure is logged, not swallowed.
+        if !setString(text, forType: .string) {
+            NSLog("[GitEnough] NSPasteboard.setString failed for %d characters", text.count)
+        }
     }
 }
 
