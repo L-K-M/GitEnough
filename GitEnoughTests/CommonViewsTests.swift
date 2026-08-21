@@ -12,13 +12,13 @@ final class CommonViewsTests: XCTestCase {
     func testCopyStringReplacesPasteboardContents() {
         let pasteboard = NSPasteboard.withUniqueName()
         defer { pasteboard.releaseGlobally() }
-        NSPasteboard.copyString("first", to: pasteboard)
+        pasteboard.copyString("first")
         XCTAssertEqual(pasteboard.string(forType: .string), "first")
 
         // Pollute with an unrelated type: a clear-then-write must remove it,
         // not just overwrite the string type.
         XCTAssertTrue(pasteboard.setData(Data([0x00]), forType: .pdf))
-        NSPasteboard.copyString("second", to: pasteboard)
+        pasteboard.copyString("second")
         XCTAssertEqual(pasteboard.string(forType: .string), "second")
         XCTAssertNil(pasteboard.data(forType: .pdf), "clearContents must drop prior types")
     }

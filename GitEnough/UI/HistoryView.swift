@@ -252,10 +252,10 @@ struct HistoryView: View {
     @ViewBuilder
     private func commitContextMenu(_ commit: Commit) -> some View {
         Button("Copy Hash") {
-            NSPasteboard.copyString(commit.hash)
+            NSPasteboard.general.copyString(commit.hash)
         }
         Button("Copy Message") {
-            NSPasteboard.copyString(commit.subject)
+            NSPasteboard.general.copyString(commit.subject)
         }
         // Built once per render: the command both feeds the action and gates
         // the item (disabled, never silently dead, in the
@@ -267,7 +267,7 @@ struct HistoryView: View {
             // app's own Cherry-pick action, which doesn't record provenance
             // either.
             if let cherryPickCommand {
-                NSPasteboard.copyString(cherryPickCommand)
+                NSPasteboard.general.copyString(cherryPickCommand)
             }
         }
         .disabled(cherryPickCommand == nil)

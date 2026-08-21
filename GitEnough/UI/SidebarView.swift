@@ -219,7 +219,7 @@ struct SidebarView: View {
                 NSWorkspace.shared.activateFileViewerSelecting([repo.url])
             }
             Button("Copy Path") {
-                NSPasteboard.copyString(repo.path)
+                NSPasteboard.general.copyString(repo.path)
             }
             Divider()
             Button("Remove from GitEnough") {

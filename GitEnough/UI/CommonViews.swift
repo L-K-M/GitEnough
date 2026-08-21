@@ -2,29 +2,14 @@ import SwiftUI
 import AppKit
 
 /// One place for the clear-then-write pasteboard dance every Copy action does.
-/// Main-actor like every other AppKit touchpoint in the views; the pasteboard
-/// is injectable so tests can use `NSPasteboard.withUniqueName()`.
+/// Main-actor like every other AppKit touchpoint in the views. setString's
+/// Bool is discarded deliberately: a string write to a private pasteboard
+/// can't meaningfully fail, and CommonViewsTests pins the contract.
 extension NSPasteboard {
     @MainActor
-    static func copyString(_ text: String, to pasteboard: NSPasteboard = .general) {
-        pasteboard.clearContents()
-        pasteboard.setString(text, forType: .string)
-    }
-}
-
-/// Pure builders for the shell commands the history context menu puts on the
-/// pasteboard — unit-tested, since the user pastes these straight into a
-/// terminal.
-enum CommitCommands {
-    /// The paste-ready `git cherry-pick '<hash>'` command, or nil for a hash
-    /// that isn't clean ASCII hex. `%H` can't produce anything else, but the
-    /// shell-safety invariant is enforced here rather than assumed from the
-    /// parser: trimmed, hex-validated (ASCII-strict — isHexDigit alone also
-    /// accepts fullwidth variants), and single-quoted.
-    static func cherryPickCommand(forHash rawHash: String) -> String? {
-        let hash = rawHash.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !hash.isEmpty, hash.allSatisfy({ $0.isASCII && $0.isHexDigit }) else { return nil }
-        return "git cherry-pick '\(hash)'"
+    func copyString(_ text: String) {
+        clearContents()
+        _ = setString(text, forType: .string)
     }
 }
 
