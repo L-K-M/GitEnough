@@ -7,6 +7,13 @@ struct PullRequest: Equatable {
     let url: URL
 }
 
+/// The result of probing a forge. `forge` retains a successfully detected
+/// self-hosted kind even when that forge returned a valid empty PR list.
+struct PullRequestResolution: Equatable {
+    let forge: ForgeRepo
+    let pullRequest: PullRequest?
+}
+
 /// Resolves the open pull request for a branch on its forge with short,
 /// unauthenticated REST calls:
 ///
@@ -46,22 +53,61 @@ final class PullRequestFinder {
     /// The open PR whose head is `headBranch`, or nil when there is none / when
     /// it can't be determined (private repo, offline, unsupported forge).
     func findOpenPullRequest(for forge: ForgeRepo, headBranch: String) async -> PullRequest? {
+        await resolvePullRequest(for: forge, headBranch: headBranch).pullRequest
+    }
+
+    /// Resolves both an existing PR and the actual forge kind. A successful
+    /// empty response is meaningful for a generic host: it selects the correct
+    /// create-PR URL even though there is no existing PR to return.
+    func resolvePullRequest(for forge: ForgeRepo,
+                            headBranch: String) async -> PullRequestResolution {
         switch forge.kind {
         case .github:
-            return await findOnGitHub(forge, headBranch: headBranch)
+            return PullRequestResolution(
+                forge: forge,
+                pullRequest: await findOnGitHub(forge, headBranch: headBranch))
         case .gitlab:
-            return await findOnGitLab(forge, headBranch: headBranch)
+            return PullRequestResolution(
+                forge: forge,
+                pullRequest: await findOnGitLab(forge, headBranch: headBranch))
         case .forgejo:
-            return await findOnForgejo(forge, headBranch: headBranch)
+            return PullRequestResolution(
+                forge: forge,
+                pullRequest: await findOnForgejo(forge, headBranch: headBranch))
         case .generic:
-            // Self-hosted hosts are usually Forgejo/Gitea or GitLab; two cheap
-            // probes also pin the kind, so the fallback URL takes the right
-            // shape even when the branch has no PR yet.
-            if let found = await findOnForgejo(forge, headBranch: headBranch) {
-                return found
+            if let resolution = await probeForgejo(forge, headBranch: headBranch) {
+                return resolution
             }
-            return await findOnGitLab(forge, headBranch: headBranch)
+            if let resolution = await probeGitLab(forge, headBranch: headBranch) {
+                return resolution
+            }
+            return PullRequestResolution(forge: forge, pullRequest: nil)
         }
+    }
+
+    private func probeForgejo(_ forge: ForgeRepo,
+                              headBranch: String) async -> PullRequestResolution? {
+        guard let url = Self.forgejoLookupURL(forge),
+              let data = await get(url), Self.isJSONArray(data) else { return nil }
+        let detected = forge.assumingForgejo()
+        let pullRequest = Self.parseForgejoPullRequests(
+            data, forge: detected, headBranch: headBranch).first
+        return PullRequestResolution(forge: detected, pullRequest: pullRequest)
+    }
+
+    private func probeGitLab(_ forge: ForgeRepo,
+                             headBranch: String) async -> PullRequestResolution? {
+        guard let url = Self.gitLabLookupURL(forge, headBranch: headBranch),
+              let data = await get(url), Self.isJSONArray(data) else { return nil }
+        let detected = forge.assumingGitLab()
+        let pullRequest = Self.parseGitLabMergeRequests(
+            data, forge: detected, headBranch: headBranch).first
+        return PullRequestResolution(forge: detected, pullRequest: pullRequest)
+    }
+
+    private static func isJSONArray(_ data: Data) -> Bool {
+        guard let value = try? JSONSerialization.jsonObject(with: data) else { return false }
+        return value is [Any]
     }
 
     private func findOnGitHub(_ forge: ForgeRepo, headBranch: String) async -> PullRequest? {
