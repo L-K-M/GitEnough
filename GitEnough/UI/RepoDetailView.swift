@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 /// The right pane: everything about the selected repository. Hosts the toolbar
 /// (branch picker, fetch/pull/push), the three tabs, a merge-in-progress banner,
@@ -299,20 +300,59 @@ struct RepoDetailView: View {
     }
 }
 
-/// A dismissable error strip shown at the top of the detail pane.
+/// A dismissable error strip shown at the top of the detail pane. Long git
+/// output (hook failures regularly exceed the collapsed four lines, with the
+/// useful part last) can be expanded into a scrollable monospaced view; the
+/// full text is always one click away on the clipboard.
 struct ErrorBanner: View {
     let message: String
     let dismiss: () -> Void
+
+    @State private var isExpanded = false
+
+    /// Expansion only pays off when the collapsed view actually truncates.
+    private var isLong: Bool {
+        message.count > 240 || message.filter { $0 == "\n" }.count >= 4
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(.red)
-            Text(message)
-                .font(.callout)
-                .lineLimit(4)
-                .textSelection(.enabled)
+            if isExpanded {
+                ScrollView {
+                    Text(message)
+                        .font(.system(.caption, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 180)
+            } else {
+                Text(message)
+                    .font(.callout)
+                    .lineLimit(4)
+                    .textSelection(.enabled)
+            }
             Spacer()
+            if isLong {
+                Button {
+                    isExpanded.toggle()
+                } label: {
+                    Image(systemName: isExpanded ? "chevron.up.circle" : "chevron.down.circle")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help(isExpanded ? "Collapse the output" : "Show the full output")
+            }
+            Button {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(message, forType: .string)
+            } label: {
+                Image(systemName: "doc.on.doc")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Copy the full error text")
             Button {
                 dismiss()
             } label: {
@@ -320,6 +360,7 @@ struct ErrorBanner: View {
                     .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
+            .help("Dismiss")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
