@@ -67,7 +67,7 @@ struct FilePathText: View {
     var originalPath: String?
 
     var body: some View {
-        if let originalPath, originalPath != path {
+        if let originalPath, !originalPath.isEmpty, originalPath != path {
             HStack(spacing: 4) {
                 Text(originalPath)
                     .foregroundStyle(.secondary)
@@ -82,7 +82,7 @@ struct FilePathText: View {
                     .layoutPriority(1)
             }
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel("\(originalPath) renamed to \(path)")
+            .accessibilityLabel("Was \(originalPath), now \(path)")
         } else {
             Text(path)
                 .lineLimit(1)
