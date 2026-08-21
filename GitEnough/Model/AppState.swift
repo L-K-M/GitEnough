@@ -90,7 +90,14 @@ final class AppState: ObservableObject {
         if let existing = viewModels[repo.path] { return existing }
         let vm = RepoViewModel(repo: repo)
         vm.onStatusChange = { [weak self] summary in
-            self?.store.summaries[repo.path] = summary
+            guard let self else { return }
+            self.store.summaries[repo.path] = summary
+            // AppCommands observes AppState, not the nested RepoViewModel. Wake
+            // it when the active snapshot changes so Push ↔ Publish and the
+            // central capability's enabled state stay in sync with the toolbar.
+            if self.selectedRepoPath == repo.path {
+                self.objectWillChange.send()
+            }
         }
         vm.activityLog.onEvent = { [weak self] event in
             self?.activityStore.record(event, repoName: repo.name, repoPath: repo.path)

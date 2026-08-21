@@ -230,26 +230,48 @@ final class RepoViewModel: ObservableObject, Identifiable {
 
     func fetch() { perform("Fetching…") { try $0.fetch() } }
 
+    /// Pulls into the current branch. Guarded: without an upstream there is
+    /// nothing to pull from — the toolbar already disables its Pull button in
+    /// that state, but the Repository menu (⇧⌘L) reaches this method from any
+    /// repo state, and a raw `git pull` would only surface git's
+    /// "no tracking information" error. A plain-language message names the fix
+    /// (publish the branch) instead.
     func pull(rebase: Bool) {
+        guard status.upstream != nil else {
+            errorMessage = "Can't pull: the current branch has no upstream branch to pull from. Publish it first, or check out a branch that tracks a remote."
+            return
+        }
         perform(rebase ? "Pulling (rebase)…" : "Pulling…") { try $0.pull(rebase: rebase) }
     }
 
-    func push() { perform("Pushing…") { try $0.push(setUpstream: false) } }
-
-    /// The remote a branch without an upstream should be published to — "origin"
-    /// when it exists (it's the natural target even alongside other remotes),
-    /// otherwise the first configured remote.
-    var publishRemoteName: String {
-        remotes.first { $0.name == "origin" }?.name ?? remotes.first?.name ?? "origin"
+    /// The current Push button/menu state, resolved from one central, pure
+    /// decision so presentation and execution cannot drift apart.
+    var pushCapability: PushCapability {
+        PushCapability.resolve(status: status, remotes: remotes)
     }
 
-    /// Push -u <publishRemoteName> HEAD for a branch with no upstream yet — which
-    /// is not necessarily a remote named "origin". Guarded: with no remotes at
-    /// all there is nothing to publish to (the Publish button hides, but no call
-    /// path should be able to push to a fabricated "origin").
-    func publishBranch() {
-        guard !remotes.isEmpty else { return }
-        let remote = publishRemoteName
+    /// The Push action's single entry point, shared by the toolbar and the
+    /// Repository menu (⇧⌘P). The capability is resolved again at click time:
+    /// even a stale menu item cannot push from detached/unborn HEAD or without
+    /// a remote, and the error explains the next useful step.
+    func pushOrPublish() {
+        switch pushCapability {
+        case .push:
+            push()
+        case .publish(let remote):
+            publishBranch(to: remote)
+        case .unavailable(let reason):
+            errorMessage = reason.message
+        }
+    }
+
+    private func push() {
+        perform("Pushing…") { try $0.push(setUpstream: false) }
+    }
+
+    /// Push -u <remote> HEAD for a branch with no upstream yet. Only invoked
+    /// with the remote selected by `PushCapability.resolve`.
+    private func publishBranch(to remote: String) {
         perform("Publishing branch…") { try $0.push(setUpstream: true, remote: remote) }
     }
 
