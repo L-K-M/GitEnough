@@ -91,8 +91,33 @@ final class GitIntegrationTests: XCTestCase {
         let branches = try client.branches()
         XCTAssertEqual(branches.count, 2)
         XCTAssertEqual(branches.first { $0.isHead }?.name, "main")
+        XCTAssertEqual(branches.first { $0.isHead }?.refName, "refs/heads/main")
         XCTAssertNotNil(branches.first { $0.name == "feature" })
         XCTAssertTrue(branches.allSatisfy { !$0.isRemote })
+    }
+
+    func testBranchAndTagWithSameNameStillChecksOutBranch() throws {
+        try run(["branch", "same"])
+        try run(["tag", "same"])
+        let branch = try XCTUnwrap(client.branches().first { $0.name == "same" })
+        XCTAssertEqual(branch.refName, "refs/heads/same")
+
+        try client.checkout(branch: branch.name)
+
+        XCTAssertEqual(try client.status().head, "same")
+        XCTAssertFalse(try client.status().isDetached)
+    }
+
+    func testRemoteBranchAndTagCollisionKeepsCanonicalRemoteRef() throws {
+        try run(["update-ref", "refs/remotes/origin/same", "refs/heads/main"])
+        try run(["tag", "origin/same"])
+        let branch = try XCTUnwrap(
+            client.branches().first { $0.refName == "refs/remotes/origin/same" })
+
+        try client.checkoutTracking(remoteBranch: branch.refName,
+                                    localName: "tracked-collision")
+
+        XCTAssertEqual(try client.status().head, "tracked-collision")
     }
 
     func testModifyStageUnstageFlow() throws {

@@ -148,7 +148,7 @@ enum GitParsers {
 
     // MARK: - git for-each-ref
 
-    /// Parses lines of `%(refname) \x1F %(refname:short) \x1F %(upstream:short) \x1F
+    /// Parses lines of `%(refname) \x1F %(refname:short) \x1F %(upstream) \x1F
     /// %(upstream:track) \x1F %(HEAD)`.
     static func parseBranches(_ output: String) -> [Branch] {
         var branches: [Branch] = []
@@ -158,8 +158,9 @@ enum GitParsers {
             let refname = fields[0]
             let isRemote = refname.hasPrefix("refs/remotes/")
             guard refname.hasPrefix("refs/heads/") || isRemote else { continue }
+            let name = branchDisplayName(for: refname)
             // Skip the remote HEAD symref (e.g. "origin/HEAD") — it's not a real branch.
-            if isRemote && fields[1].hasSuffix("/HEAD") { continue }
+            if isRemote && name.hasSuffix("/HEAD") { continue }
             var ahead = 0, behind = 0
             let track = fields[3]
             if track.hasPrefix("[") && track.hasSuffix("]") {
@@ -169,15 +170,27 @@ enum GitParsers {
                 }
             }
             branches.append(Branch(
-                name: fields[1],
+                name: name,
+                refName: refname,
                 isRemote: isRemote,
                 isHead: fields[4] == "*",
-                upstream: fields[2].isEmpty ? nil : fields[2],
+                upstream: fields[2].isEmpty ? nil : branchDisplayName(for: fields[2]),
                 ahead: ahead,
                 behind: behind
             ))
         }
         return branches
+    }
+
+    /// Strips only a namespace that identifies a branch. Unlike
+    /// `%(refname:short)`, this cannot grow an ambiguous `heads/` prefix merely
+    /// because a tag happens to use the same display name.
+    private static func branchDisplayName(for refname: String) -> String {
+        for prefix in ["refs/heads/", "refs/remotes/"] where refname.hasPrefix(prefix) {
+            return String(refname.dropFirst(prefix.count))
+        }
+        // Tolerate the older short-upstream fixture format.
+        return refname
     }
 
     // MARK: - git remote -v
