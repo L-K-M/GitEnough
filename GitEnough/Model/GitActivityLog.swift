@@ -22,11 +22,27 @@ final class GitActivityLog {
         /// The command as displayed, e.g. `commit -F -` or `fetch --prune --all`
         /// (the leading `-C <worktree>` is stripped; the repo is implied).
         let command: String
+        /// Redacted argv for commands recorded by current versions. Display text
+        /// is deliberately not parsed back into arguments: quotes, empty strings,
+        /// and embedded newlines make that lossy and unsafe. Older persisted
+        /// entries decode this optional field as nil and remain viewable.
+        let arguments: [String]?
         let startedAt: Date
         private(set) var finishedAt: Date?
         private(set) var exitCode: Int32?
         /// Last chunk of stderr — hook diagnostics and git's error messages.
         private(set) var stderrTail: String?
+
+        init(id: UUID, command: String, startedAt: Date, finishedAt: Date?,
+             exitCode: Int32?, stderrTail: String?, arguments: [String]? = nil) {
+            self.id = id
+            self.command = command
+            self.arguments = arguments
+            self.startedAt = startedAt
+            self.finishedAt = finishedAt
+            self.exitCode = exitCode
+            self.stderrTail = stderrTail
+        }
 
         var isRunning: Bool { finishedAt == nil }
         /// False while the entry is still running — check `isRunning` first.
@@ -73,8 +89,24 @@ final class GitActivityLog {
 
     @discardableResult
     func begin(command: String, at now: Date = Date()) -> UUID {
+        begin(command: command, arguments: nil, at: now)
+    }
+
+    /// Begins an entry from the actual argv passed to git. Keeping structured
+    /// arguments alongside the human-readable display is what lets the activity
+    /// window later produce a command that is safe to paste into a POSIX shell.
+    @discardableResult
+    func begin(arguments: [String], at now: Date = Date()) -> UUID {
+        let normalized = Self.normalizedArguments(for: arguments)
+        return begin(command: Self.displayCommand(forNormalizedArguments: normalized),
+                     arguments: normalized, at: now)
+    }
+
+    @discardableResult
+    private func begin(command: String, arguments: [String]?, at now: Date) -> UUID {
         let entry = Entry(id: UUID(), command: command, startedAt: now,
-                          finishedAt: nil, exitCode: nil, stderrTail: nil)
+                          finishedAt: nil, exitCode: nil, stderrTail: nil,
+                          arguments: arguments)
         lock.lock()
         storage.append(entry)
         trimLocked()
@@ -121,8 +153,43 @@ final class GitActivityLog {
 
     /// Renders an argv array for display: strips the leading `-C <worktree>`
     /// every GitClient call starts with, redacts credentials embedded in URLs,
-    /// and quotes arguments containing whitespace.
+    /// and quotes arguments containing whitespace. This is presentation only;
+    /// `shellCommand(arguments:worktree:)` is the paste-safe representation.
     static func displayCommand(for args: [String]) -> String {
+        displayCommand(forNormalizedArguments: normalizedArguments(for: args))
+    }
+
+    private static func displayCommand(forNormalizedArguments args: [String]) -> String {
+        args.map(displayArgument).joined(separator: " ")
+    }
+
+    /// A complete command safe to paste into a POSIX-compatible shell. Only a
+    /// deliberately small ASCII set is emitted bare; everything else is wrapped
+    /// in single quotes, with an embedded apostrophe represented by the standard
+    /// `'\''` close/escaped-quote/reopen sequence. Single quotes also suppress
+    /// dollar expansion, command substitution, globbing, and embedded newlines.
+    static func shellCommand(arguments: [String], worktree: String) -> String {
+        (["git", "-C", worktree] + arguments.map(redactCredentials))
+            .map(shellQuotedArgument)
+            .joined(separator: " ")
+    }
+
+    private static let bareShellCharacters = CharacterSet(
+        charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_@%+=:,./-"
+    )
+
+    private static func shellQuotedArgument(_ argument: String) -> String {
+        if !argument.isEmpty,
+           argument.unicodeScalars.allSatisfy({ Self.bareShellCharacters.contains($0) }) {
+            return argument
+        }
+        return "'" + argument.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    /// Removes GitClient's repo-scoping/read-only switches and redacts secrets.
+    /// The result is both the persisted argv and the source for display text, so
+    /// the two representations cannot drift apart.
+    private static func normalizedArguments(for args: [String]) -> [String] {
         var argv = args
         if argv.count >= 2, argv[0] == "-C" {
             argv.removeFirst(2)
@@ -130,7 +197,7 @@ final class GitActivityLog {
         // Read-only probes pass `--no-optional-locks` before the subcommand;
         // strip it so the display leads with the command name (`status …`).
         argv.removeAll { $0 == "--no-optional-locks" }
-        return argv.map(displayArgument).joined(separator: " ")
+        return argv.map(redactCredentials)
     }
 
     /// https://token@host/… or https://user:pass@host/… → https://***@host/…
@@ -142,10 +209,9 @@ final class GitActivityLog {
     }
 
     private static func displayArgument(_ arg: String) -> String {
-        let redacted = redactCredentials(arg)
-        if redacted.contains(where: { $0 == " " || $0 == "\t" }) {
-            return "\"\(redacted)\""
+        if arg.contains(where: { $0 == " " || $0 == "\t" }) {
+            return "\"\(arg)\""
         }
-        return redacted
+        return arg
     }
 }
