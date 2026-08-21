@@ -36,4 +36,13 @@ final class RepoViewModelTests: XCTestCase {
         XCTAssertEqual(RepoViewModel.trackedPathsToDiscard(in: [rename, alsoB]),
                        ["b.txt", "a.txt"])
     }
+
+    /// A staged copy also carries originalPath, but its source is untouched
+    /// by the change — expanding it would clobber the source's unrelated
+    /// worktree edits. Only renames expand.
+    func testTrackedPathsToDiscardDoesNotExpandCopies() {
+        let copy = FileChange(path: "copy.txt", originalPath: "source.txt",
+                              stagedStatus: .copied, unstagedStatus: nil)
+        XCTAssertEqual(RepoViewModel.trackedPathsToDiscard(in: [copy]), ["copy.txt"])
+    }
 }

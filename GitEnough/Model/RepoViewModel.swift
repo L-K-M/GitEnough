@@ -523,13 +523,17 @@ final class RepoViewModel: ObservableObject, Identifiable {
     /// original's deletion staged and its worktree file gone, the rename
     /// restaged as two pieces. Resetting both restores the original; the
     /// renamed file stays on disk as untracked (kept, like a discarded
-    /// staged-new file, rather than destroyed). Output is deduplicated
-    /// (first occurrence wins) so overlapping changes can't double-reset a
-    /// path — the "each path is reset exactly once" contract is explicit.
+    /// staged-new file, rather than destroyed).
+    ///
+    /// RENAMES ONLY: a staged copy (`C`) also carries originalPath, but its
+    /// source is untouched by the change — resetting it would clobber the
+    /// source file's unrelated worktree edits. Output is deduplicated (first
+    /// occurrence wins) so overlapping changes can't double-reset a path.
     static func trackedPathsToDiscard(in changes: [FileChange]) -> [String] {
         var seen = Set<String>()
         return changes.filter { !$0.isUntracked }.flatMap { change -> [String] in
-            [change.path] + (change.originalPath.map { [$0] } ?? [])
+            let original = change.stagedStatus == .renamed ? change.originalPath : nil
+            return [change.path] + (original.map { [$0] } ?? [])
         }.filter { seen.insert($0).inserted }
     }
 
