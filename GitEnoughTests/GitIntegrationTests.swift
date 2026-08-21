@@ -451,6 +451,26 @@ final class GitIntegrationTests: XCTestCase {
         try run(["commit", "-m", "Change a on main"])
     }
 
+    func testConflictMarkerScanIsStreamingAndThrowsOnReadFailure() throws {
+        try write("ordinary\n<<<<<<< HEAD\nours\n>>>>>>> topic\n", to: "markers.txt")
+        // A deliberately tiny chunk makes both markers cross read boundaries.
+        XCTAssertTrue(try client.fileHasConflictMarkers("markers.txt", chunkSize: 3))
+
+        try write("Title\n=======\nnot an angle marker\n", to: "setext.md")
+        XCTAssertFalse(try client.fileHasConflictMarkers("setext.md", chunkSize: 2))
+        XCTAssertThrowsError(try client.fileHasConflictMarkers("missing.txt"))
+    }
+
+    func testMarkResolvedRefusesAFileThatStillHasMarkers() throws {
+        try makeConflictingBranch("marker-conflict")
+        XCTAssertThrowsError(try client.merge("marker-conflict"))
+
+        XCTAssertThrowsError(try client.markResolved(path: "a.txt")) { error in
+            XCTAssertTrue(error.localizedDescription.contains("still contains conflict markers"))
+        }
+        XCTAssertEqual(try client.conflictedPaths(), ["a.txt"])
+    }
+
     func testRebaseConflictDetectionResolutionAndContinue() throws {
         try makeConflictingBranch("conflicter")
         XCTAssertNil(client.inProgressOperation())

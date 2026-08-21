@@ -442,6 +442,11 @@ final class GitClient {
     /// Marks a conflicted path resolved (for when the user fixed it by hand or in
     /// a tool that didn't stage it).
     func markResolved(path: String) throws {
+        if try fileHasConflictMarkers(path) {
+            throw GitError(
+                message: "\(path) still contains conflict markers. Remove them before marking the file resolved.",
+                exitCode: -1)
+        }
         try runChecked(["-C", worktree.path, "add", "--", path], in: nil)
     }
 
@@ -449,16 +454,32 @@ final class GitClient {
     /// `=======`, `>>>>>>>` at line start). Used after an external merge tool
     /// exits: opendiff-style tools can't be trusted to stage the file or answer
     /// git's "was it resolved?" prompt (which hits a headless EOF), so GitEnough
-    /// verifies the file itself.
-    func fileHasConflictMarkers(_ path: String) -> Bool {
+    /// verifies the file itself. Throws when the file can't be inspected so a
+    /// read/permission failure can never be mistaken for a resolved conflict.
+    func fileHasConflictMarkers(_ path: String, chunkSize: Int = 64 * 1024) throws -> Bool {
         let url = worktree.appendingPathComponent(path)
-        guard let data = try? Data(contentsOf: url) else { return false }
-        let text = String(decoding: data, as: UTF8.self)
-        for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
-            // Only the angle-bracket markers: a bare "=======" line is also a
-            // legitimate Setext heading underline, which would false-positive.
-            if line.hasPrefix("<<<<<<<") || line.hasPrefix(">>>>>>>") {
-                return true
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        let opening = Array("<<<<<<<".utf8)
+        let closing = Array(">>>>>>>".utf8)
+        var prefix: [UInt8] = []
+        prefix.reserveCapacity(opening.count)
+        var atLineStart = true
+
+        while let data = try handle.read(upToCount: max(1, chunkSize)), !data.isEmpty {
+            for byte in data {
+                if byte == 0x0A { // newline
+                    atLineStart = true
+                    prefix.removeAll(keepingCapacity: true)
+                } else if atLineStart {
+                    prefix.append(byte)
+                    if prefix.count == opening.count {
+                        // A bare "=======" is also a legitimate Markdown
+                        // Setext underline, so only angle-bracket sides count.
+                        if prefix == opening || prefix == closing { return true }
+                        atLineStart = false
+                    }
+                }
             }
         }
         return false
