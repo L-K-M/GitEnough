@@ -230,11 +230,48 @@ final class RepoViewModel: ObservableObject, Identifiable {
 
     func fetch() { perform("Fetching…") { try $0.fetch() } }
 
+    /// Pulls into the current branch. Guarded: without an upstream there is
+    /// nothing to pull from — the toolbar already disables its Pull button in
+    /// that state, but the Repository menu (⇧⌘L) reaches this method from any
+    /// repo state, and a raw `git pull` would only surface git's
+    /// "no tracking information" error. A plain-language message names the fix
+    /// (publish the branch) instead.
     func pull(rebase: Bool) {
+        guard status.upstream != nil else {
+            errorMessage = remotes.isEmpty
+                ? "Can't pull: this repository has no remotes configured. Add a remote first."
+                : "Can't pull: the current branch has no upstream branch to pull from. Publish it first, or check out a branch that tracks a remote."
+            return
+        }
         perform(rebase ? "Pulling (rebase)…" : "Pulling…") { try $0.pull(rebase: rebase) }
     }
 
     func push() { perform("Pushing…") { try $0.push(setUpstream: false) } }
+
+    /// Whether a Push action should set an upstream (publish) instead of a
+    /// plain push: the branch has no upstream and there is a remote to publish
+    /// to. Pure so the decision is unit-testable.
+    static func shouldPublish(upstream: String?, remotes: [Remote]) -> Bool {
+        upstream == nil && !remotes.isEmpty
+    }
+
+    /// The Push action's single entry point, shared by the toolbar and the
+    /// Repository menu (⌘⇧P): publishes when the branch has no upstream, plain-
+    /// pushes otherwise. The toolbar swaps its visible button (Publish ↔ Push)
+    /// to explain the same decision; routing the menu through here keeps ⌘⇧P
+    /// from running a raw `git push` that would only fail — or, under a legacy
+    /// `push.default=matching` config, push every name-matching branch.
+    func pushOrPublish() {
+        guard !remotes.isEmpty else {
+            errorMessage = "Can't push: this repository has no remotes configured. Add a remote first."
+            return
+        }
+        if Self.shouldPublish(upstream: status.upstream, remotes: remotes) {
+            publishBranch()
+        } else {
+            push()
+        }
+    }
 
     /// The remote a branch without an upstream should be published to — "origin"
     /// when it exists (it's the natural target even alongside other remotes),
