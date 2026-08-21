@@ -596,6 +596,7 @@ final class RepoViewModel: ObservableObject, Identifiable {
     private var fileDiffGeneration = 0
 
     func selectCommitFile(hash: String, path: String?) {
+        dispatchPrecondition(condition: .onQueue(.main))
         commitFileDiffGeneration += 1
         let generation = commitFileDiffGeneration
         guard let path else {
@@ -613,6 +614,7 @@ final class RepoViewModel: ObservableObject, Identifiable {
 
     /// Loads the worktree/index diff for the file selected in the Changes pane.
     func selectFile(_ change: FileChange?, staged: Bool) {
+        dispatchPrecondition(condition: .onQueue(.main))
         fileDiffGeneration += 1
         let generation = fileDiffGeneration
         guard let change else {
