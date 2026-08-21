@@ -107,12 +107,14 @@ struct CommitDetailView: View {
                 .help("Copy full hash")
                 .contextMenu {
                     Button("Copy Hash") { NSPasteboard.general.copyString(detail.hash) }
+                    // Built once per render: feeds the action and the gate.
+                    let cherryPickCommand = CommitCommands.cherryPickCommand(forHash: detail.hash)
                     Button("Copy Cherry-pick Command") {
-                        if let command = CommitCommands.cherryPickCommand(forHash: detail.hash) {
-                            NSPasteboard.general.copyString(command)
+                        if let cherryPickCommand {
+                            NSPasteboard.general.copyString(cherryPickCommand)
                         }
                     }
-                    .disabled(CommitCommands.cherryPickCommand(forHash: detail.hash) == nil)
+                    .disabled(cherryPickCommand == nil)
                 }
                 Text("\(detail.files.count) file\(detail.files.count == 1 ? "" : "s") changed")
                     .font(.caption)
