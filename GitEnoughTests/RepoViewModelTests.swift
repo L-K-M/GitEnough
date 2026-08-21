@@ -31,4 +31,14 @@ final class RepoViewModelTests: XCTestCase {
         XCTAssertTrue(viewModel.errorMessage?.contains("no upstream") ?? false)
         XCTAssertFalse(viewModel.isBusy)
     }
+
+    // MARK: - Push guard
+
+    func testPushOrPublishWithoutRemotesFailsGracefully() {
+        let viewModel = makeViewModel()
+        viewModel.pushOrPublish()
+        XCTAssertNotNil(viewModel.errorMessage)
+        XCTAssertTrue(viewModel.errorMessage?.contains("no remotes") ?? false)
+        XCTAssertFalse(viewModel.isBusy)
+    }
 }

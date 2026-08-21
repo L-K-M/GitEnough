@@ -238,7 +238,9 @@ final class RepoViewModel: ObservableObject, Identifiable {
     /// (publish the branch) instead.
     func pull(rebase: Bool) {
         guard status.upstream != nil else {
-            errorMessage = "Can't pull: the current branch has no upstream branch to pull from. Publish it first, or check out a branch that tracks a remote."
+            errorMessage = remotes.isEmpty
+                ? "Can't pull: this repository has no remotes configured. Add a remote first."
+                : "Can't pull: the current branch has no upstream branch to pull from. Publish it first, or check out a branch that tracks a remote."
             return
         }
         perform(rebase ? "Pulling (rebase)…" : "Pulling…") { try $0.pull(rebase: rebase) }
