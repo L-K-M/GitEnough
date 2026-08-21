@@ -35,6 +35,12 @@ struct AppCommands: Commands {
                 .keyboardShortcut("p", modifiers: [.shift, .command])
                 .disabled(active?.canPush != true)
 
+            // The menu's counterpart to the toolbar's Publish button — menu
+            // Push disables without an upstream (plain push would only fail),
+            // so publishing needs its own path here.
+            Button("Publish Branch") { active?.publishBranch() }
+                .disabled(active?.canPublish != true)
+
             Button("Open Pull Request…") { active?.openPullRequest() }
                 .keyboardShortcut("p", modifiers: [.option, .command])
                 .disabled(active == nil)
