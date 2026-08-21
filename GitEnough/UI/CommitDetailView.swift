@@ -115,7 +115,9 @@ struct CommitDetailView: View {
                             // Reset eagerly: the .onChange reset lives inside
                             // the detail branch, which unmounts while the
                             // parent loads — don't rely on view-state lifecycle
-                            // for the collapse state to follow the navigation.
+                            // for either per-commit state to follow the
+                            // navigation.
+                            selectedFile = nil
                             bodyExpanded = false
                             onSelectCommit?(parent)
                         } label: {
@@ -128,6 +130,7 @@ struct CommitDetailView: View {
                         }
                         .buttonStyle(.plain)
                         .help("Select parent \(parent.prefix(7)) in the history")
+                        .accessibilityLabel("Select parent commit \(parent.prefix(7))")
                     }
                 }
             }
