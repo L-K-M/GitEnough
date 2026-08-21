@@ -32,7 +32,8 @@ survive stacking. A verified order lands 36 of them with zero conflicts; the
 remaining 15 need hand resolution. Four PRs are superseded duplicates that
 should be closed (#36, #56, #74, #85), and seven cross-PR defects merge without
 a conflict marker and are invisible to every PR's own CI — they are filed as
-X1–X5 below.
+X1–X5 below. X6 records why the GLM review check is red on ~40 of them (an API
+timeout, not a code signal).
 
 | PR | Covers |
 |----|--------|
@@ -184,6 +185,26 @@ the other behaviour, and neither PR's tests cover the other's. The merged
 observer must do both, and #54's init-time restore must keep going through
 `_draftCommitMessage = Published(initialValue:)` so restoring a draft is not
 counted as user typing (which would invalidate a generation at launch).
+
+### X6 · The GLM review workflow silently reviews almost nothing — S
+
+`Review PR with GLM 5.2` fails on roughly 40 of the 55 open PRs, and the cause
+is not flakiness: the Z.ai request times out. The job log shows the whole diff
+sent as one chunk and retried three times, each attempt cut off at ~300 s —
+`API call failed for chunk 1/1, 2 file(s), 26369 patch chars … Request timed
+out` ×3, then `All review chunks failed. No review could be generated.`
+
+`.github/workflows/zai-code-review.yml` never sets `MAX_DIFF_CHARS`, so it takes
+the action's `0` default and no size-based splitting happens. The PRs where the
+check passes are the small ones. The result is that automated review quietly
+does not run on exactly the PRs big enough to need it — while the red X on those
+PRs trains everyone to ignore the check entirely.
+
+Fix: set a non-zero `MAX_DIFF_CHARS` so a large diff splits into several
+requests that can finish inside the timeout, and confirm against a known-large
+PR that the review actually posts. This is a `pull_request_target` workflow
+holding repository secrets, so treat the edit as privileged: keep the existing
+same-repo `if:` gate and the pinned action SHA untouched.
 
 ### C1 · Make sidebar summaries generation-safe — S/M
 

@@ -22,7 +22,7 @@ on `macos-14`.
 |---|---|
 | Open PRs | 55 (#36–#90), all targeting `main`, none draft |
 | `Build & Test` green | **55 / 55** |
-| `Review PR with GLM 5.2` | fails on ~40 / 55 — non-gating reviewer bot, not a code signal |
+| `Review PR with GLM 5.2` | fails on ~40 / 55 — non-gating reviewer bot, not a code signal (cause diagnosed below) |
 | Merge cleanly onto `main` *individually* | **55 / 55** |
 | Conflicting pairs *between* PRs | **50** |
 
@@ -46,6 +46,32 @@ accumulated tree — 22 failures where the pairwise graph predicted none.
 Treat the conflict graph as a lower bound on entanglement, never as a plan.
 The landing order below was derived by re-testing against the real accumulated
 tree after every merge.
+
+### Why the GLM reviewer fails on most PRs
+
+Worth separating from the code signal: the reviewer bot is not flaky, it is
+timing out. Its job log on this review's own PR shows the whole diff sent as a
+single request, retried three times, each attempt cut off at 300 s:
+
+```
+Processing 2 file(s) in 1 chunk(s)...
+API call failed for chunk 1/1, 2 file(s), 26369 patch chars, 27969 prompt chars
+  (attempt 1/3) after 300294ms: Z.ai API: Request timed out.
+… attempt 2/3 after 300388ms … attempt 3/3 after 302315ms
+All review chunks failed. No review could be generated.
+```
+
+`.github/workflows/zai-code-review.yml` does not set `MAX_DIFF_CHARS`, so it
+takes the action's default of `0` and no size-based splitting happens — the
+observed run put 2 files and 26 k patch chars into one chunk. The PRs where the
+check passes are the small ones; the ~40 failures are long runs that end in the
+same timeout. The effect is that automated review silently does not happen on
+exactly the PRs large enough to want it.
+
+Setting a non-zero `MAX_DIFF_CHARS` so large diffs split into several smaller
+requests is the obvious lever, but this is a `pull_request_target` workflow
+holding repository secrets, so the change is the maintainer's call, not a
+drive-by edit. Filed as `ANALYSIS.md` X6.
 
 ---
 
