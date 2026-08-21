@@ -97,23 +97,13 @@ struct RepoDetailView: View {
                 .disabled(viewModel.isBusy || viewModel.remotes.isEmpty || viewModel.status.upstream == nil)
                 .help(pullRebase ? "Pull with rebase (⇧⌘L)" : "Pull (⇧⌘L)")
 
-                if viewModel.status.upstream == nil && !viewModel.remotes.isEmpty {
-                    Button {
-                        viewModel.publishBranch()
-                    } label: {
-                        Label("Publish", systemImage: "arrow.up.to.line")
-                    }
-                    .disabled(viewModel.isBusy || viewModel.remotes.isEmpty)
-                    .help("Push and set upstream to \(viewModel.publishRemoteName)")
-                } else {
-                    Button {
-                        viewModel.push()
-                    } label: {
-                        Label("Push", systemImage: "arrow.up.to.line")
-                    }
-                    .disabled(viewModel.isBusy || viewModel.remotes.isEmpty)
-                    .help("Push (⇧⌘P)")
+                Button {
+                    viewModel.pushOrPublish()
+                } label: {
+                    Label(viewModel.pushCapability.label, systemImage: "arrow.up.to.line")
                 }
+                .disabled(viewModel.isBusy || !viewModel.pushCapability.isAvailable)
+                .help(viewModel.pushCapability.help)
 
                 Button {
                     viewModel.openPullRequest()

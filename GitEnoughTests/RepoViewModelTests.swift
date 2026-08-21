@@ -8,22 +8,51 @@ final class RepoViewModelTests: XCTestCase {
         RepoViewModel(repo: Repository(path: "/nonexistent/gitenough-test", name: "test"))
     }
 
-    // MARK: - Push vs publish
+    // MARK: - Push capability
 
-    func testShouldPublish() {
-        let origin = Remote(name: "origin", url: "https://example.com/owner/repo.git")
-        // No upstream + a remote exists → a Push action must publish.
-        XCTAssertTrue(RepoViewModel.shouldPublish(upstream: nil, remotes: [origin]))
-        // Upstream set → plain push.
-        XCTAssertFalse(RepoViewModel.shouldPublish(upstream: "origin/main", remotes: [origin]))
-        // No remotes at all → nothing to publish to; the Publish button hides.
-        XCTAssertFalse(RepoViewModel.shouldPublish(upstream: nil, remotes: []))
+    private let origin = Remote(name: "origin", url: "https://example.com/owner/repo.git")
+
+    func testPushCapabilityWithUpstreamUsesPlainPush() {
+        let status = RepoStatus(head: "main", headHash: "abc123",
+                                upstream: "origin/main")
+        XCTAssertEqual(PushCapability.resolve(status: status, remotes: [origin]), .push)
+    }
+
+    func testPushCapabilityForNewLocalBranchPublishesToOrigin() {
+        let status = RepoStatus(head: "feature", headHash: "abc123")
+        let backup = Remote(name: "backup", url: "https://example.com/backup/repo.git")
+        XCTAssertEqual(
+            PushCapability.resolve(status: status, remotes: [backup, origin]),
+            .publish(remote: "origin"))
+    }
+
+    func testPushCapabilityRejectsDetachedHead() {
+        let status = RepoStatus(head: nil, headHash: "abc123")
+        let capability = PushCapability.resolve(status: status, remotes: [origin])
+        XCTAssertEqual(capability, .unavailable(.detachedHead))
+        XCTAssertTrue(capability.help.contains("detached"))
+    }
+
+    func testPushCapabilityRejectsUnbornHead() {
+        let status = RepoStatus(head: "main", headHash: "(initial)")
+        let capability = PushCapability.resolve(status: status, remotes: [origin])
+        XCTAssertEqual(capability, .unavailable(.unbornHead))
+        XCTAssertTrue(capability.help.contains("no commits"))
+    }
+
+    func testPushCapabilityRejectsRepositoryWithoutRemotes() {
+        let status = RepoStatus(head: "feature", headHash: "abc123")
+        let capability = PushCapability.resolve(status: status, remotes: [])
+        XCTAssertEqual(capability, .unavailable(.noRemotes))
+        XCTAssertTrue(capability.help.contains("no remotes"))
     }
 
     // MARK: - Pull guard
 
     func testPullWithoutUpstreamFailsGracefully() {
         let viewModel = makeViewModel()
+        XCTAssertNil(viewModel.status.upstream,
+                     "Precondition: a fresh view model starts without an upstream")
         viewModel.pull(rebase: false)
         // The guard fires synchronously (no perform, no git): a plain-language
         // error instead of git's raw "no tracking information" from the menu.
