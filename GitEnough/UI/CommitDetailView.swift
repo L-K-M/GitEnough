@@ -15,10 +15,12 @@ struct CommitDetailView: View {
             detailView(detail)
         } else if selectedHash != nil, viewModel.selectedCommitDetailFailed {
             // A failed `git show` used to leave this pane spinning forever —
-            // the load will never arrive, so say so.
+            // the load will never arrive, so say so, with git's actual error
+            // when there is one.
             EmptyPane(systemImage: "exclamationmark.triangle",
                       title: "Couldn't load this commit",
-                      subtitle: "The object may have been rewritten or garbage-collected. Refresh (⌘R) and select it again.")
+                      subtitle: viewModel.selectedCommitDetailErrorMessage
+                          ?? "The commit may no longer exist. Refresh (⌘R) and select it again.")
         } else if selectedHash != nil {
             ProgressView()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
