@@ -252,13 +252,25 @@ struct HistoryView: View {
     @ViewBuilder
     private func commitContextMenu(_ commit: Commit) -> some View {
         Button("Copy Hash") {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(commit.hash, forType: .string)
+            NSPasteboard.general.copyString(commit.hash)
         }
         Button("Copy Message") {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(commit.subject, forType: .string)
+            NSPasteboard.general.copyString(commit.subject)
         }
+        // Built once per render: the command both feeds the action and gates
+        // the item (disabled, never silently dead, in the
+        // unreachable-by-construction case of a hash that isn't clean hex).
+        let cherryPickCommand = CommitCommands.cherryPickCommand(forHash: commit.hash)
+        Button("Copy Cherry-pick Command") {
+            // `git cherry-pick <hash>` for the terminal-hybrid workflow:
+            // paste-ready in any shell. Deliberately no -x: it matches the
+            // app's own Cherry-pick action, which doesn't record provenance
+            // either.
+            if let cherryPickCommand {
+                NSPasteboard.general.copyString(cherryPickCommand)
+            }
+        }
+        .disabled(cherryPickCommand == nil)
         Divider()
         Button("Create Branch Here…") {
             branchNameForNewBranch = ""

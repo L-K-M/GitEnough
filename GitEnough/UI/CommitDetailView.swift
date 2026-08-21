@@ -40,8 +40,7 @@ struct CommitDetailView: View {
                         }
                         .contextMenu {
                             Button {
-                                NSPasteboard.general.clearContents()
-                                NSPasteboard.general.setString(file.path, forType: .string)
+                                NSPasteboard.general.copyString(file.path)
                             } label: {
                                 Label("Copy Path", systemImage: "doc.on.doc")
                             }
@@ -100,13 +99,23 @@ struct CommitDetailView: View {
                     .background(Color.secondary.opacity(0.15))
                     .clipShape(RoundedRectangle(cornerRadius: 4))
                 Button {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(detail.hash, forType: .string)
+                    NSPasteboard.general.copyString(detail.hash)
                 } label: {
                     Image(systemName: "doc.on.doc")
                 }
                 .buttonStyle(.borderless)
                 .help("Copy full hash")
+                .contextMenu {
+                    Button("Copy Hash") { NSPasteboard.general.copyString(detail.hash) }
+                    // Built once per render: feeds the action and the gate.
+                    let cherryPickCommand = CommitCommands.cherryPickCommand(forHash: detail.hash)
+                    Button("Copy Cherry-pick Command") {
+                        if let cherryPickCommand {
+                            NSPasteboard.general.copyString(cherryPickCommand)
+                        }
+                    }
+                    .disabled(cherryPickCommand == nil)
+                }
                 Text("\(detail.files.count) file\(detail.files.count == 1 ? "" : "s") changed")
                     .font(.caption)
                     .foregroundStyle(.secondary)
