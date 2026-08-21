@@ -277,10 +277,14 @@ final class GitShell {
             group.leave()
         }
         // Write stdin on its own thread too: a message larger than the pipe buffer
-        // must not block while the child is also writing to stderr.
+        // must not block while the child is also writing to stderr. The throwing
+        // write API matters: the legacy FileHandle.write(_:) raises an
+        // uncatchable NSFileHandleOperationException on EPIPE (a child that
+        // exited before draining stdin), while write(contentsOf:) just fails —
+        // and the child's own exit status carries the real error.
         group.enter()
         DispatchQueue.global(qos: .userInitiated).async {
-            inPipe.fileHandleForWriting.write(Data(stdin.utf8))
+            try? inPipe.fileHandleForWriting.write(contentsOf: Data(stdin.utf8))
             try? inPipe.fileHandleForWriting.close()
             group.leave()
         }

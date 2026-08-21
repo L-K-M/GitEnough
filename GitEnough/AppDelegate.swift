@@ -8,14 +8,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Set by GitEnoughApp so the delegate can reach app state.
     weak var appState: AppState?
 
-    func applicationDidFinishLaunching(_ notification: Notification) {
+    override init() {
         // GitShell pipes commit messages to `git commit -F -` on a helper
         // thread. If the child exits before draining stdin (a fast-failing
         // hook, an index.lock race) and the message exceeds the pipe buffer,
         // write() on the broken pipe raises SIGPIPE — whose default
         // disposition kills the whole app. Ignore it process-wide so the
         // write surfaces as an ordinary error instead; nothing in the app
-        // relies on SIGPIPE semantics.
+        // relies on SIGPIPE semantics. Installed in init (the adaptor runs it
+        // during bootstrap) so no early startup work can race ahead of it.
+        super.init()
         signal(SIGPIPE, SIG_IGN)
     }
 
