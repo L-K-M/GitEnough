@@ -261,12 +261,14 @@ struct HistoryView: View {
             // `git cherry-pick <hash>` for the terminal-hybrid workflow:
             // paste-ready in any shell. Deliberately no -x: it matches the
             // app's own Cherry-pick action, which doesn't record provenance
-            // either. nil is unreachable by construction (%H is clean hex);
-            // a silent no-op beats copying a malformed command.
+            // either.
             if let command = CommitCommands.cherryPickCommand(forHash: commit.hash) {
                 NSPasteboard.copyString(command)
             }
         }
+        // Disabled, never silently dead, in the (unreachable-by-construction)
+        // case of a hash that isn't clean ASCII hex.
+        .disabled(CommitCommands.cherryPickCommand(forHash: commit.hash) == nil)
         Divider()
         Button("Create Branch Here…") {
             branchNameForNewBranch = ""

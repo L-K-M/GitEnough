@@ -26,9 +26,9 @@ final class CommonViewsTests: XCTestCase {
     /// The cherry-pick command is paste-executed verbatim, so only clean
     /// ASCII hex ever makes it into the quoted string.
     func testCherryPickCommandValidation() {
-        let hash = String(repeating: "a1b2c3", count: 7) // 42 chars, trimmed below
-        XCTAssertEqual(CommitCommands.cherryPickCommand(forHash: " \(hash.dropLast(2)) \n"),
-                       "git cherry-pick '\(hash.dropLast(2))'")
+        let hash = String(repeating: "ab", count: 20)   // 40 chars, like a SHA-1
+        XCTAssertEqual(CommitCommands.cherryPickCommand(forHash: " \(hash) \n"),
+                       "git cherry-pick '\(hash)'")
         XCTAssertNil(CommitCommands.cherryPickCommand(forHash: ""))
         XCTAssertNil(CommitCommands.cherryPickCommand(forHash: "   "))
         XCTAssertNil(CommitCommands.cherryPickCommand(forHash: "abc'; rm -rf ~ #"))
