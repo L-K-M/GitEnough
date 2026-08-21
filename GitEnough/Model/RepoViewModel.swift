@@ -704,6 +704,34 @@ final class RepoViewModel: ObservableObject, Identifiable {
         draftCommitMessage = message
     }
 
+    /// Hop back through the main-thread-owned view model before scheduling the
+    /// final git read. This keeps the async task from transferring its capture
+    /// of the non-Sendable view model directly into a GCD closure.
+    private func verifyGeneratedCommitMessage(
+        _ message: String,
+        context: CommitMessageGenerationContext,
+        generatedFrom stagedDiff: String
+    ) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            do {
+                let currentDiff = try self.client.stagedDiff()
+                DispatchQueue.main.async { [weak self] in
+                    self?.acceptGeneratedCommitMessage(
+                        message,
+                        context: context,
+                        generatedFrom: stagedDiff,
+                        currentStagedDiff: currentDiff)
+                }
+            } catch {
+                let failure = "Couldn’t read staged changes: \(error.localizedDescription)"
+                DispatchQueue.main.async { [weak self] in
+                    self?.finishCommitMessageGeneration(context, error: failure)
+                }
+            }
+        }
+    }
+
     func generateCommitMessage() {
         guard !isGeneratingMessage, !isBusy else { return }
         nextMessageGenerationToken &+= 1
@@ -742,24 +770,9 @@ final class RepoViewModel: ObservableObject, Identifiable {
                     do {
                         let message = try await generator.generateCommitMessage(
                             diffStat: stat, diff: diff, branch: branch)
-                        self.queue.async { [weak self] in
-                            guard let self else { return }
-                            do {
-                                let currentDiff = try self.client.stagedDiff()
-                                DispatchQueue.main.async { [weak self] in
-                                    self?.acceptGeneratedCommitMessage(
-                                        message,
-                                        context: context,
-                                        generatedFrom: diff,
-                                        currentStagedDiff: currentDiff)
-                                }
-                            } catch {
-                                DispatchQueue.main.async { [weak self] in
-                                    self?.finishCommitMessageGeneration(
-                                        context,
-                                        error: "Couldn’t read staged changes: \(error.localizedDescription)")
-                                }
-                            }
+                        await MainActor.run { [weak self] in
+                            self?.verifyGeneratedCommitMessage(
+                                message, context: context, generatedFrom: diff)
                         }
                     } catch {
                         await MainActor.run { [weak self] in
