@@ -60,6 +60,65 @@ final class TrashMoverTests: XCTestCase {
         }
     }
 
+    func testMoveRejectsPathsThatCouldEscapeRootWithoutAttemptingThem() {
+        let root = URL(fileURLWithPath: "/repo")
+        let paths = ["../escape.txt", "/absolute.txt", "nested/../../escape.txt"]
+        var attempted: [URL] = []
+
+        XCTAssertThrowsError(
+            try TrashMover.move(paths: paths, from: root) { url in
+                attempted.append(url)
+            }
+        ) { error in
+            guard let moveError = error as? TrashMover.MoveError else {
+                return XCTFail("Expected TrashMover.MoveError, got \(error)")
+            }
+            XCTAssertEqual(moveError.failures.map(\.path), paths)
+            XCTAssertTrue(moveError.failures.allSatisfy {
+                $0.reason == "Path escapes the repository root"
+            })
+        }
+
+        XCTAssertTrue(attempted.isEmpty)
+    }
+
+    func testMoveCapsLongFailureDescription() {
+        let root = URL(fileURLWithPath: "/repo")
+        let paths = (1...7).map { "failure-\($0).txt" }
+
+        XCTAssertThrowsError(
+            try TrashMover.move(paths: paths, from: root) { _ in
+                throw StubError("Permission denied")
+            }
+        ) { error in
+            let description = error.localizedDescription
+            XCTAssertTrue(description.hasPrefix("Couldn’t move 7 items to the Trash:"))
+            XCTAssertTrue(description.contains("“failure-5.txt”"))
+            XCTAssertFalse(description.contains("“failure-6.txt”"))
+            XCTAssertTrue(description.hasSuffix("…and 2 more"))
+        }
+    }
+
+    func testMoveDoesNotThrowWhenEveryPathMoves() throws {
+        let root = URL(fileURLWithPath: "/repo")
+        var attempted: [URL] = []
+
+        try TrashMover.move(paths: ["a.txt", "nested/b.txt"], from: root) { url in
+            attempted.append(url)
+        }
+
+        XCTAssertEqual(attempted, [
+            root.appendingPathComponent("a.txt"),
+            root.appendingPathComponent("nested/b.txt")
+        ])
+    }
+
+    func testMoveWithEmptyPathsAttemptsNothing() throws {
+        try TrashMover.move(paths: [], from: URL(fileURLWithPath: "/repo")) { _ in
+            XCTFail("No items should be attempted for an empty path list")
+        }
+    }
+
     private struct StubError: Error, LocalizedError {
         let message: String
 

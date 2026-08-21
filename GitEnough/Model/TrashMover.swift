@@ -19,10 +19,12 @@ enum TrashMover {
                 return "Couldn’t move \(quoted(failure.path)) to the Trash: \(failure.reason)"
             }
 
-            let details = failures
+            let details = failures.prefix(5)
                 .map { "• \(quoted($0.path)): \($0.reason)" }
                 .joined(separator: "\n")
-            return "Couldn’t move \(failures.count) items to the Trash:\n\(details)"
+            let omittedCount = failures.count - min(failures.count, 5)
+            let suffix = omittedCount > 0 ? "\n…and \(omittedCount) more" : ""
+            return "Couldn’t move \(failures.count) items to the Trash:\n\(details)\(suffix)"
         }
 
         private func quoted(_ path: String) -> String {
@@ -44,6 +46,13 @@ enum TrashMover {
         var failures: [Failure] = []
 
         for path in paths {
+            let components = path.components(separatedBy: "/")
+            guard !path.hasPrefix("/"), !components.contains("..") else {
+                failures.append(Failure(path: path,
+                                        reason: "Path escapes the repository root"))
+                continue
+            }
+
             do {
                 try moveItem(root.appendingPathComponent(path))
             } catch {
