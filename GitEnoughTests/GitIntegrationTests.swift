@@ -389,6 +389,35 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertEqual(main.upstream, "work/main")
     }
 
+    func testOrdinaryFetchAndPullDoNotForceUpdateEveryTag() throws {
+        let remoteURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitEnoughTests-remote-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: remoteURL) }
+        try run(["init", "--bare", remoteURL.path])
+        try run(["remote", "add", "origin", remoteURL.path])
+        try run(["push", "-u", "origin", "main"])
+
+        let head = try GitShell.shared.runChecked(
+            ["rev-parse", "HEAD"], in: repoURL).stdout
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let parent = try GitShell.shared.runChecked(
+            ["rev-parse", "HEAD^"], in: repoURL).stdout
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        try run(["tag", "shared-name", head])
+        _ = try GitShell.shared.runChecked(
+            ["update-ref", "refs/tags/shared-name", parent], in: remoteURL)
+
+        // `--tags` would reject this routine sync with “would clobber existing
+        // tag”. Normal fetch semantics leave the divergent local tag alone.
+        try client.fetch()
+        try client.pull(rebase: false)
+
+        let localTag = try GitShell.shared.runChecked(
+            ["rev-parse", "refs/tags/shared-name"], in: repoURL).stdout
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        XCTAssertEqual(localTag, head)
+    }
+
     func testCreateTagLightweightAndAnnotated() throws {
         let head = try XCTUnwrap(try client.log(limit: 1).first?.hash)
         try client.createTag(name: "v1.0", message: nil, at: head)
