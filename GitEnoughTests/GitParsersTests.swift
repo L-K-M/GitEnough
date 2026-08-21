@@ -87,6 +87,20 @@ final class GitParsersTests: XCTestCase {
                                      RefDecoration(kind: .localBranch, name: "stable")])
     }
 
+    func testParseLogDecorationsTolerateEmptyParts() {
+        // A trailing ", " must not produce an empty-name chip.
+        XCTAssertEqual(GitParsers.parseDecorations("HEAD -> main, "),
+                       [RefDecoration(kind: .head, name: "HEAD"),
+                        RefDecoration(kind: .localBranch, name: "main")])
+    }
+
+    func testParseLogDecorationsTagHeadTargetClassifiesExactly() {
+        // A tag target must not leak "refs/tags/…" into the chip name.
+        let decorations = GitParsers.parseDecorations("HEAD -> tag: refs/tags/v1.0")
+        XCTAssertEqual(decorations, [RefDecoration(kind: .head, name: "HEAD"),
+                                     RefDecoration(kind: .tag, name: "v1.0")])
+    }
+
     func testParseLogDecorationsDropUnknownRefNamespaces() {
         // refs/ namespaces that are neither branches nor tags (forge-specific
         // refs survive the hiddenRefs exclusion) must not become bogus

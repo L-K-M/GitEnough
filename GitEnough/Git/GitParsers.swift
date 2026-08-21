@@ -55,20 +55,22 @@ enum GitParsers {
         guard !trimmed.isEmpty else { return [] }
         var decorations: [RefDecoration] = []
         for part in trimmed.components(separatedBy: ", ") {
+            // A trailing ", " yields an empty part — never an empty-name chip.
+            guard !part.isEmpty else { continue }
             if part.hasPrefix("HEAD -> ") {
                 decorations.append(RefDecoration(kind: .head, name: "HEAD"))
                 let target = String(part.dropFirst("HEAD -> ".count))
-                // HEAD only ever points at a LOCAL branch: in the short-form
-                // fallback (no refs/ prefix) a slashed target like
-                // "feature/foo" must not be guessed as a remote branch.
-                if target.hasPrefix("refs/") {
+                if target.hasPrefix("refs/") || target.hasPrefix("tag: ") {
+                    // Full-form and tag targets classify exactly (a "tag: "
+                    // arrow target can't just drop 5 chars — that would leak
+                    // "refs/tags/…" into the chip).
                     if let decoration = classifyDecoration(target) {
                         decorations.append(decoration)
                     }
-                } else if target.hasPrefix("tag: ") {
-                    decorations.append(RefDecoration(kind: .tag,
-                                                     name: String(target.dropFirst(5))))
                 } else {
+                    // HEAD only ever points at a LOCAL branch: in the
+                    // short-form fallback (no refs/ prefix) a slashed target
+                    // like "feature/foo" must not be guessed as remote.
                     decorations.append(RefDecoration(kind: .localBranch, name: target))
                 }
             } else if part == "HEAD" {
