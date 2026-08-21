@@ -36,8 +36,8 @@ struct HistoryView: View {
                 || $0.hash.lowercased().hasPrefix(needle)
                 // The chips on the row are searchable too — typing a tag or
                 // branch name finds the commits it decorates.
-                || $0.decorations.contains {
-                    $0.name.localizedStandardContains(activeFilter)
+                || $0.decorations.contains { decoration in
+                    decoration.name.localizedStandardContains(activeFilter)
                 }
         }
     }
