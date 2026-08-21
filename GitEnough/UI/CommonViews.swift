@@ -2,9 +2,8 @@ import SwiftUI
 import AppKit
 
 /// One place for the clear-then-write pasteboard dance every Copy action does.
-/// Main-actor like every other AppKit touchpoint in the views. setString's
-/// Bool is discarded deliberately: a string write to a private pasteboard
-/// can't meaningfully fail, and CommonViewsTests pins the contract.
+/// Main-actor like every other AppKit touchpoint in the views; a failed write
+/// is logged, never silently swallowed. CommonViewsTests pins the contract.
 extension NSPasteboard {
     @MainActor
     func copyString(_ text: String) {
@@ -12,7 +11,7 @@ extension NSPasteboard {
         // A string write to a private pasteboard can't meaningfully fail —
         // but if it ever does, the failure is logged, not swallowed.
         if !setString(text, forType: .string) {
-            NSLog("[GitEnough] NSPasteboard.setString failed for %d characters", text.count)
+            NSLog("[GitEnough] NSPasteboard.setString failed for %ld characters", text.count)
         }
     }
 }
