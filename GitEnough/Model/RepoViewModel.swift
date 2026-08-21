@@ -344,6 +344,13 @@ final class RepoViewModel: ObservableObject, Identifiable {
         perform("Deleting \(branch.name)…") { try $0.deleteBranch(branch.name, force: force) }
     }
 
+    /// Deletes a branch on its remote (push --delete) — the counterpart to
+    /// local deletion for stale published branches.
+    func deleteRemoteBranch(_ branch: Branch) {
+        guard branch.isRemote else { return }
+        perform("Deleting \(branch.name)…") { try $0.deleteRemoteBranch(branch.name) }
+    }
+
     func merge(branch: Branch) {
         perform("Merging \(branch.name)…") { try $0.merge(branch.name) }
     }
