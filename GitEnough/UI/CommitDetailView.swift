@@ -88,7 +88,7 @@ struct CommitDetailView: View {
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
                     .lineLimit(bodyExpanded ? nil : Self.collapsedBodyLineLimit)
-                if detail.bodyNeedsExpansionToggle {
+                if detail.bodyNeedsExpansionToggle(collapsedLineLimit: Self.collapsedBodyLineLimit) {
                     Button(bodyExpanded ? "Show less" : "Show more") {
                         bodyExpanded.toggle()
                     }
@@ -112,6 +112,11 @@ struct CommitDetailView: View {
                         .foregroundStyle(.secondary)
                     ForEach(detail.parents, id: \.self) { parent in
                         Button {
+                            // Reset eagerly: the .onChange reset lives inside
+                            // the detail branch, which unmounts while the
+                            // parent loads — don't rely on view-state lifecycle
+                            // for the collapse state to follow the navigation.
+                            bodyExpanded = false
                             onSelectCommit?(parent)
                         } label: {
                             Text(String(parent.prefix(7)))
@@ -154,8 +159,10 @@ private extension CommitDetail {
     /// True when the collapsed view plausibly hides content. lineLimit counts
     /// *wrapped, rendered* lines while components(separatedBy:) counts logical
     /// ones, so a short-line-count body of long paragraphs also gets the
-    /// toggle via a character threshold (≈6 wrapped lines at this width).
-    var bodyNeedsExpansionToggle: Bool {
-        body.components(separatedBy: "\n").count > 6 || body.count > 240
+    /// toggle via a character threshold (≈40 chars per rendered line at the
+    /// detail-pane width).
+    func bodyNeedsExpansionToggle(collapsedLineLimit: Int) -> Bool {
+        body.components(separatedBy: "\n").count > collapsedLineLimit
+            || body.count > collapsedLineLimit * 40
     }
 }
