@@ -2,10 +2,10 @@
 
 A living, shovel-ready backlog for GitEnough: every entry below is a concrete,
 self-contained task with suggested approach and test plan, ready for an LLM (or
-human) to pick up. This document consolidates five independent full-codebase
-reviews (`glm.md`, `kimi.md`, `fable.md`, `flash.md`, and `sol.md`, each kept
-unedited on its review branch as the record) with everything learned while
-implementing the first three waves of fixes.
+human) to pick up. This document consolidates six independent full-codebase
+reviews (`glm.md`, `kimi.md`, `fable.md`, `flash.md`, `sol.md`, and `k3.md`,
+each kept unedited on its review branch as the record) with everything learned
+while implementing the first three waves of fixes.
 **Maintenance rule:** when an entry ships, delete it here (the git history
 preserves it); when a new issue is found, add it with the same level of
 concreteness.
@@ -51,7 +51,7 @@ base, and dependencies before relying on it:
 | #60 | Correct literal `.gitignore` escaping, trailing whitespace, and duplicate detection |
 | #61 | Treat conflict-only repositories as dirty and count unique changed paths |
 | #62 | Show useful content instead of “No diff” for an untracked directory |
-| #63/#85 | #63 is the fixed preferred superset for stage/unstage/discard plus copy-source safety; #85 is discard-only and unsafe for copy records until it adds the same guard |
+| #63/#85 | #63 is the fixed preferred superset for stage/unstage/discard plus copy-source safety; #85 is discard-only and now carries the same copy-source guard (only renames expand to both paths) |
 | #64 | Copy structured activity argv as POSIX-shell-safe commands; disable unsafe legacy copies |
 | #65 | Suppress duplicate activation and post-operation refreshes |
 | #66 | Preserve canonical branch identities across local/tag/remote short-name collisions |
@@ -67,7 +67,7 @@ base, and dependencies before relying on it:
 | #79 | Add `--no-optional-locks` centrally to every read-only repository query |
 | #81 | Reject late AI results after edits/newer requests/commit success; recheck staged-diff identity and surface staged-diff read failures |
 | #82 | Validate persisted repository selection and fall back to the first valid repository |
-| #84 | Remote-branch deletion (active repair: remote-HEAD rejection and a qualified refspec are fixed; longest-match slash-named remote parsing plus empty-component validation remain) |
+| #84 | Remote-branch deletion (remote-HEAD rejection, qualified refspec, longest-match slash-named remote parsing, empty-component validation — all landed, with negative + slash-remote integration tests) |
 | #86 | Copy a paste-ready cherry-pick command from a history row |
 
 Verified non-issues, kept for the record (don't re-audit):
@@ -626,6 +626,14 @@ the schema, cap its size, and never treat a failed refresh as clean. This pairs
 with P2 model eviction and must not persist diff/source content. Test corrupt
 and old schemas, moved repositories, stale dirty state, and atomic replacement.
 
+### k3-M2 · `git maintenance` affordance for large repos — S
+
+For the "opened a monorepo" case: one Repository-menu item running
+`git maintenance run` (commit-graph, incremental gc — safe, online, and it
+speeds up every later `log --topo-order` the History tab runs). Cheap,
+genuinely useful, and on-brand for a client that stays close to the CLI.
+Test: integration — run on a temp repo, assert exit 0 + commit-graph presence.
+
 ---
 
 ## Visual & layout
@@ -705,11 +713,26 @@ are one-sided. Include side/hash/parent/path in cache identity. Use bounded temp
 storage and handle added, deleted, renamed, oversized, unavailable blobs without
 blocking main.
 
+### k3-V3 · Diff soft-wrap toggle — S
+
+Minified/generated one-line files (package-lock.json, .pbxproj) force an
+endless horizontal scroll: the two-axis `ScrollView` offers no alternative.
+Add a persisted wrap toggle that drops the horizontal scroll axis and lets
+lines wrap (per repo or global — decide and document). Must compose with F17's
+width measurement (wrap mode skips the longest-line pass entirely), V1's
+gutter (line numbers follow the wrapped row), and V2's text sizing. Test very
+long single lines, Unicode, toggling mid-scroll, and horizontal-scroll
+persistence when wrapping is off.
+
 ### V4 · Decoration overflow "+N" is a dead end — S
 
 `+N` for commits with >3 refs is plain text. Make it a popover listing every
 decoration (clickable → checkout for branches, copy for tags). Small win, big
-repos with many tags (linux-style) currently lose information.
+repos with many tags (linux-style) currently lose information. Natural
+extension (k3-Q1): give the chips themselves a context menu / ⌘-click — local
+branch → Check Out / Rename, tag → Copy Name / Delete, remote → Open on Forge
+(reuses `ForgeRepo`). Chips are inert text today; turning metadata into
+navigation is the cheapest big "feel" win available.
 
 ### F47 · Diffstat bars in commit-detail files — S/M
 
@@ -1155,6 +1178,22 @@ chores ("Bump …", "Fix typo …").
 plumbing with a PR-description system prompt → paste-ready title+body sheet
 next to "Open Pull Request" (which already knows the base branch). Reuses
 everything; pure win for the app's AI identity.
+
+### k3-Q3 · AI-suggested branch names — S
+
+The New Branch sheet gets a ✨ button: staged diff (or the current branch's
+unpushed subjects) → configured LLM → a suggested name, editable before
+creating. Reuses `CommitMessageGenerator` plumbing with a different prompt;
+validate the suggestion through the same `check-ref-format` path as C4 before
+enabling Create. Very on-brand.
+
+### k3-Q4 · Merge commits say what's merging — S
+
+The history row of a merge shows only the subject ("Merge branch 'x'").
+Parsing the second parent into a subtle "← feature" suffix on the row (the
+data is in `parents` + decorations) makes the graph legend-free. Pure mapping
+from the loaded commit set (second-parent hash → its decorating branch, when
+loaded); unit-testable without git.
 
 ### F38 · AI: "Since you were away" repo digest — M
 
