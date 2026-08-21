@@ -117,7 +117,10 @@ final class GitClient {
 
     func branches() throws -> [Branch] {
         let f = GitParsers.fieldSep
-        let format = "%(refname)\(f)%(refname:short)\(f)%(upstream:short)\(f)%(upstream:track)\(f)%(HEAD)"
+        // committerdate in strict ISO 8601: parses with the same formatter as
+        // the log format and yields an absolute Date (sortable, testable),
+        // rendered relative ("3 days ago") in the branch lists.
+        let format = "%(refname)\(f)%(refname:short)\(f)%(upstream:short)\(f)%(upstream:track)\(f)%(HEAD)\(f)%(committerdate:iso8601-strict)"
         let result = try runChecked(
             ["-C", worktree.path, "for-each-ref",
              "--format=\(format)", "refs/heads", "refs/remotes"],
