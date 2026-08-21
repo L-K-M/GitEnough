@@ -40,7 +40,16 @@ enum GitParsers {
         return commits
     }
 
-    /// Parses `%D` output: "HEAD -> main, origin/main, tag: v1.0".
+    /// Parses `%D` output from `git log --decorate=full`:
+    /// "HEAD -> refs/heads/main, refs/remotes/origin/main, tag: refs/tags/v1.0".
+    /// Full ref names make classification exact — a local branch named
+    /// "feature/foo" can no longer be mistaken for a remote branch (the old
+    /// short-form contains-"/" guess mischipped the most common branch naming
+    /// convention), and the remote's HEAD symref (refs/remotes/<remote>/HEAD)
+    /// is dropped: it decorates the default branch's tip in every repo with a
+    /// remote without naming anything the user can act on. Short-form input
+    /// (no refs/ prefix) still falls back to the old heuristic, so the parser
+    /// stays tolerant of hand-written or older output.
     static func parseDecorations(_ raw: String) -> [RefDecoration] {
         let trimmed = raw.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return [] }
@@ -48,19 +57,44 @@ enum GitParsers {
         for part in trimmed.components(separatedBy: ", ") {
             if part.hasPrefix("HEAD -> ") {
                 decorations.append(RefDecoration(kind: .head, name: "HEAD"))
-                let branch = String(part.dropFirst("HEAD -> ".count))
-                decorations.append(RefDecoration(kind: .localBranch, name: branch))
+                if let decoration = classifyDecoration(String(part.dropFirst("HEAD -> ".count))) {
+                    decorations.append(decoration)
+                }
             } else if part == "HEAD" {
                 decorations.append(RefDecoration(kind: .head, name: "HEAD"))
-            } else if part.hasPrefix("tag: ") {
-                decorations.append(RefDecoration(kind: .tag, name: String(part.dropFirst(5))))
-            } else if part.contains("/") {
-                decorations.append(RefDecoration(kind: .remoteBranch, name: part))
-            } else {
-                decorations.append(RefDecoration(kind: .localBranch, name: part))
+            } else if let decoration = classifyDecoration(part) {
+                decorations.append(decoration)
             }
         }
         return decorations
+    }
+
+    /// One decoration (never the HEAD marker) → its chip, or nil for noise to
+    /// drop (the remote HEAD symref).
+    private static func classifyDecoration(_ part: String) -> RefDecoration? {
+        if part.hasPrefix("tag: refs/tags/") {
+            return RefDecoration(kind: .tag, name: String(part.dropFirst("tag: refs/tags/".count)))
+        }
+        if part.hasPrefix("tag: ") {           // short form: "tag: v1.0"
+            return RefDecoration(kind: .tag, name: String(part.dropFirst(5)))
+        }
+        if part.hasPrefix("refs/tags/") {
+            return RefDecoration(kind: .tag, name: String(part.dropFirst("refs/tags/".count)))
+        }
+        if part.hasPrefix("refs/heads/") {
+            return RefDecoration(kind: .localBranch, name: String(part.dropFirst("refs/heads/".count)))
+        }
+        if part.hasPrefix("refs/remotes/") {
+            let name = String(part.dropFirst("refs/remotes/".count))
+            // The remote's default-branch symref ("origin/HEAD") — not a real
+            // branch, and branches() skips it too.
+            return name.hasSuffix("/HEAD") ? nil : RefDecoration(kind: .remoteBranch, name: name)
+        }
+        // Short-form fallback (no --decorate=full): a "/" guesses remote.
+        if part.contains("/") {
+            return part.hasSuffix("/HEAD") ? nil : RefDecoration(kind: .remoteBranch, name: part)
+        }
+        return RefDecoration(kind: .localBranch, name: part)
     }
 
     // MARK: - git status --porcelain=v2 --branch

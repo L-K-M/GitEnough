@@ -163,7 +163,10 @@ final class GitClient {
         let format = "%H\(f)%P\(f)%an\(f)%ae\(f)%aI\(f)%D\(f)%s\(r)"
         // --exclude filters the ref set of the *next* --all, so it must precede
         // it. --decorate-refs-exclude is position-independent; grouped for clarity.
-        var args = ["-C", worktree.path, "log"]
+        // --decorate=full makes %D emit full ref names (refs/heads/…,
+        // refs/remotes/…, tag: refs/tags/…), so parseDecorations classifies by
+        // exact prefix instead of guessing remote-ness from a "/" in the name.
+        var args = ["-C", worktree.path, "log", "--decorate=full"]
         args += Self.hiddenRefs.map { "--exclude=\($0)" }
         args += ["--all"]
         args += Self.hiddenRefs.map { "--decorate-refs-exclude=\($0)" }

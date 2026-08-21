@@ -13,7 +13,7 @@ final class GitParsersTests: XCTestCase {
     func testParseLog() {
         let output = [
             ["abc123", "def456", "Lukas Mathis", "l@example.com",
-             "2026-08-17T19:00:00+02:00", "HEAD -> main, origin/main, tag: v1.0", "Ship it"].joined(separator: f),
+             "2026-08-17T19:00:00+02:00", "HEAD -> refs/heads/main, refs/remotes/origin/main, tag: refs/tags/v1.0", "Ship it"].joined(separator: f),
             ["def456", "", "Claude", "c@example.com",
              "2026-08-17T18:00:00+02:00", "", "Initial commit"].joined(separator: f),
         ].joined(separator: r) + r + "\n"
@@ -44,9 +44,38 @@ final class GitParsersTests: XCTestCase {
     }
 
     func testParseLogDecorationsClassifyRemoteBranches() {
-        let decorations = GitParsers.parseDecorations("origin/feature, HEAD")
+        let decorations = GitParsers.parseDecorations("refs/remotes/origin/feature, HEAD")
         XCTAssertEqual(decorations[0], RefDecoration(kind: .remoteBranch, name: "origin/feature"))
         XCTAssertEqual(decorations[1], RefDecoration(kind: .head, name: "HEAD"))
+    }
+
+    func testParseLogDecorationsClassifySlashedLocalBranchAsLocal() {
+        // The short-form contains-"/" heuristic used to mischip the most common
+        // branch naming convention as a remote branch; --decorate=full output
+        // makes the classification exact.
+        let decorations = GitParsers.parseDecorations(
+            "HEAD -> refs/heads/feature/foo, refs/remotes/origin/feature/foo")
+        XCTAssertEqual(decorations[0], RefDecoration(kind: .head, name: "HEAD"))
+        XCTAssertEqual(decorations[1], RefDecoration(kind: .localBranch, name: "feature/foo"))
+        XCTAssertEqual(decorations[2], RefDecoration(kind: .remoteBranch, name: "origin/feature/foo"))
+    }
+
+    func testParseLogDecorationsDropRemoteHeadSymref() {
+        // refs/remotes/<remote>/HEAD decorates the default branch's tip in every
+        // repo with a remote; it is a symref, not a branch, and names nothing
+        // the user can act on — branches() filters it too.
+        let decorations = GitParsers.parseDecorations(
+            "refs/remotes/origin/HEAD, refs/remotes/origin/main")
+        XCTAssertEqual(decorations, [RefDecoration(kind: .remoteBranch, name: "origin/main")])
+    }
+
+    func testParseLogDecorationsShortFormFallback() {
+        // Hand-written or pre---decorate=full output (no refs/ prefix) keeps the
+        // old heuristic: "/" guesses remote, bare names are local.
+        let decorations = GitParsers.parseDecorations("origin/feature, HEAD, stable")
+        XCTAssertEqual(decorations[0], RefDecoration(kind: .remoteBranch, name: "origin/feature"))
+        XCTAssertEqual(decorations[1], RefDecoration(kind: .head, name: "HEAD"))
+        XCTAssertEqual(decorations[2], RefDecoration(kind: .localBranch, name: "stable"))
     }
 
     func testParseLogToleratesBlankRecords() {
