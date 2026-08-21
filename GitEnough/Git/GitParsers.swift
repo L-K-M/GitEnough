@@ -57,8 +57,19 @@ enum GitParsers {
         for part in trimmed.components(separatedBy: ", ") {
             if part.hasPrefix("HEAD -> ") {
                 decorations.append(RefDecoration(kind: .head, name: "HEAD"))
-                if let decoration = classifyDecoration(String(part.dropFirst("HEAD -> ".count))) {
-                    decorations.append(decoration)
+                let target = String(part.dropFirst("HEAD -> ".count))
+                // HEAD only ever points at a LOCAL branch: in the short-form
+                // fallback (no refs/ prefix) a slashed target like
+                // "feature/foo" must not be guessed as a remote branch.
+                if target.hasPrefix("refs/") {
+                    if let decoration = classifyDecoration(target) {
+                        decorations.append(decoration)
+                    }
+                } else if target.hasPrefix("tag: ") {
+                    decorations.append(RefDecoration(kind: .tag,
+                                                     name: String(target.dropFirst(5))))
+                } else {
+                    decorations.append(RefDecoration(kind: .localBranch, name: target))
                 }
             } else if part == "HEAD" {
                 decorations.append(RefDecoration(kind: .head, name: "HEAD"))

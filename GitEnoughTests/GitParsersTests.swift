@@ -78,6 +78,15 @@ final class GitParsersTests: XCTestCase {
         XCTAssertEqual(decorations[2], RefDecoration(kind: .localBranch, name: "stable"))
     }
 
+    func testParseLogDecorationsShortFormHeadTargetStaysLocal() {
+        // HEAD only ever points at a local branch — even a slashed one, which
+        // the fallback's "/"-guesses-remote heuristic would otherwise mischip.
+        let decorations = GitParsers.parseDecorations("HEAD -> feature/foo, stable")
+        XCTAssertEqual(decorations, [RefDecoration(kind: .head, name: "HEAD"),
+                                     RefDecoration(kind: .localBranch, name: "feature/foo"),
+                                     RefDecoration(kind: .localBranch, name: "stable")])
+    }
+
     func testParseLogDecorationsDropUnknownRefNamespaces() {
         // refs/ namespaces that are neither branches nor tags (forge-specific
         // refs survive the hiddenRefs exclusion) must not become bogus
