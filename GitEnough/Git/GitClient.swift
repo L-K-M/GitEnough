@@ -43,11 +43,16 @@ final class GitClient {
     /// `shell` directly, so the activity log always reflects reality — when a
     /// pre-commit hook hangs, the log shows `commit -F -` running for minutes.
     @discardableResult
-    private func run(_ args: [String], in directory: URL?) throws -> GitResult {
-        guard let log = activityLog else { return try shell.run(args, in: directory) }
+    private func run(_ args: [String], in directory: URL?,
+                     environmentOverrides: [String: String] = [:]) throws -> GitResult {
+        guard let log = activityLog else {
+            return try shell.run(
+                args, in: directory, environmentOverrides: environmentOverrides)
+        }
         let id = log.begin(command: GitActivityLog.displayCommand(for: args))
         do {
-            let result = try shell.run(args, in: directory)
+            let result = try shell.run(
+                args, in: directory, environmentOverrides: environmentOverrides)
             log.finish(id, exitCode: result.exitCode, stderr: result.stderr)
             return result
         } catch {
@@ -62,13 +67,18 @@ final class GitClient {
 
     @discardableResult
     private func runChecked(_ args: [String], in directory: URL?,
-                            stdin: String? = nil) throws -> GitResult {
+                            stdin: String? = nil,
+                            environmentOverrides: [String: String] = [:]) throws -> GitResult {
         guard let log = activityLog else {
-            return try shell.runChecked(args, in: directory, stdin: stdin)
+            return try shell.runChecked(
+                args, in: directory, stdin: stdin,
+                environmentOverrides: environmentOverrides)
         }
         let id = log.begin(command: GitActivityLog.displayCommand(for: args))
         do {
-            let result = try shell.runChecked(args, in: directory, stdin: stdin)
+            let result = try shell.runChecked(
+                args, in: directory, stdin: stdin,
+                environmentOverrides: environmentOverrides)
             log.finish(id, exitCode: result.exitCode, stderr: result.stderr)
             return result
         } catch {
@@ -454,12 +464,21 @@ final class GitClient {
     /// (or git's "was the merge successful?" prompt, which gets a headless EOF)
     /// didn't stage the file, the UI still offers “Mark Resolved”.
     func runMergeTool(_ tool: String, path: String) throws {
+        // git-mergetool is a shell script. Even after its initial git command
+        // selects a literal path, it expands the returned filename with an
+        // unquoted `set -- $files`; `*`, `?`, and `[` can therefore open and
+        // stage lookalike conflicts. Run that script with shell globbing off,
+        // and force literal semantics for every nested git command it launches.
+        // (macOS /bin/sh is Bash and imports SHELLOPTS on startup.)
+        let literalEnvironment = [
+            "GIT_LITERAL_PATHSPECS": "1",
+            "SHELLOPTS": "noglob",
+        ]
         try runChecked(
             ["-C", worktree.path,
              "-c", "mergetool.keepBackup=false",   // don't litter .orig files
-             "mergetool", "--no-prompt", "--tool=\(tool)", "--",
-             Self.literalPathspec(path)],
-            in: nil)
+             "mergetool", "--no-prompt", "--tool=\(tool)", "--", path],
+            in: nil, environmentOverrides: literalEnvironment)
     }
 
     /// Marks a conflicted path resolved (for when the user fixed it by hand or in
