@@ -43,22 +43,32 @@ struct BranchesView: View {
             }
 
             Section {
-                ForEach(remoteBranches) { branch in
-                    HStack(spacing: 6) {
-                        Image(systemName: "network")
-                            .foregroundStyle(.secondary)
-                            .frame(width: 16)
-                        Text(branch.name)
-                            .font(.callout)
-                        Spacer()
-                    }
-                    .padding(.vertical, 2)
-                    .contextMenu {
-                        if let local = branch.localNameForRemote,
-                           !localBranches.contains(where: { $0.name == local }) {
-                            Button("Check Out as \(local)") { viewModel.checkout(branch: branch) }
+                if remoteBranches.isEmpty {
+                    // Say why the section is empty instead of just being empty:
+                    // the two causes have different remedies.
+                    Text(viewModel.remotes.isEmpty
+                         ? "This repository has no remotes — add one in the terminal (git remote add), then Fetch."
+                         : "Nothing fetched yet — Fetch to load remote branches, or Publish the current branch to create one.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(remoteBranches) { branch in
+                        HStack(spacing: 6) {
+                            Image(systemName: "network")
+                                .foregroundStyle(.secondary)
+                                .frame(width: 16)
+                            Text(branch.name)
+                                .font(.callout)
+                            Spacer()
                         }
-                        Button("Merge into Current Branch…") { branchToMerge = branch }
+                        .padding(.vertical, 2)
+                        .contextMenu {
+                            if let local = branch.localNameForRemote,
+                               !localBranches.contains(where: { $0.name == local }) {
+                                Button("Check Out as \(local)") { viewModel.checkout(branch: branch) }
+                            }
+                            Button("Merge into Current Branch…") { branchToMerge = branch }
+                        }
                     }
                 }
             } header: {
