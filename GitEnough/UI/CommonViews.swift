@@ -94,8 +94,15 @@ struct RelativeDateText: View {
 
     var body: some View {
         if let date {
-            Text(Self.formatter.localizedString(for: date, relativeTo: Date()))
-                .help(date.formatted(date: .long, time: .shortened))
+            // Re-render once a minute so "2 minutes ago" doesn't freeze at
+            // whatever it said when the row last happened to re-render. The
+            // timeline only ticks for rows that are actually on screen
+            // (LazyVStack realizes rows lazily), so 300-row histories don't
+            // pay for invisible rows.
+            TimelineView(.periodic(from: .now, by: 60)) { context in
+                Text(Self.formatter.localizedString(for: date, relativeTo: context.date))
+                    .help(date.formatted(date: .long, time: .shortened))
+            }
         } else {
             Text("—")
         }
