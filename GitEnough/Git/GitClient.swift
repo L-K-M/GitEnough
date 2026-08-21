@@ -66,12 +66,36 @@ final class GitClient {
         }
     }
 
+    /// Adds Git's global read-only guard after a leading `-C <worktree>` so
+    /// activity formatting can still strip the worktree path. Centralizing the
+    /// flag prevents a new query from quietly reintroducing optional index
+    /// refreshes and lock contention.
+    static func readOnlyArguments(_ args: [String]) -> [String] {
+        let insertionIndex = args.count >= 2 && args[0] == "-C" ? 2 : 0
+        if args.indices.contains(insertionIndex),
+           args[insertionIndex] == "--no-optional-locks" {
+            return args
+        }
+        var result = args
+        result.insert("--no-optional-locks", at: insertionIndex)
+        return result
+    }
+
+    private func runRead(_ args: [String], in directory: URL?) throws -> GitResult {
+        try run(Self.readOnlyArguments(args), in: directory)
+    }
+
+    private func runReadChecked(_ args: [String], in directory: URL?) throws -> GitResult {
+        try runChecked(Self.readOnlyArguments(args), in: directory)
+    }
+
     // MARK: - Discovery / validation
 
     /// True when `directory` is inside a git worktree.
     static func isRepository(at directory: URL) -> Bool {
         guard let result = try? GitShell.shared.run(
-            ["rev-parse", "--is-inside-work-tree"], in: directory) else { return false }
+            readOnlyArguments(["rev-parse", "--is-inside-work-tree"]),
+            in: directory) else { return false }
         return result.exitCode == 0
             && result.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "true"
     }
@@ -80,7 +104,7 @@ final class GitClient {
     /// (so adding `repo/Documentation/` registers the repo root).
     static func topLevel(of directory: URL) -> URL? {
         guard let result = try? GitShell.shared.run(
-            ["rev-parse", "--show-toplevel"], in: directory),
+            readOnlyArguments(["rev-parse", "--show-toplevel"]), in: directory),
             result.exitCode == 0 else { return nil }
         let path = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !path.isEmpty else { return nil }
@@ -89,7 +113,7 @@ final class GitClient {
 
     /// The `.git` directory (a file for linked worktrees — resolved by git).
     func gitDir() -> URL? {
-        guard let result = try? run(
+        guard let result = try? runRead(
             ["-C", worktree.path, "rev-parse", "--absolute-git-dir"], in: nil),
             result.exitCode == 0 else { return nil }
         let path = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -106,11 +130,9 @@ final class GitClient {
     // MARK: - Status / branches / remotes
 
     func status() throws -> RepoStatus {
-        // --no-optional-locks: read-only queries must not take the index lock or
-        // refresh stat info, so polling can never fight a concurrent `git commit`.
-        let result = try runChecked(
-            ["-C", worktree.path, "--no-optional-locks",
-             "status", "--porcelain=v2", "--branch", "--untracked-files=normal"],
+        let result = try runReadChecked(
+            ["-C", worktree.path, "status", "--porcelain=v2", "--branch",
+             "--untracked-files=normal"],
             in: nil)
         return GitParsers.parseStatus(result.stdout)
     }
@@ -118,7 +140,7 @@ final class GitClient {
     func branches() throws -> [Branch] {
         let f = GitParsers.fieldSep
         let format = "%(refname)\(f)%(refname:short)\(f)%(upstream:short)\(f)%(upstream:track)\(f)%(HEAD)"
-        let result = try runChecked(
+        let result = try runReadChecked(
             ["-C", worktree.path, "for-each-ref",
              "--format=\(format)", "refs/heads", "refs/remotes"],
             in: nil)
@@ -126,7 +148,7 @@ final class GitClient {
     }
 
     func remotes() throws -> [Remote] {
-        let result = try runChecked(["-C", worktree.path, "remote", "-v"], in: nil)
+        let result = try runReadChecked(["-C", worktree.path, "remote", "-v"], in: nil)
         return GitParsers.parseRemotes(result.stdout)
     }
 
@@ -135,9 +157,9 @@ final class GitClient {
     /// fetches; nil when git hasn't set it yet — callers then fall back to
     /// "main"/"master" guessing. Used as the base branch of a new pull request.
     func remoteDefaultBranch(remote: String) -> String? {
-        guard let result = try? run(
-            ["-C", worktree.path, "--no-optional-locks",
-             "symbolic-ref", "--short", "refs/remotes/\(remote)/HEAD"], in: nil),
+        guard let result = try? runRead(
+            ["-C", worktree.path, "symbolic-ref", "--short",
+             "refs/remotes/\(remote)/HEAD"], in: nil),
             result.exitCode == 0 else { return nil }
         let short = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         guard short.hasPrefix("\(remote)/") else { return nil }
@@ -171,7 +193,7 @@ final class GitClient {
                  "--pretty=tformat:\(format)",
                  "--max-count=\(limit)"]
         if skip > 0 { args.append("--skip=\(skip)") }
-        let result = try runChecked(args, in: nil)
+        let result = try runReadChecked(args, in: nil)
         return GitParsers.parseLog(result.stdout)
     }
 
@@ -181,7 +203,7 @@ final class GitClient {
         let r = GitParsers.recordSep
         let format = "%H\(f)%an\(f)%ae\(f)%aI\(f)%P\(f)%s\(f)%b\(r)"
         // -m --first-parent: for merges, show the diff against the first parent.
-        let result = try runChecked(
+        let result = try runReadChecked(
             ["-C", worktree.path, "show", "-m", "--first-parent",
              "--format=\(format)", "--name-status", "--no-color", hash],
             in: nil)
@@ -195,12 +217,12 @@ final class GitClient {
         var args = ["-C", worktree.path, "diff", "--no-color", "--no-ext-diff"]
         if staged { args.append("--staged") }
         args.append(contentsOf: ["--", path])
-        return try runChecked(args, in: nil).stdout
+        return try runReadChecked(args, in: nil).stdout
     }
 
     /// Untracked files have no index entry; diff them against /dev/null.
     func diffForUntracked(path: String) throws -> String {
-        let result = try run(
+        let result = try runRead(
             ["-C", worktree.path, "diff", "--no-color", "--no-index",
              "--", "/dev/null", path],
             in: nil)
@@ -213,7 +235,7 @@ final class GitClient {
 
     /// Patch of one file within a commit (for the detail pane).
     func commitFileDiff(hash: String, path: String) throws -> String {
-        try runChecked(
+        try runReadChecked(
             ["-C", worktree.path, "show", "-m", "--first-parent",
              "--format=", "--no-color", hash, "--", path],
             in: nil).stdout
@@ -221,13 +243,13 @@ final class GitClient {
 
     /// Full staged patch — the input for LLM commit-message generation.
     func stagedDiff() throws -> String {
-        try runChecked(
+        try runReadChecked(
             ["-C", worktree.path, "diff", "--staged", "--no-color"], in: nil).stdout
     }
 
     /// `--stat` summary of the staged changes (always sent to the model in full).
     func stagedDiffStat() throws -> String {
-        try runChecked(
+        try runReadChecked(
             ["-C", worktree.path, "diff", "--staged", "--stat", "--no-color"], in: nil).stdout
     }
 
@@ -235,7 +257,7 @@ final class GitClient {
     /// (`git check-ignore`), so "Ignore" doesn't pile redundant specific
     /// entries under a broader pattern like `*.log` or `build/`.
     func isIgnored(path: String) -> Bool {
-        guard let result = try? run(
+        guard let result = try? runRead(
             ["-C", worktree.path, "check-ignore", "-q", "--", path], in: nil) else { return false }
         return result.exitCode == 0
     }
@@ -286,7 +308,7 @@ final class GitClient {
         // (corrupt ref, unwritable index) into an unintended `rm --cached`,
         // which shows up as staged *deletions* of files the user only meant
         // to revert.
-        let headExists = (try? runChecked(
+        let headExists = (try? runReadChecked(
             ["-C", worktree.path, "rev-parse", "--verify", "--quiet", "HEAD"], in: nil)) != nil
         guard headExists else {
             // Unborn HEAD: there is nothing to restore against, so discarding
@@ -297,7 +319,9 @@ final class GitClient {
             return
         }
         try runChecked(["-C", worktree.path, "reset", "-q", "HEAD", "--"] + literalSpecs, in: nil)
-        let tracked = try runChecked(["-C", worktree.path, "ls-files", "-z", "--"] + literalSpecs, in: nil).stdout
+        let tracked = try runReadChecked(
+            ["-C", worktree.path, "ls-files", "-z", "--"] + literalSpecs,
+            in: nil).stdout
         let stillTracked = tracked.components(separatedBy: "\0").filter { !$0.isEmpty }
         if !stillTracked.isEmpty {
             try runChecked(["-C", worktree.path, "checkout", "--"] + stillTracked.map { ":(literal)" + $0 }, in: nil)
@@ -402,7 +426,7 @@ final class GitClient {
     }
 
     func mergeHead() throws -> String? {
-        let result = try run(
+        let result = try runRead(
             ["-C", worktree.path, "rev-parse", "--verify", "-q", "MERGE_HEAD"], in: nil)
         guard result.exitCode == 0 else { return nil }
         let hash = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -411,7 +435,7 @@ final class GitClient {
 
     /// First line of MERGE_MSG — "Merge branch 'feature'" — for the banner label.
     func mergeMessageLabel() -> String? {
-        guard let result = try? run(
+        guard let result = try? runRead(
             ["-C", worktree.path, "rev-parse", "--verify", "-q", "MERGE_HEAD"], in: nil),
             result.exitCode == 0 else { return nil }
         guard let gitDir = gitDir() else { return nil }
@@ -422,7 +446,7 @@ final class GitClient {
     }
 
     func conflictedPaths() throws -> [String] {
-        let result = try runChecked(
+        let result = try runReadChecked(
             ["-C", worktree.path, "diff", "--name-only", "--diff-filter=U", "-z"], in: nil)
         return result.stdout.components(separatedBy: "\0").filter { !$0.isEmpty }
     }
@@ -556,7 +580,7 @@ final class GitClient {
 
     func stashList() throws -> [StashEntry] {
         let f = GitParsers.fieldSep
-        let result = try runChecked(
+        let result = try runReadChecked(
             ["-C", worktree.path, "stash", "list", "--format=%gd\(f)%gs"], in: nil)
         return GitParsers.parseStash(result.stdout)
     }
