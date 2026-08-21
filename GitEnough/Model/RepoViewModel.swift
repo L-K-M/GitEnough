@@ -62,6 +62,11 @@ final class RepoViewModel: ObservableObject, Identifiable {
     /// Commit detail pane.
     @Published private(set) var selectedCommitDetail: CommitDetail?
     @Published private(set) var selectedCommitFileDiff: String = ""
+    /// True when loading the selected commit's detail failed (`git show`
+    /// errored — object rewritten or garbage-collected, corrupt repo). The
+    /// detail pane shows an error state instead of the eternal spinner it
+    /// used to display when the load could never succeed.
+    @Published private(set) var selectedCommitDetailFailed = false
 
     /// Changes pane: the diff of the currently selected worktree file.
     @Published private(set) var selectedFileDiff: String = ""
@@ -571,6 +576,9 @@ final class RepoViewModel: ObservableObject, Identifiable {
     // MARK: - Selections / detail loading
 
     func selectCommit(_ hash: String?) {
+        // A fresh selection starts clean — a failure only ever describes the
+        // most recently completed load.
+        selectedCommitDetailFailed = false
         guard let hash else {
             selectedCommitDetail = nil
             selectedCommitFileDiff = ""
@@ -580,6 +588,7 @@ final class RepoViewModel: ObservableObject, Identifiable {
             let detail = try? self.client.commitDetail(hash)
             DispatchQueue.main.async {
                 self.selectedCommitDetail = detail
+                self.selectedCommitDetailFailed = (detail == nil)
                 self.selectedCommitFileDiff = ""
             }
         }
