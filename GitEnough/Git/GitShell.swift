@@ -33,6 +33,15 @@ final class GitShell {
     /// Shared instance; the shell is stateless (every call takes the working dir).
     static let shared = GitShell()
 
+    /// Process-wide and idempotent: a child that exits before draining stdin
+    /// must not let a broken-pipe write kill the process driving it (see
+    /// runWithStdin). Installed here — not only in AppDelegate — so tests and
+    /// any future entry point that drives GitShell get it too. (signal()
+    /// returns the previous disposition, hence the closure to discard it.)
+    private static let ignoreSIGPIPE: Void = {
+        _ = signal(SIGPIPE, SIG_IGN)
+    }()
+
     /// Resolved path to a working git binary, or nil when Xcode CLT is missing.
     private(set) var gitURL: URL?
 
@@ -167,6 +176,7 @@ final class GitShell {
     /// throwing on non-zero exit. Throws only when git can't be executed at all.
     @discardableResult
     func run(_ args: [String], in directory: URL?) throws -> GitResult {
+        _ = Self.ignoreSIGPIPE
         guard let gitURL else {
             throw GitError(message: "git is not installed. Install the Xcode Command Line Tools (`xcode-select --install`) and relaunch GitEnough.", exitCode: -1)
         }
@@ -239,6 +249,7 @@ final class GitShell {
 
     /// Separate entry point because `standardInput` must be assigned before `run()`.
     private func runWithStdin(_ args: [String], in directory: URL?, stdin: String) throws -> GitResult {
+        _ = Self.ignoreSIGPIPE
         guard let gitURL else {
             throw GitError(message: "git is not installed. Install the Xcode Command Line Tools (`xcode-select --install`) and relaunch GitEnough.", exitCode: -1)
         }
@@ -265,6 +276,11 @@ final class GitShell {
 
         var outData = Data()
         var errData = Data()
+        /// Set by the writer thread on a NON-EPIPE write failure (EPIPE means
+        /// the child exited, so its own exit status tells the story).
+        /// Written before group.leave(), read after group.wait() — the
+        /// DispatchGroup provides the happens-before edge.
+        var writeError: NSError?
         let group = DispatchGroup()
         group.enter()
         DispatchQueue.global(qos: .userInitiated).async {
@@ -277,16 +293,45 @@ final class GitShell {
             group.leave()
         }
         // Write stdin on its own thread too: a message larger than the pipe buffer
-        // must not block while the child is also writing to stderr.
+        // must not block while the child is also writing to stderr. The throwing
+        // write API matters: the legacy FileHandle.write(_:) raises an
+        // uncatchable NSFileHandleOperationException on EPIPE (a child that
+        // exited before draining stdin), while write(contentsOf:) just fails —
+        // and the child's own exit status carries the real error.
         group.enter()
         DispatchQueue.global(qos: .userInitiated).async {
-            inPipe.fileHandleForWriting.write(Data(stdin.utf8))
+            do {
+                try inPipe.fileHandleForWriting.write(contentsOf: Data(stdin.utf8))
+            } catch {
+                // EPIPE is expected when the child exits before draining
+                // stdin; its exit status carries the real error. Log the full
+                // error (domain/code/underlying POSIX errno), tagging the
+                // expected case so genuinely unexpected write failures
+                // (EIO, EBADF, ENOSPC) stand out in the log.
+                let nsError = error as NSError
+                let isExpectedEPIPE = nsError.domain == NSPOSIXErrorDomain
+                    && nsError.code == Int(EPIPE)
+                NSLog("[GitShell] stdin write to git failed (%@): %@",
+                      isExpectedEPIPE ? "expected EPIPE" : "unexpected",
+                      String(describing: error))
+                if !isExpectedEPIPE { writeError = nsError }
+            }
             try? inPipe.fileHandleForWriting.close()
             group.leave()
         }
 
         process.waitUntilExit()
         group.wait()
+
+        // A failed stdin write with a still-living child means git read a
+        // truncated message and may happily commit it — a success the user
+        // must not see unqualified. (EPIPE is excluded: the child is gone,
+        // so no truncated commit can exist.)
+        if let writeError, process.terminationStatus == 0 {
+            throw GitError(
+                message: "Writing the commit message to git failed (\(writeError.localizedDescription)). git may have committed a truncated message — check the last commit and amend if needed.",
+                exitCode: -1)
+        }
 
         let stdout = String(data: outData, encoding: .utf8)
             ?? String(decoding: outData, as: UTF8.self)
