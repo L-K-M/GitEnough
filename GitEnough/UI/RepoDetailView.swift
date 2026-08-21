@@ -92,10 +92,18 @@ struct RepoDetailView: View {
                 Button {
                     viewModel.pull(rebase: pullRebase)
                 } label: {
-                    Label("Pull", systemImage: "arrow.down.to.line")
+                    Label(viewModel.status.behind > 0
+                          ? "Pull (\(viewModel.status.behind))" : "Pull",
+                          systemImage: "arrow.down.to.line")
                 }
-                .disabled(viewModel.isBusy || viewModel.remotes.isEmpty || viewModel.status.upstream == nil)
-                .help(pullRebase ? "Pull with rebase (⇧⌘L)" : "Pull (⇧⌘L)")
+                .disabled(!viewModel.canPull)
+                .help(viewModel.mergeState.isInProgress
+                      ? "Finish or abort the in-progress operation first"
+                      : viewModel.remotes.isEmpty
+                      ? "No remotes configured"
+                      : viewModel.status.upstream == nil
+                      ? "No upstream branch — publish first"
+                      : pullRebase ? "Pull with rebase (⇧⌘L)" : "Pull (⇧⌘L)")
 
                 if viewModel.status.upstream == nil && !viewModel.remotes.isEmpty {
                     Button {
@@ -103,16 +111,28 @@ struct RepoDetailView: View {
                     } label: {
                         Label("Publish", systemImage: "arrow.up.to.line")
                     }
-                    .disabled(viewModel.isBusy || viewModel.remotes.isEmpty)
-                    .help("Push and set upstream to \(viewModel.publishRemoteName)")
+                    .disabled(!viewModel.canPublish)
+                    .help(viewModel.mergeState.isInProgress
+                          ? "Finish or abort the in-progress operation first"
+                          : viewModel.status.isDetached
+                          ? "Check out a branch before publishing"
+                          : viewModel.status.isUnborn
+                          ? "Make a commit before publishing"
+                          : "Push and set upstream to \(viewModel.publishRemoteName)")
                 } else {
                     Button {
                         viewModel.push()
                     } label: {
-                        Label("Push", systemImage: "arrow.up.to.line")
+                        Label(viewModel.status.ahead > 0
+                              ? "Push (\(viewModel.status.ahead))" : "Push",
+                              systemImage: "arrow.up.to.line")
                     }
-                    .disabled(viewModel.isBusy || viewModel.remotes.isEmpty)
-                    .help("Push (⇧⌘P)")
+                    .disabled(!viewModel.canPush)
+                    .help(viewModel.mergeState.isInProgress
+                          ? "Finish or abort the in-progress operation first"
+                          : viewModel.remotes.isEmpty
+                          ? "No remotes configured"
+                          : "Push (⇧⌘P)")
                 }
 
                 Button {

@@ -166,6 +166,11 @@ final class RepoViewModel: ObservableObject, Identifiable {
         canLoadMoreHistory = snapshot.canLoadMore
         if let commits = snapshot.commits { self.commits = commits }
         if let layout = snapshot.layout { self.layout = layout }
+        // Nothing to amend on an unborn HEAD — and a stale true must not
+        // survive the orphan's first commit either (it would silently amend
+        // the commit just made). commit() guards independently; this clears
+        // the flag regardless of which tab is mounted.
+        if snapshot.status.isUnborn, amendLastCommit { amendLastCommit = false }
         onStatusChange?(RepoSummary(status: snapshot.status))
     }
 
@@ -241,6 +246,29 @@ final class RepoViewModel: ObservableObject, Identifiable {
     /// otherwise the first configured remote.
     var publishRemoteName: String {
         remotes.first { $0.name == "origin" }?.name ?? remotes.first?.name ?? "origin"
+    }
+
+    /// Single source of truth for the toolbar's and the menus' enablement, so
+    /// the two surfaces can't drift apart. Pull needs an upstream; plain Push
+    /// needs one too (its slot shows Publish otherwise); everything needs a
+    /// remote, a quiet queue, and no in-progress sequencer operation (pull
+    /// would die on "You have not concluded your merge", push on "not
+    /// currently on a branch" mid-rebase).
+    private var canSyncWithUpstream: Bool {
+        !isBusy && !remotes.isEmpty && status.upstream != nil && !mergeState.isInProgress
+    }
+
+    var canPull: Bool { canSyncWithUpstream }
+
+    var canPush: Bool { canSyncWithUpstream }
+
+    /// `push -u <remote> HEAD` on an unborn HEAD fails with "src refspec HEAD
+    /// does not match any", and on a detached HEAD it does something
+    /// surprising — so Publish gates on having a real branch, not just on
+    /// `upstream == nil`.
+    var canPublish: Bool {
+        !isBusy && !remotes.isEmpty && status.upstream == nil
+            && !status.isUnborn && !status.isDetached && !mergeState.isInProgress
     }
 
     /// Push -u <publishRemoteName> HEAD for a branch with no upstream yet — which
@@ -520,7 +548,10 @@ final class RepoViewModel: ObservableObject, Identifiable {
     func commit() {
         let message = draftCommitMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !message.isEmpty else { return }
-        let amend = amendLastCommit
+        // Amending an unborn HEAD dies on git's "You have nothing to amend" —
+        // the UI disables the toggle, but a stale true (orphan checkout) must
+        // not reach the command line either.
+        let amend = amendLastCommit && !status.isUnborn
         // Only clear the box on success — a rejected hook must not eat the message.
         perform("Committing…", onSuccess: {
             self.draftCommitMessage = ""
