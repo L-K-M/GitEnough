@@ -2,10 +2,11 @@
 
 A living, shovel-ready backlog for GitEnough: every entry below is a concrete,
 self-contained task with suggested approach and test plan, ready for an LLM (or
-human) to pick up. This document consolidates six independent full-codebase
-reviews (`glm.md`, `kimi.md`, `fable.md`, `flash.md`, `sol.md`, and `k3.md`,
-each kept unedited on its review branch as the record) with everything learned
-while implementing the first three waves of fixes.
+human) to pick up. This document consolidates seven independent full-codebase
+reviews (`glm.md` ×2 — the wave-4 record lives on `docs/glm-review-2` — plus
+`kimi.md`, `fable.md`, `flash.md`, `sol.md`, and `k3.md`, each kept unedited on
+its review branch as the record) with everything learned while implementing the
+first four waves of fixes.
 **Maintenance rule:** when an entry ships, delete it here (the git history
 preserves it); when a new issue is found, add it with the same level of
 concreteness.
@@ -43,7 +44,7 @@ base, and dependencies before relying on it:
 | #51 | Error banner: expandable long output + copy button |
 | #52 | Relative dates tick via per-minute TimelineView |
 | #53 | Copy Name on branch rows; Copy Hash and Subject on commits; shared `NSPasteboard.copyString` |
-| #54 | Per-repo commit-draft persistence (restore on launch, cleanup on repo removal, injectable defaults) |
+| #54 | Per-repo commit-draft persistence (restore on launch, cleanup on repo removal, injectable defaults); restore must never overwrite fresh typing (glm-M4) |
 | #55 | Empty states: zero-commit History, empty Remote Branches section |
 | #56/#59 | #59 is the preferred superset (slash-named locals, full-ref parsing, remote HEAD suppression); #56 is only the local-slash subset |
 | #57/#71/#80/#83 | Complementary guardrail series: menu/toolbar state, context-aware Push/Publish, unborn amend, and central mutation admission; #83 is stacked on #57 |
@@ -69,6 +70,10 @@ base, and dependencies before relying on it:
 | #82 | Validate persisted repository selection and fall back to the first valid repository |
 | #84 | Remote-branch deletion (remote-HEAD rejection, qualified refspec, longest-match slash-named remote parsing, empty-component validation — all landed, with negative + slash-remote integration tests) |
 | #86 | Copy a paste-ready cherry-pick command from a history row |
+| #87 | Confirm before aborting an in-progress merge/rebase/cherry-pick/revert (resolutions not yet committed are lost) |
+| #88 | Renames/copies render as "old → new" in the Changes and commit-detail file rows (`FilePathText`, a11y label "Was x, now y") |
+| #89 | Status bar shows the preferred remote (upstream's remote, else origin, else first) with a URL tooltip; pure tested selector |
+| #90 | Branch lists carry each tip's committer date (`%(committerdate:iso8601-strict)`) and render relative recency next to ahead/behind |
 
 Verified non-issues, kept for the record (don't re-audit):
 - **Graph width never includes trailing free lanes** — every lane is either
@@ -211,6 +216,51 @@ path/hash/side in request identity, show the sanitized Git error with Retry, and
 never let an older failure/success replace a newer selection. Add deterministic
 reverse-completion tests through an injected client plus real bad-object and
 read-failure integration coverage.
+
+### glm-B5 · Repo renamed on disk keeps a stale sidebar name forever — S
+
+`Repository.name` is snapshotted at registration and persisted. Rename the
+folder on disk (or re-clone under a new name) and the sidebar label, window
+title, and activity history keep the old name indefinitely — the path is
+right, the label is wrong, and the only remedy is remove + re-add, which loses
+star/manual-order/last-opened metadata. **Fix:** opportunistically refresh the
+display name during `AppState.refreshSummaries` (path's `lastPathComponent`)
+via a `RepoStore.refreshName(_:for:)` that preserves identity, order, stars,
+and the last-opened key. Test: store-level round-trip (rename while registered;
+identity and order unchanged, label updated; a *different* repo whose name
+equals the new one does not collide — identity stays path-based).
+
+### glm-B6 · Dropping a *file* on the sidebar produces a misleading error — S
+
+The sidebar drop handler accepts any `fileURL`. Dropping a regular file inside
+a repo can't become a Process cwd, so validation fails with “not inside a git
+repository” — misleading for the common “I dragged the README of the repo I
+want” case. **Fix:** resolve dropped files to their parent folder before
+validating (a dropped file almost always means “add the repo containing it”),
+and reject obviously-non-representable drops (no folder, no parent) with a
+message that says what was dropped. Test: unit-drive the URL→folder resolution
+helper (file → parent, folder → itself, root → rejected).
+
+### glm-B9 · `fetch --all` fans out to every configured remote — S/M
+
+`fetch()` runs `git fetch --all --prune --tags` (#72 removes the `--tags`
+forcing). On repos with several remotes (collaborator forks, multiple
+upstreams) every fetch button press and auto-fetch interval hits all of them —
+slow, and `--prune` on a remote whose branches were deleted there produces
+surprising ref deletions. **Fix:** default the button to the preferred remote
+(`fetch(remote:)`, a one-argument variant), keep “Fetch All Remotes” as the ⌥
+variant or a Repository-menu item. Test: integration — two remotes, fetch the
+preferred one, assert only its refs moved.
+
+### glm-G3 · The error banner's lifecycle loses failures — S
+
+`errorMessage` is a single optional string: a second failure overwrites the
+first unread one, and every new `perform` clears it at start, so a queued op
+start can erase an error the user never saw. **Fix:** never auto-clear an
+unread error on the *next* op start (mark-seen on dismiss only; the newest
+error can coexist with the busy state), and keep V7/#51's expand/copy
+affordances. Test: VM-level with the injected-client seam (P9) — two failures
+in a row both reachable until dismissed.
 
 ---
 
@@ -634,6 +684,33 @@ speeds up every later `log --topo-order` the History tab runs). Cheap,
 genuinely useful, and on-brand for a client that stays close to the CLI.
 Test: integration — run on a temp repo, assert exit 0 + commit-graph presence.
 
+### glm-M3 · Changes totals bar — S
+
+A one-line summary of the staged (or all) changes — "+123 −45 across 4 files” —
+from `git diff --numstat` / `--cached --numstat` (cheap: no patch bodies).
+Gives the Changes tab the “PR summary” feel and answers “how big is this commit
+about to be” at a glance. Reuses F47's numstat plumbing; renders above the file
+list, green/red colored counts, unique-path count (rename = one file). Test:
+pure aggregation over numstat fixtures (renames, binaries `- -`, zero-line).
+
+### glm-U3 · “Discard All Changes…” — S/M
+
+Rows act one at a time and “Stage All” exists, but the symmetric destructive
+bulk action is absent — the thing people expect from the Changes section
+header. Same confirmation pattern as reset --hard (name the count, keep the
+Trash semantics for untracked files, honoring #75's failure reporting). Pairs
+with F16 multi-select (which subsumes it if that lands first). Test:
+integration — mixed staged/unstaged/untracked batch, assert worktree clean and
+untracked files in the Trash.
+
+### glm-U5 · “Open in Terminal” honors installed terminals — S
+
+`Open in Terminal` hardcodes `open -a Terminal`. macOS has no clean
+default-terminal API, so probe `/Applications` for iTerm2, WezTerm, Warp,
+Kitty, Alacritty (in a user-configurable priority order, persisted) before
+falling back to Terminal. Test: pure priority resolution with injected
+installed-app sets; `open -a` argument shape per terminal (some need `--path`).
+
 ---
 
 ## Visual & layout
@@ -821,6 +898,33 @@ Graph strip and row text each paint their own `accentColor.opacity(0.20)`
 (`GraphStripView` + `CommitRowView`), meeting at a visible seam when lane
 counts squeeze widths. Paint one full-row background behind an HStack of
 [strip, row] instead.
+
+### glm-V5 · Publish/Push toolbar swap causes a layout jump — S
+
+The toolbar button swaps label (`Publish` ↔ `Push`) after a snapshot apply;
+labels differ in width, so the toolbar visibly pops on the first push of a new
+branch. Prefer a stable single control whose *menu* grows a “Publish branch to
+<remote>” first item when there is no upstream, or keep both buttons and
+disable the inapplicable one. Must stay consistent with the shared
+`pushOrPublish()` entry point (#57) and #43's force-push menu.
+
+### glm-V7 · Lane squeeze has no minimum width — S (low priority)
+
+`GraphMetrics.laneWidth(for:)` divides by column count with no floor; at 40+
+lanes, lanes collide into an unreadable smear under `maxGraphWidth`. Consider
+a ~4 pt floor with horizontal scrolling of the graph column (the width cap
+becomes the viewport), or collapse ultra-deep lane sets behind a zoom control.
+Low priority — document the chosen trade-off either way.
+
+### glm-A3 · Diff pane lacks a sticky header — S
+
+No file name, no +x/−y, no hunk count at the top of the diff pane; the user
+must infer the file from the list selection, which scrolls away on long diffs.
+One sticky header line above the scroll area — path (with the glm rename
+“old → new” form where applicable), status badge, colored insertion/deletion
+counts from the parsed lines — reuses zero new plumbing beyond a count pass.
+Test: pure counts over parsed DiffLine fixtures (additions/deletions/hunks;
+truncated diffs show “…” totals).
 
 ---
 
@@ -1052,6 +1156,15 @@ feel. First define a tiny motion spec (trigger, duration, curve, interruption,
 Reduce Motion fallback); deliberately skip graph motion and never animate a
 destructive confirmation or progress value merely for decoration.
 
+### glm-A1 · Sidebar row hierarchy is flat — S (design)
+
+Repo name / path / branch+counts are three equal-weight lines; the branch line
+carries two font sizes and three icons. Suggested order: name + star + dirty
+dot (line 1), branch chip + ahead/behind (line 2), path only when hovered or in
+an optional compact mode. Sketch first; the current layout is fine — this is
+polish, and it must not regress the star's hover-reveal behavior or the
+logical-filter affordances.
+
 ---
 
 ## Novel / delightful
@@ -1080,6 +1193,9 @@ everything in this backlog.
 Click/hover a lane: its whole ancestry lights up, everything else fades
 (IntelliJ-style). Pure reachability computation over the loaded commit graph
 (parents map) — fully unit-testable; rendering picks per-node emphasis alpha.
+Cheap first cut (glm-Q3): an alpha bump on just the hovered row's passing
+lanes — zero graph algorithms, still reads as alive; keep it if the full
+version stalls.
 
 ### Q4 · Optional "Generated with GitEnough" footer — S
 
@@ -1169,7 +1285,9 @@ privacy caps, apply failure, undo, and a conflict changed while the model runs.
 
 Offer recent repo subjects as autocomplete/suggestions while typing in the
 commit box (repo-local, no network). Subtle, surprisingly handy for repetitive
-chores ("Bump …", "Fix typo …").
+chores ("Bump …", "Fix typo …"). Ghost-text variant (glm-Q5): a one-line
+suggestion under the box — the most recent subject sharing the draft's first
+word — with zero autocomplete plumbing; Tab accepts, typing dismisses.
 
 ### F37 · AI: PR description from the branch — S/M
 
@@ -1245,6 +1363,31 @@ Optional `MenuBarExtra` listing repos that are dirty/behind (from the summary
 cache — zero extra git calls), one click to open. Off by default per the
 no-nagging philosophy (Q9's spirit).
 
+### glm-Q2 · Branch tips as cards — S (design)
+
+With #90's recency in hand, the Branches tab's most-alive local branches
+render beautifully as a small card grid above the plain list (name, relative
+recency, dirty-tip dot, ahead/behind) — a dashboard instead of a
+`git branch -a` dump. Design first; cap at the ~8 most recent tips, keep the
+full list below, and preserve every existing row action in the cards' context
+menus.
+
+### glm-Q4 · "What would push send?" popover — S
+
+When ahead > 0, make the status bar's ↑N (or A4's sync pill) a popover listing
+exactly those commit subjects — the same single `rev-list @{upstream}..HEAD`
+#42 already runs for its hollow dots; reuse its hash set against loaded
+subjects and offer “Load more” when the set extends past the loaded window.
+Turns a number into the answer people open a terminal for.
+
+### glm-Q6 · Repo health tooltip in the sidebar — S
+
+Hovering a sidebar repo shows a two-line tooltip: last fetch time (needs the
+per-repo persisted timestamp Q16-style) plus the tip's recency (from the
+summary sweep — extend `RepoSummary` with the tip date). Cheap "is this thing
+alive?" signal without opening it; no new window, no new git calls beyond what
+the sweep already does.
+
 ---
 
 ## Suggested next pickups (highest value first)
@@ -1274,3 +1417,7 @@ no-nagging philosophy (Q9's spirit).
 16. **Q1** reflog Safety Timeline and **Q2** command palette (differentiators)
 17. **M15** minimal interactive rebase, guarded by a new all-remote reachability
     predicate rather than #42's upstream-only display marker
+18. **glm-U3/glm-B9** bulk discard and preferred-remote fetch (small everyday
+    wins once the F16/P9 foundations exist)
+19. **glm-Q4/glm-M3** push-preview popover and Changes totals bar (cheap
+    clarity once #42's hash set and F47's numstat plumbing land)
