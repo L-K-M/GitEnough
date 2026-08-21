@@ -68,10 +68,23 @@ final class RepoViewModel: ObservableObject, Identifiable {
     @Published private(set) var isLoadingDiff = false
 
     /// Commit box.
-    @Published var draftCommitMessage: String = ""
+    @Published var draftCommitMessage: String = "" {
+        didSet {
+            guard draftCommitMessage != oldValue else { return }
+            draftCommitMessageRevision &+= 1
+            // The editor deliberately remains usable while the request is in
+            // flight. Typing means that response no longer owns the field.
+            invalidateCommitMessageGeneration()
+        }
+    }
     @Published var amendLastCommit = false
     @Published private(set) var isGeneratingMessage = false
     @Published var messageGenerationError: String?
+
+    private var nextMessageGenerationToken: UInt64 = 0
+    private var activeMessageGenerationToken: UInt64?
+    private var draftCommitMessageRevision: UInt64 = 0
+    private var stagedContentRevision: UInt64 = 0
 
     /// True when amending would rewrite a commit the upstream already has
     /// (upstream set, nothing ahead → HEAD is reachable from upstream) —
@@ -158,6 +171,10 @@ final class RepoViewModel: ObservableObject, Identifiable {
 
     /// Must be called on the main thread.
     private func apply(_ snapshot: Snapshot) {
+        if status.staged != snapshot.status.staged {
+            stagedContentRevision &+= 1
+            invalidateCommitMessageGeneration()
+        }
         status = snapshot.status
         branches = snapshot.branches
         remotes = snapshot.remotes
@@ -200,8 +217,16 @@ final class RepoViewModel: ObservableObject, Identifiable {
     /// the commit box only after a successful commit).
     private func perform(_ activity: String,
                          includeHistory: Bool = true,
+                         invalidatesMessageGeneration: Bool = true,
                          onSuccess: (() -> Void)? = nil,
                          _ work: @escaping (GitClient) throws -> Void) {
+        // Invalidate at intent time, not after the queued git command finishes:
+        // an already-returned AI callback must not win the race with a click on
+        // Commit, Stage, Checkout, or another operation that can replace HEAD or
+        // the index.
+        if invalidatesMessageGeneration {
+            invalidateCommitMessageGeneration()
+        }
         isBusy = true
         self.activity = activity
         errorMessage = nil
@@ -228,13 +253,19 @@ final class RepoViewModel: ObservableObject, Identifiable {
 
     // MARK: Network
 
-    func fetch() { perform("Fetching…") { try $0.fetch() } }
+    func fetch() {
+        perform("Fetching…", invalidatesMessageGeneration: false) { try $0.fetch() }
+    }
 
     func pull(rebase: Bool) {
         perform(rebase ? "Pulling (rebase)…" : "Pulling…") { try $0.pull(rebase: rebase) }
     }
 
-    func push() { perform("Pushing…") { try $0.push(setUpstream: false) } }
+    func push() {
+        perform("Pushing…", invalidatesMessageGeneration: false) {
+            try $0.push(setUpstream: false)
+        }
+    }
 
     /// The remote a branch without an upstream should be published to — "origin"
     /// when it exists (it's the natural target even alongside other remotes),
@@ -250,7 +281,9 @@ final class RepoViewModel: ObservableObject, Identifiable {
     func publishBranch() {
         guard !remotes.isEmpty else { return }
         let remote = publishRemoteName
-        perform("Publishing branch…") { try $0.push(setUpstream: true, remote: remote) }
+        perform("Publishing branch…", invalidatesMessageGeneration: false) {
+            try $0.push(setUpstream: true, remote: remote)
+        }
     }
 
     // MARK: Pull request
@@ -337,11 +370,15 @@ final class RepoViewModel: ObservableObject, Identifiable {
     }
 
     func createBranch(named name: String, at startPoint: String? = nil, checkout: Bool) {
-        perform("Creating branch \(name)…") { try $0.createBranch(name, at: startPoint, checkout: checkout) }
+        perform("Creating branch \(name)…", invalidatesMessageGeneration: checkout) {
+            try $0.createBranch(name, at: startPoint, checkout: checkout)
+        }
     }
 
     func deleteBranch(_ branch: Branch, force: Bool) {
-        perform("Deleting \(branch.name)…") { try $0.deleteBranch(branch.name, force: force) }
+        perform("Deleting \(branch.name)…", invalidatesMessageGeneration: false) {
+            try $0.deleteBranch(branch.name, force: force)
+        }
     }
 
     func merge(branch: Branch) {
@@ -476,7 +513,8 @@ final class RepoViewModel: ObservableObject, Identifiable {
         // gitignore doesn't affect tracked files — ignoring one would be a
         // silent no-op, so refuse it here like the UI does.
         guard change.isUntracked else { return }
-        perform("Updating .gitignore…", includeHistory: false) { client in
+        perform("Updating .gitignore…", includeHistory: false,
+                invalidatesMessageGeneration: false) { client in
             // A broader existing pattern (*.log, build/) already covers it.
             guard !client.isIgnored(path: change.path) else { return }
             let url = client.worktree.appendingPathComponent(".gitignore")
@@ -539,17 +577,23 @@ final class RepoViewModel: ObservableObject, Identifiable {
     }
 
     func stashDrop(_ entry: StashEntry) {
-        perform("Dropping stash…") { try $0.stashDrop(index: entry.index) }
+        perform("Dropping stash…", invalidatesMessageGeneration: false) {
+            try $0.stashDrop(index: entry.index)
+        }
     }
 
     // MARK: Commit-targeted
 
     func createBranchAtCommit(named name: String, hash: String) {
-        perform("Creating branch…") { try $0.createBranch(name, at: hash, checkout: false) }
+        perform("Creating branch…", invalidatesMessageGeneration: false) {
+            try $0.createBranch(name, at: hash, checkout: false)
+        }
     }
 
     func createTag(named name: String, message: String?, at hash: String) {
-        perform("Creating tag…") { try $0.createTag(name: name, message: message, at: hash) }
+        perform("Creating tag…", invalidatesMessageGeneration: false) {
+            try $0.createTag(name: name, message: message, at: hash)
+        }
     }
 
     func checkoutCommit(_ hash: String) {
@@ -619,27 +663,122 @@ final class RepoViewModel: ObservableObject, Identifiable {
 
     // MARK: - Smart commit message
 
+    private func invalidateCommitMessageGeneration() {
+        guard activeMessageGenerationToken != nil else { return }
+        activeMessageGenerationToken = nil
+        isGeneratingMessage = false
+    }
+
+    private func finishCommitMessageGeneration(
+        _ context: CommitMessageGenerationContext,
+        error: String
+    ) {
+        guard activeMessageGenerationToken == context.token else { return }
+        activeMessageGenerationToken = nil
+        isGeneratingMessage = false
+        messageGenerationError = error
+    }
+
+    private func acceptGeneratedCommitMessage(
+        _ message: String,
+        context: CommitMessageGenerationContext,
+        generatedFrom stagedDiff: String,
+        currentStagedDiff: String
+    ) {
+        guard activeMessageGenerationToken == context.token else { return }
+        let accepted = context.accepts(
+            activeToken: activeMessageGenerationToken,
+            currentDraftRevision: draftCommitMessageRevision,
+            currentStagedRevision: stagedContentRevision,
+            generatedFrom: stagedDiff,
+            currentStagedDiff: currentStagedDiff)
+        activeMessageGenerationToken = nil
+        isGeneratingMessage = false
+        guard accepted else {
+            // A status snapshot catches most staging changes. Comparing the
+            // actual patch catches same-path edits that leave porcelain status
+            // unchanged, and tells the user why no suggestion appeared.
+            messageGenerationError = "Staged changes changed while the message was being generated. Generate again to use the latest changes."
+            return
+        }
+        draftCommitMessage = message
+    }
+
+    /// Hop back through the main-thread-owned view model before scheduling the
+    /// final git read. This keeps the async task from transferring its capture
+    /// of the non-Sendable view model directly into a GCD closure.
+    private func verifyGeneratedCommitMessage(
+        _ message: String,
+        context: CommitMessageGenerationContext,
+        generatedFrom stagedDiff: String
+    ) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            do {
+                let currentDiff = try self.client.stagedDiff()
+                DispatchQueue.main.async { [weak self] in
+                    self?.acceptGeneratedCommitMessage(
+                        message,
+                        context: context,
+                        generatedFrom: stagedDiff,
+                        currentStagedDiff: currentDiff)
+                }
+            } catch {
+                let failure = "Couldn’t read staged changes: \(error.localizedDescription)"
+                DispatchQueue.main.async { [weak self] in
+                    self?.finishCommitMessageGeneration(context, error: failure)
+                }
+            }
+        }
+    }
+
     func generateCommitMessage() {
-        guard !isGeneratingMessage else { return }
+        guard !isGeneratingMessage, !isBusy else { return }
+        nextMessageGenerationToken &+= 1
+        let context = CommitMessageGenerationContext(
+            token: nextMessageGenerationToken,
+            draftRevision: draftCommitMessageRevision,
+            stagedRevision: stagedContentRevision)
+        activeMessageGenerationToken = context.token
         isGeneratingMessage = true
         messageGenerationError = nil
         let branch = status.head
-        queue.async {
-            let stat = (try? self.client.stagedDiffStat()) ?? ""
-            let diff = (try? self.client.stagedDiff()) ?? ""
-            let generator = CommitMessageGenerator(configuration: LLMConfiguration.load())
-            Task {
-                do {
-                    let message = try await generator.generateCommitMessage(
-                        diffStat: stat, diff: diff, branch: branch)
-                    await MainActor.run {
-                        self.draftCommitMessage = message
-                        self.isGeneratingMessage = false
-                    }
-                } catch {
-                    await MainActor.run {
-                        self.messageGenerationError = error.localizedDescription
-                        self.isGeneratingMessage = false
+        queue.async { [weak self] in
+            guard let self else { return }
+            let stat: String
+            let diff: String
+            do {
+                stat = try self.client.stagedDiffStat()
+                diff = try self.client.stagedDiff()
+            } catch {
+                DispatchQueue.main.async { [weak self] in
+                    self?.finishCommitMessageGeneration(
+                        context,
+                        error: "Couldn’t read staged changes: \(error.localizedDescription)")
+                }
+                return
+            }
+            DispatchQueue.main.async { [weak self] in
+                guard let self,
+                      context.isCurrent(
+                        activeToken: self.activeMessageGenerationToken,
+                        currentDraftRevision: self.draftCommitMessageRevision,
+                        currentStagedRevision: self.stagedContentRevision) else { return }
+                let generator = CommitMessageGenerator(configuration: LLMConfiguration.load())
+                Task { [weak self] in
+                    guard let self else { return }
+                    do {
+                        let message = try await generator.generateCommitMessage(
+                            diffStat: stat, diff: diff, branch: branch)
+                        await MainActor.run { [weak self] in
+                            self?.verifyGeneratedCommitMessage(
+                                message, context: context, generatedFrom: diff)
+                        }
+                    } catch {
+                        await MainActor.run { [weak self] in
+                            self?.finishCommitMessageGeneration(
+                                context, error: error.localizedDescription)
+                        }
                     }
                 }
             }
