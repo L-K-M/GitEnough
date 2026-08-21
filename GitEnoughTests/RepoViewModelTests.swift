@@ -25,10 +25,14 @@ final class RepoViewModelTests: XCTestCase {
     func testPullWithoutUpstreamFailsGracefully() {
         let viewModel = makeViewModel()
         viewModel.pull(rebase: false)
-        // The guard fires synchronously (no perform, no git): a plain-language
-        // error instead of git's raw "no tracking information" from the menu.
+        // The guard fires synchronously (no perform, no git) with a
+        // plain-language error naming the fix. A fresh view model has no
+        // remotes, so the no-remotes wording is the branch exercised here; the
+        // no-upstream variant needs a remote to exist, which only the snapshot
+        // loader can provide (no injection seam yet — see glm.md GLM-G1).
         XCTAssertNotNil(viewModel.errorMessage)
-        XCTAssertTrue(viewModel.errorMessage?.contains("no upstream") ?? false)
+        XCTAssertTrue(viewModel.errorMessage?.contains("Can't pull") ?? false)
+        XCTAssertTrue(viewModel.errorMessage?.contains("no remotes") ?? false)
         XCTAssertFalse(viewModel.isBusy)
     }
 
