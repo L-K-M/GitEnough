@@ -224,17 +224,29 @@ final class GitClient {
     /// which DiffView renders as plain context lines. Staging and discarding
     /// the directory already work via the directory path itself.
     private func untrackedDirectoryListing(path: String) throws -> String {
+        // Literal pathspec magic: without it, a directory named "foo*/" would
+        // glob-match siblings, and a "weird:name/" would read as pathspec magic.
         let result = try runChecked(
             ["-C", worktree.path, "ls-files", "--others", "--exclude-standard",
-             "-z", "--", path],
+             "-z", "--", ":(literal)" + path],
             in: nil)
         let files = result.stdout.components(separatedBy: "\0")
             .filter { !$0.isEmpty }.sorted()
+        // Cap the listing: an accidentally-unignored node_modules/ holds tens
+        // of thousands of entries, and rendering them all is exactly the stall
+        // this cheap synthetic "diff" exists to avoid.
+        let shown = files.prefix(Self.listingCap)
         var lines = ["Untracked directory: \(path)",
                      "\(files.count) file\(files.count == 1 ? "" : "s") — stage the directory to diff its contents."]
-        lines.append(contentsOf: files.map { "  \($0)" })
+        lines.append(contentsOf: shown.map { "  \($0)" })
+        if files.count > shown.count {
+            lines.append("  … and \(files.count - shown.count) more")
+        }
         return lines.joined(separator: "\n")
     }
+
+    /// Maximum entries rendered for one untracked directory.
+    private static let listingCap = 200
 
     /// Patch of one file within a commit (for the detail pane).
     func commitFileDiff(hash: String, path: String) throws -> String {
