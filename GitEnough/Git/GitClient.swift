@@ -199,7 +199,15 @@ final class GitClient {
     }
 
     /// Untracked files have no index entry; diff them against /dev/null.
+    /// A path ending in "/" is a fully-untracked directory collapsed by
+    /// `--untracked-files=normal`: `diff --no-index /dev/null dir/` fails
+    /// outright ("Could not access 'dir/null'"), so directories instead get a
+    /// synthetic listing of their untracked contents — honest and useful where
+    /// a patch is impossible.
     func diffForUntracked(path: String) throws -> String {
+        if path.hasSuffix("/") {
+            return try untrackedDirectoryListing(path: path)
+        }
         let result = try run(
             ["-C", worktree.path, "diff", "--no-color", "--no-index",
              "--", "/dev/null", path],
@@ -209,6 +217,23 @@ final class GitClient {
             throw GitError(message: result.stderr, exitCode: result.exitCode)
         }
         return result.stdout
+    }
+
+    /// The "diff" for a collapsed untracked directory: the untracked files
+    /// inside it (`git ls-files --others --exclude-standard`), one per line,
+    /// which DiffView renders as plain context lines. Staging and discarding
+    /// the directory already work via the directory path itself.
+    private func untrackedDirectoryListing(path: String) throws -> String {
+        let result = try runChecked(
+            ["-C", worktree.path, "ls-files", "--others", "--exclude-standard",
+             "-z", "--", path],
+            in: nil)
+        let files = result.stdout.components(separatedBy: "\0")
+            .filter { !$0.isEmpty }.sorted()
+        var lines = ["Untracked directory: \(path)",
+                     "\(files.count) file\(files.count == 1 ? "" : "s") — stage the directory to diff its contents."]
+        lines.append(contentsOf: files.map { "  \($0)" })
+        return lines.joined(separator: "\n")
     }
 
     /// Patch of one file within a commit (for the detail pane).

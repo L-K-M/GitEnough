@@ -247,6 +247,27 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertTrue(diff.contains("+brand new"))
     }
 
+    func testUntrackedDirectoryDiffListsContents() throws {
+        // status --untracked-files=normal collapses a fully-untracked directory
+        // to a single "dir/" entry; diffing it with --no-index against /dev/null
+        // fails ("Could not access 'dir/null'"), so directories get a listing.
+        try FileManager.default.createDirectory(
+            at: repoURL.appendingPathComponent("newdir"), withIntermediateDirectories: true)
+        try write("one\n", to: "newdir/one.txt")
+        try write("two\n", to: "newdir/two.txt")
+
+        let status = try client.status()
+        XCTAssertTrue(status.unstaged.contains { $0.path == "newdir/" && $0.isUntracked })
+
+        let listing = try client.diffForUntracked(path: "newdir/")
+        XCTAssertTrue(listing.contains("newdir/one.txt"))
+        XCTAssertTrue(listing.contains("newdir/two.txt"))
+
+        // Staging the directory works through the collapsed path, too.
+        try client.stage(paths: ["newdir/"])
+        XCTAssertEqual(try client.status().staged.count, 2)
+    }
+
     func testCommitViaStdinMessage() throws {
         try write("four\n", to: "d.txt")
         try client.stage(paths: ["d.txt"])
