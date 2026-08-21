@@ -89,7 +89,8 @@ struct HistoryView: View {
             historyList
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             Divider()
-            CommitDetailView(viewModel: viewModel, selectedHash: selectedHash)
+            CommitDetailView(viewModel: viewModel, selectedHash: selectedHash,
+                             onSelectCommit: { selectedHash = $0 })
                 .frame(maxHeight: .infinity)
                 .frame(width: 360)
         }

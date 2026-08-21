@@ -6,8 +6,13 @@ struct CommitDetailView: View {
 
     @ObservedObject var viewModel: RepoViewModel
     let selectedHash: String?
+    /// Selects another commit in the history list (parent-chip navigation).
+    var onSelectCommit: ((String) -> Void)? = nil
 
     @State private var selectedFile: CommitFile?
+    @State private var bodyExpanded = false
+
+    private static let collapsedBodyLineLimit = 6
 
     var body: some View {
         if let hash = selectedHash, let detail = viewModel.selectedCommitDetail,
@@ -65,6 +70,7 @@ struct CommitDetailView: View {
         }
         .onChange(of: selectedHash) { _, _ in
             selectedFile = nil
+            bodyExpanded = false
         }
         .onChange(of: selectedFile) { _, file in
             viewModel.selectCommitFile(hash: detail.hash, path: file?.path)
@@ -81,7 +87,14 @@ struct CommitDetailView: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
-                    .lineLimit(6)
+                    .lineLimit(bodyExpanded ? nil : Self.collapsedBodyLineLimit)
+                if detail.bodyLineCount > Self.collapsedBodyLineLimit {
+                    Button(bodyExpanded ? "Show less" : "Show more") {
+                        bodyExpanded.toggle()
+                    }
+                    .buttonStyle(.link)
+                    .font(.caption)
+                }
             }
             HStack(spacing: 12) {
                 Label(detail.author, systemImage: "person")
@@ -92,6 +105,27 @@ struct CommitDetailView: View {
             }
             .font(.caption)
             .foregroundStyle(.secondary)
+            if !detail.parents.isEmpty {
+                HStack(spacing: 6) {
+                    Text(detail.parents.count > 1 ? "Merge of" : "Parent")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    ForEach(detail.parents, id: \.self) { parent in
+                        Button {
+                            onSelectCommit?(parent)
+                        } label: {
+                            Text(String(parent.prefix(7)))
+                                .font(.system(.caption, design: .monospaced))
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.secondary.opacity(0.15))
+                                .clipShape(RoundedRectangle(cornerRadius: 4))
+                        }
+                        .buttonStyle(.plain)
+                        .help("Select parent \(parent.prefix(7)) in the history")
+                    }
+                }
+            }
             HStack(spacing: 6) {
                 Text(detail.shortHash)
                     .font(.system(.caption, design: .monospaced))
@@ -117,4 +151,6 @@ struct CommitDetailView: View {
 
 private extension CommitDetail {
     var shortHash: String { String(hash.prefix(7)) }
+    /// Body length in lines, for the collapsed/expanded toggle.
+    var bodyLineCount: Int { body.components(separatedBy: "\n").count }
 }
