@@ -556,12 +556,15 @@ final class RepoViewModel: ObservableObject, Identifiable {
         perform("Checking out commit…") { try $0.checkout(branch: hash) }
     }
 
-    func cherryPick(_ hash: String) {
-        perform("Cherry-picking…") { try $0.cherryPick(hash) }
+    /// `mainline` must be set (1 = first parent) when `hash` is a merge commit;
+    /// bare cherry-picks/reverts of merges die on git's "is a merge but no -m
+    /// option was given" — see the History context menu, which passes 1.
+    func cherryPick(_ hash: String, mainline: Int? = nil) {
+        perform("Cherry-picking…") { try $0.cherryPick(hash, mainline: mainline) }
     }
 
-    func revert(_ hash: String) {
-        perform("Reverting…") { try $0.revert(hash) }
+    func revert(_ hash: String, mainline: Int? = nil) {
+        perform("Reverting…") { try $0.revert(hash, mainline: mainline) }
     }
 
     func reset(to hash: String, mode: GitClient.ResetMode) {
