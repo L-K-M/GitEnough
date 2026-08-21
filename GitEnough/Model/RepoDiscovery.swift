@@ -58,7 +58,7 @@ enum RepoDiscovery {
                 // A `.git` file: linked worktrees point at a real worktree;
                 // submodules point into the parent repo's modules store.
                 if let gitdir = try? String(contentsOf: gitEntry, encoding: .utf8),
-                   gitdir.contains("/modules/") { return false }
+                   gitdir.contains("/.git/modules/") { return false }
             }
             return true
         }
@@ -73,7 +73,7 @@ enum RepoDiscovery {
                 let line = rawLine.trimmingCharacters(in: .whitespaces)
                 if line.hasPrefix("[") {
                     inCoreSection = line.lowercased().hasPrefix("[core")
-                } else if inCoreSection, line.hasPrefix("bare") {
+                } else if inCoreSection, line.lowercased().hasPrefix("bare") {
                     return line.components(separatedBy: "=").dropFirst().joined(separator: "=")
                         .trimmingCharacters(in: .whitespaces).lowercased() == "true"
                 }

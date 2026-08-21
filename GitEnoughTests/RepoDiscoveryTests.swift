@@ -129,6 +129,20 @@ final class RepoDiscoveryTests: XCTestCase {
         XCTAssertEqual(canonicalPaths(RepoDiscovery.findRepositories(in: root)),
                        canonicalPaths([main, worktree]))
     }
+
+    /// A worktree whose *path* contains a folder named "modules" must not be
+    /// mistaken for a submodule: the submodule marker is the `.git/modules/`
+    /// sequence in the gitdir target, not the word "modules" anywhere.
+    func testWorktreeUnderFolderNamedModulesIsStillFound() throws {
+        let modules = try makeRepo("modules/main")
+        let worktree = root.appendingPathComponent("worktree")
+        try FileManager.default.createDirectory(at: worktree, withIntermediateDirectories: true)
+        try "gitdir: \(modules.path)/.git/worktrees/dev\n"
+            .write(to: worktree.appendingPathComponent(".git"), atomically: true, encoding: .utf8)
+
+        XCTAssertEqual(canonicalPaths(RepoDiscovery.findRepositories(in: root)),
+                       canonicalPaths([modules, worktree]))
+    }
 }
 
 /// Tests the sidebar store's discovery bookkeeping: dedupe, and the "removal
