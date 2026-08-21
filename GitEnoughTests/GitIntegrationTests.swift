@@ -248,6 +248,36 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertEqual(destination, "one\n")
     }
 
+    func testDiscardStagedCopyPreservesModifiedSource() throws {
+        try run(["config", "status.renames", "copies"])
+        try write("one\n", to: "copied.txt")
+        try write("changed source\n", to: "a.txt")
+        try client.stage(paths: ["a.txt", "copied.txt"])
+
+        let copy = try XCTUnwrap(
+            try client.status().staged.first { $0.stagedStatus == .copied })
+        XCTAssertEqual(copy.originalPath, "a.txt")
+        XCTAssertEqual(copy.affectedPaths, ["copied.txt"])
+
+        try client.discard(paths: copy.affectedPaths)
+
+        let status = try client.status()
+        XCTAssertTrue(status.staged.contains {
+            $0.path == "a.txt" && $0.stagedStatus == .modified
+        })
+        XCTAssertTrue(status.unstaged.contains {
+            $0.path == "copied.txt" && $0.isUntracked
+        })
+        XCTAssertEqual(
+            try String(contentsOf: repoURL.appendingPathComponent("a.txt"),
+                       encoding: .utf8),
+            "changed source\n")
+        XCTAssertEqual(
+            try String(contentsOf: repoURL.appendingPathComponent("copied.txt"),
+                       encoding: .utf8),
+            "one\n")
+    }
+
     func testDiscardTreatsGlobCharactersInFilenamesLiterally() throws {
         try write("star\n", to: "a*.txt")
         try write("plain\n", to: "abc.txt")
