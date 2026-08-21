@@ -62,6 +62,7 @@ final class RepoViewModel: ObservableObject, Identifiable {
     /// Commit detail pane.
     @Published private(set) var selectedCommitDetail: CommitDetail?
     @Published private(set) var selectedCommitFileDiff: String = ""
+    @Published private(set) var isLoadingCommitFileDiff = false
 
     /// Changes pane: the diff of the currently selected worktree file.
     @Published private(set) var selectedFileDiff: String = ""
@@ -601,13 +602,17 @@ final class RepoViewModel: ObservableObject, Identifiable {
         let generation = commitFileDiffGeneration
         guard let path else {
             selectedCommitFileDiff = ""
+            isLoadingCommitFileDiff = false
             return
         }
+        selectedCommitFileDiff = ""
+        isLoadingCommitFileDiff = true
         queue.async {
             let diff = (try? self.client.commitFileDiff(hash: hash, path: path)) ?? ""
             DispatchQueue.main.async {
                 guard generation == self.commitFileDiffGeneration else { return }
                 self.selectedCommitFileDiff = diff
+                self.isLoadingCommitFileDiff = false
             }
         }
     }
