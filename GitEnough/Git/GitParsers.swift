@@ -54,8 +54,11 @@ enum GitParsers {
         let trimmed = raw.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return [] }
         var decorations: [RefDecoration] = []
-        for part in trimmed.components(separatedBy: ", ") {
-            // A trailing ", " yields an empty part — never an empty-name chip.
+        for rawPart in trimmed.components(separatedBy: ", ") {
+            // A trailing ", " leaves a comma on the last part after the
+            // whitespace trim ("main,"), and ", ," an empty one — never a
+            // comma-tainted or empty-name chip.
+            let part = rawPart.trimmingCharacters(in: CharacterSet(charactersIn: ", "))
             guard !part.isEmpty else { continue }
             if part.hasPrefix("HEAD -> ") {
                 decorations.append(RefDecoration(kind: .head, name: "HEAD"))

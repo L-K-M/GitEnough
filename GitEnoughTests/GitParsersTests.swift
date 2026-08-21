@@ -88,10 +88,16 @@ final class GitParsersTests: XCTestCase {
     }
 
     func testParseLogDecorationsTolerateEmptyParts() {
-        // A trailing ", " must not produce an empty-name chip.
+        // A trailing ", " (comma clings to the last name after the
+        // whitespace trim) and ", ," must not produce tainted or
+        // empty-name chips.
         XCTAssertEqual(GitParsers.parseDecorations("HEAD -> main, "),
                        [RefDecoration(kind: .head, name: "HEAD"),
                         RefDecoration(kind: .localBranch, name: "main")])
+        XCTAssertEqual(GitParsers.parseDecorations("HEAD -> main, , stable"),
+                       [RefDecoration(kind: .head, name: "HEAD"),
+                        RefDecoration(kind: .localBranch, name: "main"),
+                        RefDecoration(kind: .localBranch, name: "stable")])
     }
 
     func testParseLogDecorationsTagHeadTargetClassifiesExactly() {
