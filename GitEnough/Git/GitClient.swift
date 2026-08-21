@@ -371,12 +371,22 @@ final class GitClient {
         }
         let remote = String(remoteBranch[..<slash])
         let branch = String(remoteBranch[remoteBranch.index(after: slash)...])
+        // "origin/HEAD" is the remote's default-branch symref: deleting it
+        // asks the remote to delete its default branch. (branches() filters
+        // the symref from the UI already; guard here regardless.)
+        guard branch != "HEAD" else {
+            throw GitError(message: "Can't delete the remote's HEAD — it points at the remote's default branch.", exitCode: -1)
+        }
         // The parts come from for-each-ref output, never free-typed — but a
         // leading dash would still land in option position, so guard anyway.
         guard !remote.hasPrefix("-"), !branch.hasPrefix("-") else {
             throw GitError(message: "Refusing to delete a ref starting with “-”.", exitCode: -1)
         }
-        try runChecked(["-C", worktree.path, "push", remote, "--delete", branch], in: nil)
+        // Fully qualified: a tag sharing the branch's name would otherwise
+        // fail the deletion with "dst refspec matches more than one".
+        try runChecked(
+            ["-C", worktree.path, "push", remote, "--delete", "refs/heads/\(branch)"],
+            in: nil)
     }
 
     func renameBranch(old: String, new: String) throws {

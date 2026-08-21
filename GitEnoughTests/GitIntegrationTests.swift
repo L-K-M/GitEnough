@@ -411,6 +411,14 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertTrue(try client.branches().contains { $0.name == "to-delete" && !$0.isRemote })
     }
 
+    func testDeleteRemoteBranchRejectsInvalidRefs() {
+        // Guard paths: no git invocation happens for any of these.
+        XCTAssertThrowsError(try client.deleteRemoteBranch("noremote"))
+        XCTAssertThrowsError(try client.deleteRemoteBranch("origin/HEAD"))
+        XCTAssertThrowsError(try client.deleteRemoteBranch("origin/-dash"))
+        XCTAssertThrowsError(try client.deleteRemoteBranch("-origin/main"))
+    }
+
     func testCreateTagLightweightAndAnnotated() throws {
         let head = try XCTUnwrap(try client.log(limit: 1).first?.hash)
         try client.createTag(name: "v1.0", message: nil, at: head)
