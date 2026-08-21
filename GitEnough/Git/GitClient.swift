@@ -363,6 +363,22 @@ final class GitClient {
             ["-C", worktree.path, "branch", force ? "-D" : "-d", name], in: nil)
     }
 
+    /// Deletes a branch on its remote (`push <remote> --delete <branch>`).
+    /// `remoteBranch` is the for-each-ref short name "<remote>/<branch>".
+    func deleteRemoteBranch(_ remoteBranch: String) throws {
+        guard let slash = remoteBranch.firstIndex(of: "/") else {
+            throw GitError(message: "Not a remote branch: \(remoteBranch)", exitCode: -1)
+        }
+        let remote = String(remoteBranch[..<slash])
+        let branch = String(remoteBranch[remoteBranch.index(after: slash)...])
+        // The parts come from for-each-ref output, never free-typed — but a
+        // leading dash would still land in option position, so guard anyway.
+        guard !remote.hasPrefix("-"), !branch.hasPrefix("-") else {
+            throw GitError(message: "Refusing to delete a ref starting with “-”.", exitCode: -1)
+        }
+        try runChecked(["-C", worktree.path, "push", remote, "--delete", branch], in: nil)
+    }
+
     func renameBranch(old: String, new: String) throws {
         try runChecked(["-C", worktree.path, "branch", "-m", old, new], in: nil)
     }

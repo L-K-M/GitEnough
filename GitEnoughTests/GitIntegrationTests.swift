@@ -389,6 +389,28 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertEqual(main.upstream, "work/main")
     }
 
+    func testDeleteRemoteBranch() throws {
+        let remoteURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitEnoughTests-remote-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: remoteURL) }
+        try run(["init", "--bare", remoteURL.path])
+        try run(["remote", "add", "origin", remoteURL.path])
+        // Publish something to delete, then mirror the remote-tracking ref
+        // like a fetch would.
+        try run(["checkout", "-b", "to-delete"])
+        try client.push(setUpstream: true, remote: "origin")
+        try run(["checkout", "main"])
+        try client.fetch()
+        XCTAssertTrue(try client.branches().contains { $0.name == "origin/to-delete" })
+
+        try client.deleteRemoteBranch("origin/to-delete")
+
+        try client.fetch()
+        XCTAssertFalse(try client.branches().contains { $0.name == "origin/to-delete" })
+        // The local branch is untouched — remote deletion never cascades.
+        XCTAssertTrue(try client.branches().contains { $0.name == "to-delete" && !$0.isRemote })
+    }
+
     func testCreateTagLightweightAndAnnotated() throws {
         let head = try XCTUnwrap(try client.log(limit: 1).first?.hash)
         try client.createTag(name: "v1.0", message: nil, at: head)
