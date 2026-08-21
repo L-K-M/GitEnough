@@ -16,7 +16,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appState?.refreshSummaries()
         appState?.scanDiscoveryFolder()
         if let repo = appState?.selectedRepository, let state = appState {
-            state.viewModel(for: repo).refresh(includeHistory: true)
+            // Cheap refresh only: reloading the full topo log + graph layout on
+            // every Cmd-Tab back was pure cost (a visible hitch on large
+            // repos). The 2.5 s RepoWatcher owns history invalidation — its
+            // timer fires promptly on activation even after App Nap, so
+            // external commits made while backgrounded are caught within one
+            // poll interval.
+            state.viewModel(for: repo).refresh(includeHistory: false)
         }
     }
 }

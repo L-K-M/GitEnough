@@ -213,6 +213,10 @@ final class RepoViewModel: ObservableObject, Identifiable {
                 caught = error
             }
             let snapshot = self.collectSnapshot(includeHistory: includeHistory)
+            // We just snapshotted the aftermath of our own command — without
+            // re-baselining, the watcher would see our command's .git writes
+            // on its next tick and run the same full snapshot a second time.
+            self.watcher?.restamp()
             DispatchQueue.main.async {
                 self.apply(snapshot)
                 self.isBusy = false
@@ -427,6 +431,7 @@ final class RepoViewModel: ObservableObject, Identifiable {
                     }
                 }
                 let snapshot = self.collectSnapshot(includeHistory: false)
+                self.watcher?.restamp()   // see perform(): don't re-snapshot our own staging
                 DispatchQueue.main.async {
                     self.apply(snapshot)
                     self.mergeToolActivity = nil
