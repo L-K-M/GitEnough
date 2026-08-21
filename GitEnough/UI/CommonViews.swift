@@ -1,6 +1,15 @@
 import SwiftUI
 import AppKit
 
+extension NSPasteboard {
+    /// The clear-then-set two-step every copy action needs; one place instead
+    /// of an inline pair per call site.
+    func copyString(_ text: String) {
+        clearContents()
+        setString(text, forType: .string)
+    }
+}
+
 /// A small ref chip for the history list: branch heads, remote branches, tags, HEAD.
 struct RefChip: View {
 
