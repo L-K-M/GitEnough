@@ -28,8 +28,8 @@ struct HistoryView: View {
     /// diacritic-insensitive, so "muller" finds "Müller". Only searches the
     /// loaded pages — "Load older commits…" widens the searchable set.
     /// Ref-name matching (branch / remote / tag decorations) means searching
-    /// "feature-x" finds every commit on that branch, not just the ones whose
-    /// subject happens to mention it.
+    /// "feature-x" finds the commit(s) carrying that decoration (typically
+    /// the branch tip), not just the ones whose subject happens to mention it.
     private var visibleCommits: [Commit] {
         guard isFiltering else { return viewModel.commits }
         let needle = activeFilter.lowercased()
@@ -221,7 +221,7 @@ struct HistoryView: View {
         HStack(spacing: 6) {
             Image(systemName: "line.3.horizontal.decrease.circle")
                 .foregroundStyle(.secondary)
-            TextField("Filter by subject, author, hash, or branch", text: $filterText)
+            TextField("Filter by subject, author, hash, or ref", text: $filterText)
                 .textFieldStyle(.plain)
                 .autocorrectionDisabled()
             if isFiltering {
