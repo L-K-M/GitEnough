@@ -275,7 +275,7 @@ final class RepoViewModel: ObservableObject, Identifiable {
             errorMessage = "Can't open a pull request: HEAD is detached — check out a branch first."
             return
         }
-        guard let remote = preferredRemote() else {
+        guard let remote = preferredRemote else {
             errorMessage = "Can't open a pull request: the repository has no remotes."
             return
         }
@@ -313,10 +313,19 @@ final class RepoViewModel: ObservableObject, Identifiable {
         }
     }
 
-    /// The remote a pull request would live on: the branch's upstream remote
+    /// The remote the app actually works against: the branch's upstream remote
     /// when one is configured, else "origin", else the first configured remote.
-    private func preferredRemote() -> Remote? {
-        if let upstream = status.upstream,
+    /// Shown in the status bar — it's the remote fetch/pull/push/PR target, so
+    /// it must match what those buttons do (a first-configured remote can be a
+    /// fork nobody pushes to) — and used for pull-request resolution.
+    var preferredRemote: Remote? {
+        Self.preferredRemote(upstream: status.upstream, remotes: remotes)
+    }
+
+    /// Pure form of the property above: the upstream's remote when configured,
+    /// else "origin", else the first remote. Testable without a repo.
+    static func preferredRemote(upstream: String?, remotes: [Remote]) -> Remote? {
+        if let upstream,
            let remoteName = upstream.split(separator: "/").first.map(String.init),
            let remote = remotes.first(where: { $0.name == remoteName }) {
             return remote
