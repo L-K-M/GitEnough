@@ -49,6 +49,39 @@ final class GitParsersTests: XCTestCase {
         XCTAssertEqual(decorations[1], RefDecoration(kind: .head, name: "HEAD"))
     }
 
+    func testParseLogDecorationsWithKnownRemotes() {
+        // With the repo's remotes known, a slash name is a remote branch only
+        // under a configured remote — local branches may contain slashes.
+        let local = GitParsers.parseDecorations("feature/auth, origin/feature/auth",
+                                                remoteNames: ["origin"])
+        XCTAssertEqual(local[0], RefDecoration(kind: .localBranch, name: "feature/auth"))
+        XCTAssertEqual(local[1], RefDecoration(kind: .remoteBranch, name: "origin/feature/auth"))
+
+        // A tag is recognized before any slash logic applies.
+        let tag = GitParsers.parseDecorations("tag: release/1.0", remoteNames: ["origin"])
+        XCTAssertEqual(tag, [RefDecoration(kind: .tag, name: "release/1.0")])
+
+        // A remote named after another remote's prefix must not swallow it:
+        // "upstream/feature" under remotes ["origin", "upstream"] is upstream's.
+        let other = GitParsers.parseDecorations("upstream/feature", remoteNames: ["origin", "upstream"])
+        XCTAssertEqual(other, [RefDecoration(kind: .remoteBranch, name: "upstream/feature")])
+
+        // An unknown remote's tracking branch (remote since deleted) stays a
+        // local-looking name only when its remote isn't configured — here
+        // "ghost/feature" has no matching remote, so it reads as a local branch.
+        let ghost = GitParsers.parseDecorations("ghost/feature", remoteNames: ["origin"])
+        XCTAssertEqual(ghost, [RefDecoration(kind: .localBranch, name: "ghost/feature")])
+    }
+
+    func testParseLogPassesRemoteNamesThrough() {
+        let output = [["abc", "", "A", "a@x", "2026-08-17T19:00:00+02:00",
+                       "feature/auth", "Ship it"].joined(separator: f)]
+            .joined(separator: r) + r + "\n"
+        let commits = GitParsers.parseLog(output, remoteNames: ["origin"])
+        XCTAssertEqual(commits[0].decorations,
+                       [RefDecoration(kind: .localBranch, name: "feature/auth")])
+    }
+
     func testParseLogToleratesBlankRecords() {
         XCTAssertEqual(GitParsers.parseLog("").count, 0)
         XCTAssertEqual(GitParsers.parseLog("\n\(r)\n").count, 0)

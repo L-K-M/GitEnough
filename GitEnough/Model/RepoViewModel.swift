@@ -145,7 +145,10 @@ final class RepoViewModel: ObservableObject, Identifiable {
         var canLoadMore = canLoadMoreHistory
         if includeHistory {
             // Load one extra commit to know whether "Load more" should be offered.
-            let loaded = (try? client.log(limit: historyLimit + 1)) ?? []
+            // The remotes fetched above disambiguate decorations: slash-named
+            // local branches ("feature/auth") must not read as remote branches.
+            let loaded = (try? client.log(limit: historyLimit + 1,
+                                          remoteNames: Set(remotes.map(\.name)))) ?? []
             canLoadMore = loaded.count > historyLimit
             let trimmed = Array(loaded.prefix(historyLimit))
             commits = trimmed

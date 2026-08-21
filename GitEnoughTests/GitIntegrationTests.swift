@@ -78,6 +78,24 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertEqual(Set(commits.map(\.hash)).count, 4)
     }
 
+    func testLogClassifiesSlashNamedLocalBranches() throws {
+        // "topic/one", not "feature/…": the fixture already has a "feature"
+        // branch, and a loose ref file at refs/heads/feature forbids creating
+        // refs/heads/feature/… alongside it.
+        try run(["branch", "topic/one"])
+        // No remotes configured in this fixture, so the caller has none to pass:
+        // the documented slash heuristic classifies it as a remote branch.
+        let heuristic = try client.log(limit: 50, remoteNames: [])
+        XCTAssertTrue(heuristic[0].decorations.contains(
+            RefDecoration(kind: .remoteBranch, name: "topic/one")))
+        // With a configured remote the name can't match, it stays a LOCAL branch.
+        let precise = try client.log(limit: 50, remoteNames: ["origin"])
+        XCTAssertEqual(precise[0].decorations,
+                       [RefDecoration(kind: .head, name: "HEAD"),
+                        RefDecoration(kind: .localBranch, name: "main"),
+                        RefDecoration(kind: .localBranch, name: "topic/one")])
+    }
+
     func testGraphLayoutOfMergeShape() throws {
         let commits = try client.log(limit: 50)
         let layout = GraphLayout.layout(commits: commits)

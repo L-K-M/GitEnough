@@ -157,7 +157,10 @@ final class GitClient {
 
     /// Newest-first, topologically ordered commits across all refs — the input to
     /// the graph layout. `skip`/`limit` drive the "Load more" pagination.
-    func log(limit: Int, skip: Int = 0) throws -> [Commit] {
+    /// `remoteNames` (the repo's configured remotes) makes decoration
+    /// classification precise — a slash in a decoration means a remote branch
+    /// only for a *known* remote; slash-named local branches stay local.
+    func log(limit: Int, skip: Int = 0, remoteNames: Set<String> = []) throws -> [Commit] {
         let f = GitParsers.fieldSep
         let r = GitParsers.recordSep
         let format = "%H\(f)%P\(f)%an\(f)%ae\(f)%aI\(f)%D\(f)%s\(r)"
@@ -172,7 +175,7 @@ final class GitClient {
                  "--max-count=\(limit)"]
         if skip > 0 { args.append("--skip=\(skip)") }
         let result = try runChecked(args, in: nil)
-        return GitParsers.parseLog(result.stdout)
+        return GitParsers.parseLog(result.stdout, remoteNames: remoteNames)
     }
 
     /// Full header + changed-file list for the detail pane.
