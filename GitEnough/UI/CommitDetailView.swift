@@ -105,6 +105,15 @@ struct CommitDetailView: View {
                 }
                 .buttonStyle(.borderless)
                 .help("Copy full hash")
+                .contextMenu {
+                    Button("Copy Hash") { NSPasteboard.general.copyString(detail.hash) }
+                    Button("Copy Cherry-pick Command") {
+                        if let command = CommitCommands.cherryPickCommand(forHash: detail.hash) {
+                            NSPasteboard.general.copyString(command)
+                        }
+                    }
+                    .disabled(CommitCommands.cherryPickCommand(forHash: detail.hash) == nil)
+                }
                 Text("\(detail.files.count) file\(detail.files.count == 1 ? "" : "s") changed")
                     .font(.caption)
                     .foregroundStyle(.secondary)
