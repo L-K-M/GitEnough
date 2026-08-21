@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 
 /// The detail pane's tabs. In AppState (not the view) so menu commands with
@@ -39,6 +40,11 @@ final class AppState: ObservableObject {
     @Published var lastAddedRepoPath: String?
 
     private var viewModels: [String: RepoViewModel] = [:]
+    /// Forwards every view model's objectWillChange through AppState, so
+    /// SwiftUI Commands (whose @ObservedObject is AppState) re-evaluate menu
+    /// enablement when repo state moves — without it, items gated on
+    /// canPull/canPush/canPublish go stale until AppState itself changes.
+    private var viewModelCancellables: [String: AnyCancellable] = [:]
 
     /// App-wide persistent git command history ("shell history" window).
     /// Every repo view model's activity log forwards events here.
@@ -96,6 +102,8 @@ final class AppState: ObservableObject {
             self?.activityStore.record(event, repoName: repo.name, repoPath: repo.path)
         }
         viewModels[repo.path] = vm
+        viewModelCancellables[repo.path] = vm.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
         vm.start()
         return vm
     }
@@ -154,6 +162,7 @@ final class AppState: ObservableObject {
 
     func remove(_ repo: Repository) {
         viewModels.removeValue(forKey: repo.path)
+        viewModelCancellables.removeValue(forKey: repo.path)
         store.remove(repo)
         if selectedRepoPath == repo.path {
             selectedRepoPath = store.repositories.first?.path
