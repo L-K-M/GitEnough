@@ -7,6 +7,7 @@ struct BranchesView: View {
     @ObservedObject var viewModel: RepoViewModel
 
     @State private var branchToDelete: Branch?
+    @State private var remoteBranchToDelete: Branch?
     @State private var branchToMerge: Branch?
     @State private var stashToDrop: StashEntry?
     @State private var branchToRename: Branch?
@@ -59,6 +60,10 @@ struct BranchesView: View {
                             Button("Check Out as \(local)") { viewModel.checkout(branch: branch) }
                         }
                         Button("Merge into Current Branch…") { branchToMerge = branch }
+                        Divider()
+                        Button("Delete Remote Branch…", role: .destructive) {
+                            remoteBranchToDelete = branch
+                        }
                     }
                 }
             } header: {
