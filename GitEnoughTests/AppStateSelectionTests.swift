@@ -3,75 +3,79 @@ import XCTest
 @testable import GitEnough
 
 final class AppStateSelectionTests: XCTestCase {
-    private let repositoryKey = "repositories.v1"
-    private let selectionKey = "selectedRepository"
+    private var defaults: UserDefaults!
+    private var suiteName = ""
 
     override func setUpWithError() throws {
-        clearDefaults()
+        try super.setUpWithError()
+        suiteName = "GitEnough.AppStateSelectionTests.\(UUID().uuidString)"
+        defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defaults.removePersistentDomain(forName: suiteName)
     }
 
     override func tearDownWithError() throws {
-        clearDefaults()
+        defaults?.removePersistentDomain(forName: suiteName)
+        defaults = nil
+        try super.tearDownWithError()
     }
 
-    func testInitializationRestoresRespelledRegisteredPath() throws {
+    func testInitializationRestoresRespelledRegisteredPath() {
         let repo = Repository(path: "/tmp/example/repo", name: "repo")
-        try persistRepositories([repo])
-        UserDefaults.standard.set("/tmp/example/./repo", forKey: selectionKey)
+        seedRepositories([repo])
+        defaults.set("/tmp/example/./repo", forKey: AppState.selectedRepositoryKey)
 
-        let state = AppState()
+        let state = AppState(defaults: defaults)
 
         XCTAssertEqual(state.selectedRepoPath, repo.path)
         XCTAssertEqual(state.selectedRepository, repo)
-        XCTAssertEqual(UserDefaults.standard.string(forKey: selectionKey), repo.path)
+        XCTAssertEqual(defaults.string(forKey: AppState.selectedRepositoryKey), repo.path)
     }
 
-    func testInitializationFallsBackWhenSavedPathIsMissing() throws {
+    func testInitializationFallsBackWhenSavedPathIsMissing() {
         let repos = [
             Repository(path: "/tmp/first", name: "first"),
             Repository(path: "/tmp/second", name: "second")
         ]
-        try persistRepositories(repos)
-        UserDefaults.standard.set("/tmp/no-longer-registered", forKey: selectionKey)
+        seedRepositories(repos)
+        defaults.set("/tmp/no-longer-registered", forKey: AppState.selectedRepositoryKey)
 
-        let state = AppState()
+        let state = AppState(defaults: defaults)
 
         XCTAssertEqual(state.selectedRepoPath, repos[0].path)
         XCTAssertEqual(state.selectedRepository, repos[0])
-        XCTAssertEqual(UserDefaults.standard.string(forKey: selectionKey), repos[0].path)
+        XCTAssertEqual(defaults.string(forKey: AppState.selectedRepositoryKey), repos[0].path)
     }
 
-    func testInitializationFallsBackWhenNoSelectionWasSaved() throws {
+    func testInitializationFallsBackWhenNoSelectionWasSaved() {
         let repos = [
             Repository(path: "/tmp/first", name: "first"),
             Repository(path: "/tmp/second", name: "second")
         ]
-        try persistRepositories(repos)
+        seedRepositories(repos)
 
-        let state = AppState()
+        let state = AppState(defaults: defaults)
 
         XCTAssertEqual(state.selectedRepoPath, repos[0].path)
         XCTAssertEqual(state.selectedRepository, repos[0])
-        XCTAssertEqual(UserDefaults.standard.string(forKey: selectionKey), repos[0].path)
+        XCTAssertEqual(defaults.string(forKey: AppState.selectedRepositoryKey), repos[0].path)
     }
 
     func testInitializationWithEmptyStoreClearsStaleSelection() {
-        UserDefaults.standard.set("/tmp/no-longer-registered", forKey: selectionKey)
+        defaults.set("/tmp/no-longer-registered", forKey: AppState.selectedRepositoryKey)
 
-        let state = AppState()
+        let state = AppState(defaults: defaults)
 
         XCTAssertNil(state.selectedRepoPath)
         XCTAssertNil(state.selectedRepository)
-        XCTAssertNil(UserDefaults.standard.string(forKey: selectionKey))
+        XCTAssertNil(defaults.string(forKey: AppState.selectedRepositoryKey))
     }
 
-    private func persistRepositories(_ repositories: [Repository]) throws {
-        UserDefaults.standard.set(try JSONEncoder().encode(repositories),
-                                  forKey: repositoryKey)
-    }
-
-    private func clearDefaults() {
-        UserDefaults.standard.removeObject(forKey: repositoryKey)
-        UserDefaults.standard.removeObject(forKey: selectionKey)
+    private func seedRepositories(_ repositories: [Repository]) {
+        let store = RepoStore(defaults: defaults)
+        // register inserts at the front, so reverse the fixtures to preserve
+        // their declared order for first-repository fallback assertions.
+        for repository in repositories.reversed() {
+            store.register(repository)
+        }
     }
 }

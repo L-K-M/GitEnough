@@ -15,12 +15,13 @@ enum DetailTab: String, CaseIterable, Identifiable {
 /// switching repos doesn't lose scroll position or reload history).
 final class AppState: ObservableObject {
 
-    private static let selectedRepositoryKey = "selectedRepository"
+    static let selectedRepositoryKey = "selectedRepository"
 
-    let store = RepoStore()
+    private let defaults: UserDefaults
+    let store: RepoStore
 
     @Published var selectedRepoPath: String? {
-        didSet { Self.persistSelection(selectedRepoPath) }
+        didSet { Self.persistSelection(selectedRepoPath, in: defaults) }
     }
     @Published var selectedTab: DetailTab = .history
 
@@ -65,8 +66,10 @@ final class AppState: ObservableObject {
         return viewModel(for: repo)
     }
 
-    init() {
-        let savedPath = UserDefaults.standard.string(forKey: Self.selectedRepositoryKey)
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        store = RepoStore(defaults: defaults)
+        let savedPath = defaults.string(forKey: Self.selectedRepositoryKey)
         // Initialize the wrapped property before consulting another instance
         // property (`store`), then replace it with the validated selection.
         selectedRepoPath = savedPath
@@ -75,7 +78,7 @@ final class AppState: ObservableObject {
         // Property observers don't run during initialization. Persist a repaired
         // spelling or fallback so the stored value agrees with the live selection.
         if selectedRepoPath != savedPath {
-            Self.persistSelection(selectedRepoPath)
+            Self.persistSelection(selectedRepoPath, in: defaults)
         }
         // Watch-folder discovery: cheap file-system scan, no git invocation.
         let timer = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
@@ -99,11 +102,11 @@ final class AppState: ObservableObject {
         }?.path ?? repositories.first?.path
     }
 
-    private static func persistSelection(_ path: String?) {
+    private static func persistSelection(_ path: String?, in defaults: UserDefaults) {
         if let path {
-            UserDefaults.standard.set(path, forKey: selectedRepositoryKey)
+            defaults.set(path, forKey: selectedRepositoryKey)
         } else {
-            UserDefaults.standard.removeObject(forKey: selectedRepositoryKey)
+            defaults.removeObject(forKey: selectedRepositoryKey)
         }
     }
 
@@ -244,7 +247,7 @@ final class AppState: ObservableObject {
     /// discovery timer; skipped while an operation is already running so an
     /// automatic fetch never queues behind (or double-books) a manual one.
     private func autoFetchIfDue() {
-        let minutes = UserDefaults.standard.integer(forKey: Self.autoFetchMinutesKey)
+        let minutes = defaults.integer(forKey: Self.autoFetchMinutesKey)
         guard minutes > 0 else { return }
         guard let viewModel = activeViewModel, !viewModel.isBusy else { return }
         // Multiply in Double: minutes comes from UserDefaults, where a
@@ -262,7 +265,7 @@ final class AppState: ObservableObject {
     /// minute timer, on app activation, on launch, and right after the folder is
     /// changed in Settings. No-op when no folder is configured.
     func scanDiscoveryFolder() {
-        let folder = UserDefaults.standard.string(forKey: Self.discoveryFolderKey) ?? ""
+        let folder = defaults.string(forKey: Self.discoveryFolderKey) ?? ""
         guard !folder.isEmpty else { return }
         let root = URL(fileURLWithPath: (folder as NSString).expandingTildeInPath)
         guard FileManager.default.fileExists(atPath: root.path) else { return }
