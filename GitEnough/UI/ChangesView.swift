@@ -201,8 +201,10 @@ struct ChangesView: View {
                         Button("Stash…") { showingStashSheet = true }
                             .buttonStyle(.borderless)
                             .font(.caption)
-                            .disabled(conflictUIActive)
-                            .help(conflictUIActive
+                            .disabled(viewModel.isBusy || conflictUIActive)
+                            .help(viewModel.isBusy
+                                  ? "Stash is unavailable while an operation is running"
+                                  : conflictUIActive
                                   ? "Stash is unavailable while a merge/rebase is in progress"
                                   : "Stash your changes and restore them later")
                     }
