@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 /// The Branches tab: local branches, remote branches, and the stash — with
 /// checkout / merge / delete / apply / drop actions.
@@ -29,6 +30,7 @@ struct BranchesView: View {
                                 renameText = branch.name
                                 branchToRename = branch
                             }
+                            Button("Copy Name") { copyToPasteboard(branch.name) }
                             if !branch.isHead {
                                 Divider()
                                 Button("Delete…", role: .destructive) { branchToDelete = branch }
@@ -59,6 +61,7 @@ struct BranchesView: View {
                             Button("Check Out as \(local)") { viewModel.checkout(branch: branch) }
                         }
                         Button("Merge into Current Branch…") { branchToMerge = branch }
+                        Button("Copy Name") { copyToPasteboard(branch.name) }
                     }
                 }
             } header: {
@@ -158,6 +161,11 @@ struct BranchesView: View {
             }
             .padding(20)
         }
+    }
+
+    private func copyToPasteboard(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
     }
 
     private var deleteConfirmationPresented: Binding<Bool> {

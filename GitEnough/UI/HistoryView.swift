@@ -259,6 +259,13 @@ struct HistoryView: View {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(commit.subject, forType: .string)
         }
+        // "abc1234 Subject" — the shape reflog, PR descriptions, and chat
+        // references use.
+        Button("Copy Hash and Message") {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString("\(commit.shortHash) \(commit.subject)",
+                                           forType: .string)
+        }
         Divider()
         Button("Create Branch Here…") {
             branchNameForNewBranch = ""
