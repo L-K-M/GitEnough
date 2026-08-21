@@ -252,12 +252,15 @@ struct HistoryView: View {
     @ViewBuilder
     private func commitContextMenu(_ commit: Commit) -> some View {
         Button("Copy Hash") {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(commit.hash, forType: .string)
+            NSPasteboard.general.copyString(commit.hash)
         }
-        Button("Copy Message") {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(commit.subject, forType: .string)
+        Button("Copy Subject") {
+            NSPasteboard.general.copyString(commit.subject)
+        }
+        // "abc1234 Subject" — the shape reflog, PR descriptions, and chat
+        // references use.
+        Button("Copy Hash and Subject") {
+            NSPasteboard.general.copyString("\(commit.shortHash) \(commit.subject)")
         }
         Divider()
         Button("Create Branch Here…") {
