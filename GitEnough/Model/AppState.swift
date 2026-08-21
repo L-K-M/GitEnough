@@ -15,10 +15,12 @@ enum DetailTab: String, CaseIterable, Identifiable {
 /// switching repos doesn't lose scroll position or reload history).
 final class AppState: ObservableObject {
 
+    private static let selectedRepositoryKey = "selectedRepository"
+
     let store = RepoStore()
 
     @Published var selectedRepoPath: String? {
-        didSet { UserDefaults.standard.set(selectedRepoPath, forKey: "selectedRepository") }
+        didSet { Self.persistSelection(selectedRepoPath) }
     }
     @Published var selectedTab: DetailTab = .history
 
@@ -64,9 +66,16 @@ final class AppState: ObservableObject {
     }
 
     init() {
-        selectedRepoPath = UserDefaults.standard.string(forKey: "selectedRepository")
-        if selectedRepoPath == nil {
-            selectedRepoPath = store.repositories.first?.path
+        let savedPath = UserDefaults.standard.string(forKey: Self.selectedRepositoryKey)
+        // Initialize the wrapped property before consulting another instance
+        // property (`store`), then replace it with the validated selection.
+        selectedRepoPath = savedPath
+        selectedRepoPath = Self.restoredSelection(
+            savedPath, repositories: store.repositories)
+        // Property observers don't run during initialization. Persist a repaired
+        // spelling or fallback so the stored value agrees with the live selection.
+        if selectedRepoPath != savedPath {
+            Self.persistSelection(selectedRepoPath)
         }
         // Watch-folder discovery: cheap file-system scan, no git invocation.
         let timer = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
@@ -75,6 +84,27 @@ final class AppState: ObservableObject {
         }
         RunLoop.main.add(timer, forMode: .common)
         discoveryTimer = timer
+    }
+
+    /// Resolves a persisted spelling to the corresponding registered row.
+    /// RepoStore treats normalized paths as identity, so startup must do the
+    /// same; otherwise a symlink or `.` spelling leaves the detail pane on the
+    /// Welcome screen even though that repository is visible in the sidebar.
+    private static func restoredSelection(_ savedPath: String?,
+                                          repositories: [Repository]) -> String? {
+        guard let savedPath else { return repositories.first?.path }
+        let normalizedSavedPath = Repository.normalizedPath(savedPath)
+        return repositories.first {
+            $0.normalizedPath == normalizedSavedPath
+        }?.path ?? repositories.first?.path
+    }
+
+    private static func persistSelection(_ path: String?) {
+        if let path {
+            UserDefaults.standard.set(path, forKey: selectedRepositoryKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: selectedRepositoryKey)
+        }
     }
 
     deinit {
