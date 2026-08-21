@@ -71,9 +71,12 @@ final class GitClient {
     /// flag prevents a new query from quietly reintroducing optional index
     /// refreshes and lock contention.
     static func readOnlyArguments(_ args: [String]) -> [String] {
-        guard !args.contains("--no-optional-locks") else { return args }
-        var result = args
         let insertionIndex = args.count >= 2 && args[0] == "-C" ? 2 : 0
+        if args.indices.contains(insertionIndex),
+           args[insertionIndex] == "--no-optional-locks" {
+            return args
+        }
+        var result = args
         result.insert("--no-optional-locks", at: insertionIndex)
         return result
     }

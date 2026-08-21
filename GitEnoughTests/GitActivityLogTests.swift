@@ -127,6 +127,19 @@ final class GitActivityLogTests: XCTestCase {
         XCTAssertEqual(GitClient.readOnlyArguments(guarded), guarded)
     }
 
+    func testReadOnlyArgumentsDoNotMistakeAPathspecForTheGlobalFlag() {
+        XCTAssertEqual(
+            GitClient.readOnlyArguments(
+                ["-C", "/r", "diff", "--", "--no-optional-locks"]),
+            ["-C", "/r", "--no-optional-locks", "diff", "--",
+             "--no-optional-locks"])
+        XCTAssertEqual(
+            GitClient.readOnlyArguments(
+                ["check-ignore", "--", "--no-optional-locks"]),
+            ["--no-optional-locks", "check-ignore", "--",
+             "--no-optional-locks"])
+    }
+
     func testStderrTailHasCredentialsRedacted() {
         let log = GitActivityLog()
         let id = log.begin(command: "fetch")
