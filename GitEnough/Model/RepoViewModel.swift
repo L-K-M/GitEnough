@@ -260,6 +260,10 @@ final class RepoViewModel: ObservableObject, Identifiable {
     /// from running a raw `git push` that would only fail — or, under a legacy
     /// `push.default=matching` config, push every name-matching branch.
     func pushOrPublish() {
+        guard !remotes.isEmpty else {
+            errorMessage = "Can't push: this repository has no remotes configured. Add a remote first."
+            return
+        }
         if Self.shouldPublish(upstream: status.upstream, remotes: remotes) {
             publishBranch()
         } else {
