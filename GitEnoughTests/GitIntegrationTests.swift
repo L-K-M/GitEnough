@@ -278,6 +278,44 @@ final class GitIntegrationTests: XCTestCase {
             "one\n")
     }
 
+    func testStageAndUnstageCopyDoNotTouchSourceState() throws {
+        try run(["config", "status.renames", "copies"])
+        try write("one\n", to: "copied.txt")
+        try write("staged source\n", to: "a.txt")
+        try client.stage(paths: ["a.txt", "copied.txt"])
+
+        var copy = try XCTUnwrap(
+            try client.status().staged.first { $0.stagedStatus == .copied })
+        try client.unstage(paths: copy.affectedPaths)
+
+        var status = try client.status()
+        XCTAssertTrue(status.staged.contains {
+            $0.path == "a.txt" && $0.stagedStatus == .modified
+        })
+        XCTAssertTrue(status.unstaged.contains {
+            $0.path == "copied.txt" && $0.isUntracked
+        })
+
+        // Re-stage the copy, then give its independently staged source another
+        // worktree edit. Staging the copy row must not absorb that source edit.
+        try client.stage(paths: ["copied.txt"])
+        try write("unstaged source\n", to: "a.txt")
+        status = try client.status()
+        copy = try XCTUnwrap(status.staged.first { $0.stagedStatus == .copied })
+        XCTAssertEqual(copy.affectedPaths, ["copied.txt"])
+
+        try client.stage(paths: copy.affectedPaths)
+
+        status = try client.status()
+        let source = try XCTUnwrap(status.staged.first { $0.path == "a.txt" })
+        XCTAssertEqual(source.stagedStatus, .modified)
+        XCTAssertEqual(source.unstagedStatus, .modified)
+        XCTAssertEqual(
+            try String(contentsOf: repoURL.appendingPathComponent("a.txt"),
+                       encoding: .utf8),
+            "unstaged source\n")
+    }
+
     func testDiscardTreatsGlobCharactersInFilenamesLiterally() throws {
         try write("star\n", to: "a*.txt")
         try write("plain\n", to: "abc.txt")
