@@ -15,10 +15,13 @@ enum DetailTab: String, CaseIterable, Identifiable {
 /// switching repos doesn't lose scroll position or reload history).
 final class AppState: ObservableObject {
 
-    let store = RepoStore()
+    static let selectedRepositoryKey = "selectedRepository"
+
+    private let defaults: UserDefaults
+    let store: RepoStore
 
     @Published var selectedRepoPath: String? {
-        didSet { UserDefaults.standard.set(selectedRepoPath, forKey: "selectedRepository") }
+        didSet { Self.persistSelection(selectedRepoPath, in: defaults) }
     }
     @Published var selectedTab: DetailTab = .history
 
@@ -63,10 +66,19 @@ final class AppState: ObservableObject {
         return viewModel(for: repo)
     }
 
-    init() {
-        selectedRepoPath = UserDefaults.standard.string(forKey: "selectedRepository")
-        if selectedRepoPath == nil {
-            selectedRepoPath = store.repositories.first?.path
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        store = RepoStore(defaults: defaults)
+        let savedPath = defaults.string(forKey: Self.selectedRepositoryKey)
+        // Initialize the wrapped property before consulting another instance
+        // property (`store`), then replace it with the validated selection.
+        selectedRepoPath = savedPath
+        selectedRepoPath = Self.restoredSelection(
+            savedPath, repositories: store.repositories)
+        // Property observers don't run during initialization. Persist a repaired
+        // spelling or fallback so the stored value agrees with the live selection.
+        if selectedRepoPath != savedPath {
+            Self.persistSelection(selectedRepoPath, in: defaults)
         }
         // Watch-folder discovery: cheap file-system scan, no git invocation.
         let timer = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
@@ -75,6 +87,27 @@ final class AppState: ObservableObject {
         }
         RunLoop.main.add(timer, forMode: .common)
         discoveryTimer = timer
+    }
+
+    /// Resolves a persisted spelling to the corresponding registered row.
+    /// RepoStore treats normalized paths as identity, so startup must do the
+    /// same; otherwise a symlink or `.` spelling leaves the detail pane on the
+    /// Welcome screen even though that repository is visible in the sidebar.
+    private static func restoredSelection(_ savedPath: String?,
+                                          repositories: [Repository]) -> String? {
+        guard let savedPath else { return repositories.first?.path }
+        let normalizedSavedPath = Repository.normalizedPath(savedPath)
+        return repositories.first {
+            $0.normalizedPath == normalizedSavedPath
+        }?.path ?? repositories.first?.path
+    }
+
+    private static func persistSelection(_ path: String?, in defaults: UserDefaults) {
+        if let path {
+            defaults.set(path, forKey: selectedRepositoryKey)
+        } else {
+            defaults.removeObject(forKey: selectedRepositoryKey)
+        }
     }
 
     deinit {
@@ -214,7 +247,7 @@ final class AppState: ObservableObject {
     /// discovery timer; skipped while an operation is already running so an
     /// automatic fetch never queues behind (or double-books) a manual one.
     private func autoFetchIfDue() {
-        let minutes = UserDefaults.standard.integer(forKey: Self.autoFetchMinutesKey)
+        let minutes = defaults.integer(forKey: Self.autoFetchMinutesKey)
         guard minutes > 0 else { return }
         guard let viewModel = activeViewModel, !viewModel.isBusy else { return }
         // Multiply in Double: minutes comes from UserDefaults, where a
@@ -232,7 +265,7 @@ final class AppState: ObservableObject {
     /// minute timer, on app activation, on launch, and right after the folder is
     /// changed in Settings. No-op when no folder is configured.
     func scanDiscoveryFolder() {
-        let folder = UserDefaults.standard.string(forKey: Self.discoveryFolderKey) ?? ""
+        let folder = defaults.string(forKey: Self.discoveryFolderKey) ?? ""
         guard !folder.isEmpty else { return }
         let root = URL(fileURLWithPath: (folder as NSString).expandingTildeInPath)
         guard FileManager.default.fileExists(atPath: root.path) else { return }
