@@ -131,10 +131,14 @@ struct HistoryView: View {
         // Evaluated once per body evaluation and shared by the list, the
         // empty-state check, and the filter bar's counter.
         let visible = visibleCommits
+        let showsUnbornEmptyState = viewModel.status.isUnborn && viewModel.commits.isEmpty
         return VStack(spacing: 0) {
-            filterBar(matchCount: visible.count)
-            Divider()
-            if viewModel.status.isUnborn && viewModel.commits.isEmpty {
+            // No filter bar over the empty state — there is nothing to filter.
+            if !showsUnbornEmptyState {
+                filterBar(matchCount: visible.count)
+                Divider()
+            }
+            if showsUnbornEmptyState {
                 // A fresh `git init` used to render a silent blank pane here.
                 // (Gated on isUnborn, not on the commit list alone — an empty
                 // list is also the initial-load state of a normal repo.)
