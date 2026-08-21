@@ -276,6 +276,11 @@ final class GitShell {
 
         var outData = Data()
         var errData = Data()
+        /// Set by the writer thread on a NON-EPIPE write failure (EPIPE means
+        /// the child exited, so its own exit status tells the story).
+        /// Written before group.leave(), read after group.wait() — the
+        /// DispatchGroup provides the happens-before edge.
+        var writeError: NSError?
         let group = DispatchGroup()
         group.enter()
         DispatchQueue.global(qos: .userInitiated).async {
@@ -309,6 +314,7 @@ final class GitShell {
                 NSLog("[GitShell] stdin write to git failed (%@): %@",
                       isExpectedEPIPE ? "expected EPIPE" : "unexpected",
                       String(describing: error))
+                if !isExpectedEPIPE { writeError = nsError }
             }
             try? inPipe.fileHandleForWriting.close()
             group.leave()
@@ -316,6 +322,16 @@ final class GitShell {
 
         process.waitUntilExit()
         group.wait()
+
+        // A failed stdin write with a still-living child means git read a
+        // truncated message and may happily commit it — a success the user
+        // must not see unqualified. (EPIPE is excluded: the child is gone,
+        // so no truncated commit can exist.)
+        if let writeError, process.terminationStatus == 0 {
+            throw GitError(
+                message: "Writing the commit message to git failed (\(writeError.localizedDescription)). git may have committed a truncated message — check the last commit and amend if needed.",
+                exitCode: -1)
+        }
 
         let stdout = String(data: outData, encoding: .utf8)
             ?? String(decoding: outData, as: UTF8.self)
