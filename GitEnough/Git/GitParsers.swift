@@ -161,9 +161,13 @@ enum GitParsers {
             // Skip the remote HEAD symref (e.g. "origin/HEAD") — it's not a real branch.
             if isRemote && fields[1].hasSuffix("/HEAD") { continue }
             var ahead = 0, behind = 0
+            var upstreamGone = false
             let track = fields[3]
             if track.hasPrefix("[") && track.hasSuffix("]") {
                 for part in track.dropFirst().dropLast().components(separatedBy: ", ") {
+                    // "[gone]": the upstream is configured but its ref no
+                    // longer exists (deleted on the remote, then pruned).
+                    if part == "gone" { upstreamGone = true }
                     if part.hasPrefix("ahead ") { ahead = Int(part.dropFirst(6)) ?? 0 }
                     if part.hasPrefix("behind ") { behind = Int(part.dropFirst(7)) ?? 0 }
                 }
@@ -174,7 +178,8 @@ enum GitParsers {
                 isHead: fields[4] == "*",
                 upstream: fields[2].isEmpty ? nil : fields[2],
                 ahead: ahead,
-                behind: behind
+                behind: behind,
+                upstreamGone: upstreamGone
             ))
         }
         return branches

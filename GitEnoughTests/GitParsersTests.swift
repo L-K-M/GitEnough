@@ -143,6 +143,24 @@ final class GitParsersTests: XCTestCase {
         XCTAssertTrue(branches[1].upstream == nil)
         XCTAssertTrue(branches[2].isRemote)
         XCTAssertEqual(branches[2].localNameForRemote, "main")
+        XCTAssertTrue(branches.allSatisfy { !$0.upstreamGone })
+    }
+
+    func testParseBranchesGoneUpstream() {
+        // %(upstream:track) prints "[gone]" when the upstream is configured
+        // but its ref no longer exists (deleted on the remote, then pruned).
+        let gone = ["refs/heads/old-feature", "old-feature", "origin/old-feature", "[gone]", ""]
+            .joined(separator: f)
+        let tracking = ["refs/heads/main", "main", "origin/main", "[ahead 1]", "*"]
+            .joined(separator: f)
+        let branches = GitParsers.parseBranches([gone, tracking].joined(separator: "\n"))
+        XCTAssertEqual(branches.count, 2)
+        XCTAssertTrue(branches[0].upstreamGone)
+        XCTAssertEqual(branches[0].upstream, "origin/old-feature")
+        XCTAssertEqual(branches[0].ahead, 0)
+        XCTAssertEqual(branches[0].behind, 0)
+        XCTAssertFalse(branches[1].upstreamGone)
+        XCTAssertEqual(branches[1].ahead, 1)
     }
 
     // MARK: - Remotes
