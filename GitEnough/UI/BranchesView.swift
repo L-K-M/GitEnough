@@ -5,6 +5,7 @@ import SwiftUI
 struct BranchesView: View {
 
     @ObservedObject var viewModel: RepoViewModel
+    @EnvironmentObject var appState: AppState
 
     @State private var branchToDelete: Branch?
     @State private var branchToMerge: Branch?
@@ -39,7 +40,16 @@ struct BranchesView: View {
                         }
                 }
             } header: {
-                Text("Local Branches (\(localBranches.count))")
+                HStack {
+                    Text("Local Branches (\(localBranches.count))")
+                    Spacer()
+                    // Branch creation lives here too, not only in the toolbar
+                    // and ⇧⌘B — the tab where branch operations actually happen
+                    // should offer the most common one.
+                    Button("New Branch…") { appState.showingNewBranch = true }
+                        .buttonStyle(.borderless)
+                        .font(.caption)
+                }
             }
 
             Section {
