@@ -41,6 +41,13 @@ struct Branch: Identifiable, Hashable {
     let upstream: String?       // e.g. "origin/main"
     let ahead: Int
     let behind: Int
+    /// When the branch tip was last committed to (for-each-ref
+    /// `%(committerdate:iso8601-strict)`); nil when the caller's format
+    /// omitted it. The "which branches are alive?" datum — renders relative
+    /// ("3 days ago") in the branch lists and doubles as stale-branch triage
+    /// next to the ahead/behind columns. `var` with a default so existing
+    /// memberwise call sites (tests) compile unchanged.
+    var lastCommitDate: Date? = nil
 
     var id: String { (isRemote ? "remote/" : "local/") + name }
 
