@@ -114,6 +114,19 @@ struct FileChange: Identifiable, Hashable {
     var hasUnstaged: Bool { unstagedStatus != nil }
     var isConflicted: Bool { stagedStatus == .unmerged || unstagedStatus == .unmerged }
     var isUntracked: Bool { stagedStatus == .untracked || unstagedStatus == .untracked }
+    var isRename: Bool { stagedStatus == .renamed || unstagedStatus == .renamed }
+    var isCopy: Bool { stagedStatus == .copied || unstagedStatus == .copied }
+
+    /// Paths that should move together for stage/unstage/discard. A rename
+    /// includes its source deletion; a copy does not — its source is an
+    /// independent tracked file whose staged or worktree edits must survive an
+    /// action on the copy destination.
+    var affectedPaths: [String] {
+        if isRename, let originalPath {
+            return [path, originalPath]
+        }
+        return [path]
+    }
 
     /// The most relevant status for display.
     var displayStatus: Status { stagedStatus ?? unstagedStatus ?? .modified }
