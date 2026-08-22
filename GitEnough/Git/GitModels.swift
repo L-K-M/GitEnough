@@ -49,6 +49,13 @@ struct Branch: Identifiable, Hashable {
     /// call sites without tracking data (and the memberwise initializer's
     /// existing callers) stay unchanged.
     var upstreamGone: Bool = false
+    /// When the branch tip was last committed to (for-each-ref
+    /// `%(committerdate:iso8601-strict)`); nil when the caller's format
+    /// omitted it. The "which branches are alive?" datum — renders relative
+    /// ("3 days ago") in the branch lists and doubles as stale-branch triage
+    /// next to the ahead/behind columns. `var` with a default so existing
+    /// memberwise call sites (tests) compile unchanged.
+    var lastCommitDate: Date? = nil
 
     var id: String { refName }
 

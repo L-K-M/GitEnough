@@ -250,6 +250,31 @@ final class GitParsersTests: XCTestCase {
                        ["refs/heads/same", "refs/remotes/origin/same"])
     }
 
+    func testParseBranchesWithLastCommitDate() {
+        // The branches() format's optional trailing field: strict ISO 8601,
+        // parseable by the same formatter the log format uses.
+        let line1 = ["refs/heads/main", "main", "", "", "", "2026-08-17T19:00:00+02:00"]
+            .joined(separator: f)
+        // Legacy five-field lines (tests, older callers) parse unchanged.
+        let line2 = ["refs/heads/feature", "feature", "", "", ""]
+            .joined(separator: f)
+        // An unparseable date degrades to nil rather than dropping the branch.
+        let line3 = ["refs/heads/broken", "broken", "", "", "", "not-a-date"]
+            .joined(separator: f)
+        let branches = GitParsers.parseBranches([line1, line2, line3].joined(separator: "\n"))
+
+        XCTAssertEqual(branches.count, 3)
+        // Fail loudly when the fixture's date doesn't parse — comparing an
+        // optional against nil would pass vacuously otherwise.
+        guard let expected = GitParsers.parseDate("2026-08-17T19:00:00+02:00") else {
+            XCTFail("strict ISO 8601 with a numeric offset (+02:00) must parse")
+            return
+        }
+        XCTAssertEqual(branches[0].lastCommitDate, expected)
+        XCTAssertNil(branches[1].lastCommitDate)
+        XCTAssertNil(branches[2].lastCommitDate)
+    }
+
     // MARK: - Remotes
 
     func testParseRemotesCollapsesFetchAndPush() {

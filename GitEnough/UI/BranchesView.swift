@@ -73,6 +73,7 @@ struct BranchesView: View {
                             Text(branch.name)
                                 .font(.callout)
                             Spacer()
+                            BranchRecencyText(date: branch.lastCommitDate)
                         }
                         .padding(.vertical, 2)
                         .contextMenu {
@@ -266,7 +267,26 @@ private struct LocalBranchRow: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
+            BranchRecencyText(date: branch.lastCommitDate)
         }
         .padding(.vertical, 2)
+    }
+}
+
+/// When a branch was last committed to, right-aligned in branch rows: the
+/// "which branches are alive?" signal next to ahead/behind. Hidden (not a
+/// placeholder dash) when the caller's for-each-ref format omitted the date.
+private struct BranchRecencyText: View {
+
+    let date: Date?
+
+    var body: some View {
+        if let date {
+            RelativeDateText(date: date)
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .frame(minWidth: 90, alignment: .trailing)
+                .lineLimit(1)
+        }
     }
 }

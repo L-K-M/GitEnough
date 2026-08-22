@@ -212,7 +212,8 @@ enum GitParsers {
     // MARK: - git for-each-ref
 
     /// Parses lines of `%(refname) \x1F %(refname:short) \x1F %(upstream) \x1F
-    /// %(upstream:track) \x1F %(HEAD)`.
+    /// %(upstream:track) \x1F %(HEAD) [\x1F %(committerdate:iso8601-strict)]` — the
+    /// optional trailing date keeps older five-field output parsing unchanged.
     static func parseBranches(_ output: String) -> [Branch] {
         var branches: [Branch] = []
         for line in output.components(separatedBy: "\n") where !line.isEmpty {
@@ -244,7 +245,8 @@ enum GitParsers {
                 upstream: fields[2].isEmpty ? nil : branchDisplayName(for: fields[2]),
                 ahead: ahead,
                 behind: behind,
-                upstreamGone: upstreamGone
+                upstreamGone: upstreamGone,
+                lastCommitDate: fields.count > 5 ? parseDate(fields[5]) : nil
             ))
         }
         return branches

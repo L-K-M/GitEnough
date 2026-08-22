@@ -121,6 +121,18 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertEqual(try client.status().head, "tracked-collision")
     }
 
+    func testBranchesCarryLastCommitDate() throws {
+        let branches = try client.branches()
+        // Both branches were committed to moments ago in setUp. Recency only,
+        // not cross-branch ordering: git's committer date is second-granular and
+        // a fast CI runner finishes the whole fixture inside one second.
+        for branch in branches {
+            let date = try XCTUnwrap(branch.lastCommitDate,
+                                     "\(branch.name) should carry its tip's committer date")
+            XCTAssertEqual(date.timeIntervalSinceNow, 0, accuracy: 120)
+        }
+    }
+
     func testModifyStageUnstageFlow() throws {
         try write("one\nchanged\n", to: "a.txt")
         var status = try client.status()
