@@ -203,6 +203,12 @@ private struct LocalBranchRow: View {
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
             }
+            if branch.upstreamGone {
+                Label("upstream gone", systemImage: "exclamationmark.triangle")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+                    .help("“\(branch.upstream ?? "")” no longer exists on the remote — pull will fail until the branch is pushed again (re-creating it) or its upstream is unset.")
+            }
             Spacer()
             if branch.ahead > 0 {
                 Label("\(branch.ahead)", systemImage: "arrow.up")

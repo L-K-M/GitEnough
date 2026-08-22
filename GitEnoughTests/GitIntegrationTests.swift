@@ -588,6 +588,29 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertEqual(localTag, head)
     }
 
+    func testBranchUpstreamGoneAfterRemoteDeletion() throws {
+        let remoteURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitEnoughTests-remote-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: remoteURL) }
+        try run(["init", "--bare", remoteURL.path])
+        try run(["remote", "add", "origin", remoteURL.path])
+        try client.push(setUpstream: true, remote: "origin")
+
+        var main = try XCTUnwrap(client.branches().first { $0.name == "main" && !$0.isRemote })
+        XCTAssertEqual(main.upstream, "origin/main")
+        XCTAssertFalse(main.upstreamGone)
+
+        // Delete the branch on the remote, then prune: the tracking config
+        // survives but its ref is gone — for-each-ref reports "[gone]".
+        _ = try GitShell.shared.runChecked(
+            ["-C", remoteURL.path, "update-ref", "-d", "refs/heads/main"], in: nil)
+        try run(["fetch", "--prune", "origin"])
+
+        main = try XCTUnwrap(client.branches().first { $0.name == "main" && !$0.isRemote })
+        XCTAssertTrue(main.upstreamGone)
+        XCTAssertEqual(main.upstream, "origin/main")
+    }
+
     func testCreateTagLightweightAndAnnotated() throws {
         let head = try XCTUnwrap(try client.log(limit: 1).first?.hash)
         try client.createTag(name: "v1.0", message: nil, at: head)
