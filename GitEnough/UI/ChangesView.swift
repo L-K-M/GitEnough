@@ -210,6 +210,7 @@ struct ChangesView: View {
             }
         }
         .listStyle(.inset)
+        .disabled(viewModel.isBusy)
         .frame(maxHeight: .infinity)
     }
 
@@ -324,6 +325,7 @@ struct ChangesView: View {
                 }
                 .keyboardShortcut(.defaultAction)
                 .buttonStyle(.borderedProminent)
+                .disabled(viewModel.isBusy)
             }
         }
         .padding(20)
@@ -450,6 +452,7 @@ private struct ConflictRow: View {
                     .font(.caption)
                     .help("Stage the file as-is (after resolving it yourself)")
             }
+            .disabled(viewModel.isBusy)
         }
         .padding(.vertical, 3)
         .onReceive(NotificationCenter.default.publisher(for: MergeTool.didChangeNotification)) { _ in

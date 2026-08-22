@@ -25,31 +25,31 @@ struct AppCommands: Commands {
         CommandMenu("Repository") {
             Button("Fetch") { active?.fetch() }
                 .keyboardShortcut("f", modifiers: [.option, .command])
-                .disabled(active == nil)
+                .disabled(active == nil || active?.isBusy == true)
 
             Button(pullRebase ? "Pull (Rebase)" : "Pull") { active?.pull(rebase: pullRebase) }
                 .keyboardShortcut("l", modifiers: [.shift, .command])
-                .disabled(active == nil)
+                .disabled(active == nil || active?.isBusy == true)
 
             // Shared entry point with the toolbar's Publish/Push button: with no
             // upstream this publishes the branch instead of a raw `git push`.
             Button("Push") { active?.pushOrPublish() }
                 .keyboardShortcut("p", modifiers: [.shift, .command])
-                .disabled(active == nil)
+                .disabled(active == nil || active?.isBusy == true)
 
             Button("Open Pull Request…") { active?.openPullRequest() }
                 .keyboardShortcut("p", modifiers: [.option, .command])
-                .disabled(active == nil)
+                .disabled(active == nil || active?.isBusy == true)
 
             Divider()
 
             Button("New Branch…") { appState.showingNewBranch = true }
                 .keyboardShortcut("b", modifiers: [.shift, .command])
-                .disabled(active == nil)
+                .disabled(active == nil || active?.isBusy == true)
 
             Button("Refresh") { active?.refresh(includeHistory: true) }
                 .keyboardShortcut("r", modifiers: .command)
-                .disabled(active == nil)
+                .disabled(active == nil || active?.isBusy == true)
 
             Divider()
 
