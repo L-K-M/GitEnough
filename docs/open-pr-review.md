@@ -222,9 +222,22 @@ conflict in favour of #83 — the larger, more structural PR, the natural
 instinct — turns CI red on `main` even though both PRs were green.
 
 **Fix:** keep #57's two-branch `pull()` guard and #83's `PushCapability`. They
-are complementary; only the pull wording collides. #57's *push* test stays green
-either way, because `PushCapability.resolve` returns `.unavailable(.noRemotes)`
-with matching wording.
+are complementary; only the pull wording collides.
+
+**Correction — #57's *push* test does not survive.** This review originally
+claimed it would, on the reasoning that `PushCapability.resolve` returns
+`.unavailable(.noRemotes)` with matching wording. That was wrong, and CI caught
+it: `resolve` checks repository *shape* first, and a fresh view model has no
+loaded status, so `head == nil` selects `.noCurrentBranch` long before the
+remotes check is reached. #83's ordering is right — a repo with no branch can't
+publish however many remotes it has — so the test's assumption is what is
+stale, not the code. It now pins the view model's actual contract (the reason
+is surfaced, no work is queued); each reason's wording is covered by the pure
+`PushCapability` cases, where the status can be built to select the branch
+under test.
+
+The general lesson is the same one §4.7 makes: a claim about what a *merged*
+tree does is a prediction until something type-checks and runs it.
 
 ### 4.5 · #71 × #83 — two mechanisms for the same staleness bug
 

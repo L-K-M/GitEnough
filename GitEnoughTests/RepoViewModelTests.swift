@@ -67,11 +67,20 @@ final class RepoViewModelTests: XCTestCase {
 
     // MARK: - Push guard
 
-    func testPushOrPublishWithoutRemotesFailsGracefully() {
+    func testPushOrPublishOnUnusableRepositoryFailsGracefully() {
         let viewModel = makeViewModel()
+        // A fresh view model has no loaded status, so `head` is nil and
+        // `PushCapability.resolve` stops at `.noCurrentBranch` — its
+        // repository-shape checks deliberately precede the remotes check,
+        // because a repo with no branch can't publish however many remotes it
+        // has. This test therefore pins the *view model's* contract — the
+        // reason is surfaced and no work is queued — rather than one specific
+        // reason's wording. Each reason's message is covered exhaustively by
+        // the pure PushCapability cases above, where the status can be built
+        // to select the branch under test.
         viewModel.pushOrPublish()
-        XCTAssertNotNil(viewModel.errorMessage)
-        XCTAssertTrue(viewModel.errorMessage?.contains("no remotes") ?? false)
+        XCTAssertEqual(viewModel.errorMessage,
+                       PushCapability.UnavailableReason.noCurrentBranch.message)
         XCTAssertFalse(viewModel.isBusy)
     }
 }
