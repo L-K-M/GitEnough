@@ -1,5 +1,12 @@
 # Open pull-request review — 55 PRs (#36–#90)
 
+> **Status: integrated.** This branch now *contains* the merge described below.
+> 51 of the 55 PRs are merged into it; the four omitted (#36, #56, #74, #85) are
+> superseded duplicates whose fixes arrive via their supersets (§3), so nothing
+> is lost by closing them. Every conflict was resolved by hand and every cross-PR
+> defect in §4 was fixed in the merge rather than left for later. What follows is
+> the analysis that produced that plan, kept as the record.
+
 Review of every pull request open against `main` as of 2026-08-21, covering
 mechanical state (CI, mergeability, entanglement), a verified landing order,
 duplicate/superseded groups, and the cross-PR defects that git cannot flag
@@ -248,7 +255,30 @@ rule is implemented independently in three open PRs:
 Three copies of a subtle rule is three places to regress it, as #89 already
 demonstrates. Consolidate on a single helper on `Remote`.
 
-### 4.7 · #42 hand-rolls the read-only flag
+### 4.7 · #53 × #86 — duplicate `copyString`, found only by compiling
+
+**This one the review missed; CI caught it.** Both PRs introduce the same
+clear-then-write pasteboard helper, in different files and with different
+signatures:
+
+| PR | File | Signature |
+|---|---|---|
+| #53 | `UI/NSPasteboard+CopyString.swift` | `@discardableResult func copyString(_:) -> Bool` |
+| #86 | `UI/CommonViews.swift` | `@MainActor func copyString(_:)` → `Void` |
+
+Two overloads differing only in return type are ambiguous at the call sites
+that discard the result, and the build fails with `ambiguous use of
+'copyString'`. Neither PR conflicts with the other — different files, and each
+compiles alone — so nothing short of building the merged tree reveals it.
+
+Worth stating plainly: reading 41 diffs did not surface this. A same-named
+helper added to two different files is invisible to both a per-PR read and a
+conflict scan; it needs a type-checker. Resolution keeps #53's file as the
+single definition, folds in #86's failure logging, and drops `@MainActor` so
+the non-isolated test suite can still drive it — both PRs' tests then pass
+against one implementation.
+
+### 4.8 · #42 hand-rolls the read-only flag
 
 `#42`'s `unpushedCommitHashes()` passes `--no-optional-locks` inline rather
 than going through #79's `runRead`. Correct as written, but it is precisely the
@@ -325,7 +355,41 @@ and most already fold in one or more rounds of prior review feedback.
 
 ---
 
-## 8 · Suggested sequence
+## 8 · What the integration actually did
+
+Resolutions that were judgement calls, recorded because a future reader will
+otherwise wonder why one side won:
+
+- **#57 × #83 (X1)** — kept #57's two-branch `pull()` guard. Verified afterwards
+  that the merged `RepoViewModelTests` still asserts `"no remotes"`, which is the
+  assertion that would have gone red under #83's single-message guard.
+- **#71 × #83 (X2)** — kept #71's `forwardActiveViewModelChanges` (an
+  `AnyCancellable` republishing the active view model) and deleted #83's
+  `objectWillChange.send()` from `onStatusChange`. One mechanism, not two.
+- **#71 × #83 push surface** — #83's `PushCapability` won as the Push decision,
+  but #71's liveness guards would have been lost with `canPush`/`canPublish`, so
+  they live on in a new `canPushOrPublish` (`capability.isAvailable && !isBusy &&
+  !mergeState.isInProgress`). `canPull` stays explicit — no capability type
+  models Pull.
+- **#43 × #83** — the force-push split button is driven by the same capability;
+  the menu item disables unless the capability is `.push`, since a branch with no
+  upstream has nothing to force-overwrite.
+- **#50 × #66** — merge takes #50's squash/no-ff options *and* #66's canonical
+  `branch.refName`, not the short name.
+- **#53 × #86** — #53's "Copy Subject" duplicated an existing "Copy Message";
+  kept #53's pair (Subject + Hash and Subject) rather than shipping two buttons
+  that do the same thing.
+- **#55 × #67** — `historyList` was rewritten by hand rather than patched:
+  git's markers were misaligned, and the two PRs' structures (a
+  `ScrollViewReader` wrapper vs. an unborn-empty-state branch) had to be nested,
+  not chosen between.
+- **#63 × #75** — the combined `discard` uses #63's copy-safe `affectedPaths` for
+  tracked paths and #75's `TrashMover` for untracked ones; both intents survive.
+- **#73 × #89 (X3)**, **#48 × #79 (X4)**, **#54 × #81 (X5)** — fixed as §4
+  prescribes. X5's single `didSet` now persists *and* invalidates; the accept
+  path was checked to nil its token before assigning, so it cannot self-cancel.
+
+## 9 · Suggested sequence
 
 1. Close **#36, #56, #74, #85** as superseded (§3).
 2. Merge the 36-PR verified order in §2.

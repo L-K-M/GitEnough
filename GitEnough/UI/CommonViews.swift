@@ -1,21 +1,10 @@
 import SwiftUI
 import AppKit
 
-/// One place for the clear-then-write pasteboard dance every Copy action does.
-/// Main-actor like every other AppKit touchpoint in the views; a failed write
-/// is logged, never silently swallowed. CommonViewsTests pins the contract.
-extension NSPasteboard {
-    @MainActor
-    func copyString(_ text: String) {
-        clearContents()
-        // A string write to a private pasteboard can't meaningfully fail —
-        // but if it ever does, the failure is logged, not swallowed.
-        if !setString(text, forType: .string) {
-            NSLog("[GitEnough] NSPasteboard.setString failed for %ld characters on %@",
-                  text.count, name.rawValue)
-        }
-    }
-}
+// The clear-then-write pasteboard helper lives in NSPasteboard+CopyString.swift.
+// Two parallel PRs each introduced one; a second overload here differing only in
+// return type made every `copyString` call ambiguous. CommonViewsTests still
+// pins the clear-then-write contract against that single definition.
 
 /// A small ref chip for the history list: branch heads, remote branches, tags, HEAD.
 struct RefChip: View {

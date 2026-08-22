@@ -24,16 +24,17 @@ implemented or actively being repaired/reviewed; do not start a duplicate
 unless the linked PR is closed or abandoned. Check its current checks, feedback,
 base, and dependencies before relying on it:
 
-**Verified 2026-08-21** (see `docs/open-pr-review.md` for the full record and
-the reproduction of every claim): all 55 open PRs (#36–#90) are green on
-`Build & Test`, and all 55 merge cleanly onto `main` *individually* — but there
-are 50 conflicting pairs *between* them, and pairwise independence does not
-survive stacking. A verified order lands 36 of them with zero conflicts; the
-remaining 15 need hand resolution. Four PRs are superseded duplicates that
-should be closed (#36, #56, #74, #85), and seven cross-PR defects merge without
-a conflict marker and are invisible to every PR's own CI — they are filed as
-X1–X5 below. X6 records why the GLM review check is red on ~40 of them (an API
-timeout, not a code signal).
+**Waves 2–3 are now integrated** (2026-08-22). All 51 non-superseded PRs of
+#36–#90 are merged into one conflict-resolved branch; #36, #56, #74 and #85 are
+superseded duplicates whose fixes arrive via #77, #59, #47 and #63 respectively,
+so they can simply be closed. The seven cross-PR defects that merge without a
+conflict marker — invisible to every PR's own CI — were fixed in the merge, not
+deferred (X1–X5 below, now shipped).
+
+The full record, including the verified landing order and the reasoning behind
+each judgement-call resolution, is `docs/open-pr-review.md`. Rows below stay as
+the per-PR index of what each change covers. X6 records why the GLM review check
+is red on ~40 PRs (an API timeout, not a code signal) — still open.
 
 | PR | Covers |
 |----|--------|
@@ -119,72 +120,16 @@ Verified non-issues, kept for the record (don't re-audit):
 
 ## Correctness & safety
 
-### X1 · #57 × #83: keep the two-branch pull guard or CI goes red — S
+### X1–X5 · Cross-PR defects — **shipped** (fixed in the integration merge)
 
-Both PRs rewrite `RepoViewModel.pull(rebase:)`, and neither is an ancestor of
-the other. #57's guard distinguishes "no remotes configured" from "no upstream";
-#83 keeps only the no-upstream message. #57 also ships
-`RepoViewModelTests.testPullWithoutUpstreamFailsGracefully`, which asserts the
-message contains `"no remotes"` — and a fresh view model has no remotes, so
-under #83's guard that test fails. Resolving the conflict in favour of #83 (the
-larger, more structural PR) turns `main` red even though both PRs are green
-alone. Resolution: keep #57's two-branch `pull()` guard *and* #83's
-`PushCapability`; they collide only on this wording. #57's push test is
-unaffected — `PushCapability.resolve` already returns `.unavailable(.noRemotes)`
-with matching text.
-
-### X2 · #71 × #83: two mechanisms for stale menu enablement — S
-
-SwiftUI `Commands` observe `AppState`, not the nested `RepoViewModel`, so menu
-items gated on repo state go stale. #71 forwards the *active* view model's
-`objectWillChange` through an `AnyCancellable` re-subscribed on selection
-change; #83 calls `objectWillChange.send()` from `onStatusChange` when the
-changed repo is the selected one. Landing both leaves two overlapping
-mechanisms and double invalidation. Pick one during conflict resolution — #71's
-is the more general, #83's the cheaper — and delete the other.
-
-### X3 · #73 × #89: don't let the newer PR revert the slash-remote fix — S
-
-#73 replaces split-at-first-slash upstream parsing with longest-prefix matching
-against configured remotes (remote names may contain slashes). #89, opened
-later, promotes `preferredRemote` to a property for the status bar and adds a
-new **static** `preferredRemote(upstream:remotes:)` that keeps the old
-`upstream.split(separator: "/").first` logic — reverting #73 and enshrining the
-regression in #89's own unit tests. The two conflict, so resolution is manual:
-keep #89's property/status-bar surface, but route it through
-`Remote.preferred(for:among:)`.
-
-While there: the same longest-prefix rule is currently written three times —
-`Remote.preferred` (#73), `GitClient.deleteRemoteBranch` (#84), and #89's
-static selector. Consolidate on the one helper on `Remote`; three copies of a
-subtle rule is three places to regress it, as #89 already shows.
-
-### X4 · #48 × #79: the fallback error stops naming the command again — S
-
-#79 centralizes the read-only guard by inserting `--no-optional-locks` at
-`argv[2]`, right after the leading `-C <worktree>`. #48's
-`GitShell.displayCommand` strips only leading `-C` pairs and then returns
-`argv.first`, so once both land the synthesized empty-stderr failure reads
-`git --no-optional-locks failed with exit code 128` — naming no command, which
-is the exact bug #48 exists to fix. The files differ, so git reports no
-conflict and both PRs stay green alone. Fix: skip leading global flags too.
-`GitActivityLog.normalizedArguments` (#64) already strips
-`--no-optional-locks` correctly — reuse it rather than duplicating the rule.
-
-Related, cosmetic: #42's `unpushedCommitHashes()` passes `--no-optional-locks`
-inline instead of going through #79's `runRead`. Correct as written, but it is
-precisely the drift #79 centralizes to prevent; route it through `runRead`.
-
-### X5 · #54 × #81: one `didSet`, two required behaviours — S
-
-Both add a `didSet` to `RepoViewModel.draftCommitMessage`: #54 persists the
-draft per repository, #81 bumps the draft revision and invalidates an in-flight
-AI generation so typing cancels a late suggestion. Swift allows one observer,
-so this is a real conflict — but taking either side wholesale silently drops
-the other behaviour, and neither PR's tests cover the other's. The merged
-observer must do both, and #54's init-time restore must keep going through
-`_draftCommitMessage = Published(initialValue:)` so restoring a draft is not
-counted as user typing (which would invalidate a generation at launch).
+The five cross-PR defects found in the wave-2/3 review no longer exist as
+backlog: the integration branch merges all 51 non-superseded PRs and fixes each
+one in the merge itself. Kept here only as a pointer, since the resolutions were
+judgement calls a future reader will want explained —
+`docs/open-pr-review.md` §8 records which side won and why for the #57×#83 pull
+guard, the #71×#83 duplicate invalidation mechanisms and push surface, the
+#73×#89 slash-remote regression, the #48×#79 error message, and the #54×#81
+single `didSet`.
 
 ### X6 · The GLM review workflow silently reviews almost nothing — S
 
