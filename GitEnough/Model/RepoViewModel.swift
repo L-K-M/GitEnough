@@ -307,9 +307,10 @@ final class RepoViewModel: ObservableObject, Identifiable {
         queue.async { [weak self] in
             let base = self?.client.remoteDefaultBranch(remote: remote.name) ?? fallbackBase
             Task { [weak self] in
-                let pullRequest = await PullRequestFinder.shared
-                    .findOpenPullRequest(for: forge, headBranch: branch)
-                let url = pullRequest?.url ?? forge.newPullRequestURL(base: base, head: branch)
+                let resolution = await PullRequestFinder.shared
+                    .resolvePullRequest(for: forge, headBranch: branch)
+                let url = resolution.pullRequest?.url
+                    ?? resolution.forge.newPullRequestURL(base: base, head: branch)
                 await MainActor.run { [weak self] in
                     self?.isResolvingPullRequest = false
                     NSWorkspace.shared.open(url)
