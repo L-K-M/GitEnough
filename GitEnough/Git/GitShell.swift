@@ -54,7 +54,7 @@ final class GitShell {
     /// session stay invisible to hooks until the app relaunches. `static let`
     /// gives us thread-safe lazy initialization.
     private static let childEnvironment: [String: String] = {
-        var env = ProcessInfo.processInfo.environment
+        var env = sanitizedEnvironment(ProcessInfo.processInfo.environment)
         // Apps launched from Finder inherit launchd's bare PATH
         // (/usr/bin:/bin:/usr/sbin:/sbin), so git hooks that call node/npm/npx
         // (husky, lint-staged, …) die with "command not found". Append the
@@ -83,6 +83,49 @@ final class GitShell {
         env["GIT_EDITOR"] = "/usr/bin/true"
         return env
     }()
+
+    /// Removes environment inherited from a launching terminal that can make
+    /// `git -C <repo>` address a different repository, worktree, object store,
+    /// or index. Keep user-wide configuration and authentication variables
+    /// (`GIT_CONFIG_GLOBAL`, credential helpers, `GIT_SSH*`, and so on): those
+    /// are part of the command-line Git behavior GitEnough promises to honour.
+    ///
+    /// Most fixed names mirror `git rev-parse --local-env-vars`. Discovery and
+    /// pathspec-mode variables are included because they can also change the
+    /// meaning of a repository or file selected in the UI.
+    static func sanitizedEnvironment(_ environment: [String: String]) -> [String: String] {
+        let repositoryLocalVariables: Set<String> = [
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+            "GIT_CEILING_DIRECTORIES",
+            "GIT_COMMON_DIR",
+            "GIT_CONFIG",
+            "GIT_CONFIG_COUNT",
+            "GIT_CONFIG_PARAMETERS",
+            "GIT_DIR",
+            "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+            "GIT_GRAFT_FILE",
+            "GIT_ICASE_PATHSPECS",
+            "GIT_IMPLICIT_WORK_TREE",
+            "GIT_INDEX_FILE",
+            "GIT_INTERNAL_SUPER_PREFIX",
+            "GIT_LITERAL_PATHSPECS",
+            "GIT_NAMESPACE",
+            "GIT_NOGLOB_PATHSPECS",
+            "GIT_NO_REPLACE_OBJECTS",
+            "GIT_OBJECT_DIRECTORY",
+            "GIT_PREFIX",
+            "GIT_QUARANTINE_PATH",
+            "GIT_REPLACE_REF_BASE",
+            "GIT_SHALLOW_FILE",
+            "GIT_WORK_TREE",
+            "GIT_GLOB_PATHSPECS",
+        ]
+        return environment.filter { key, _ in
+            !repositoryLocalVariables.contains(key)
+                && !key.hasPrefix("GIT_CONFIG_KEY_")
+                && !key.hasPrefix("GIT_CONFIG_VALUE_")
+        }
+    }
 
     /// `base` PATH plus every well-known tool location that exists on disk, so
     /// git hooks can find node/npm/npx even under launchd's minimal PATH.
