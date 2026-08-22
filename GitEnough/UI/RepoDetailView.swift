@@ -115,35 +115,24 @@ struct RepoDetailView: View {
                       ? "No upstream branch — publish first"
                       : pullRebase ? "Pull with rebase (⇧⌘L)" : "Pull (⇧⌘L)")
 
-                if viewModel.status.upstream == nil && !viewModel.remotes.isEmpty {
-                    Button {
-                        viewModel.publishBranch()
-                    } label: {
-                        Label("Publish", systemImage: "arrow.up.to.line")
-                    }
-                    .disabled(!viewModel.canPublish)
-                    .help(viewModel.mergeState.isInProgress
-                          ? "Finish or abort the in-progress operation first"
-                          : viewModel.status.isDetached
-                          ? "Check out a branch before publishing"
-                          : viewModel.status.isUnborn
-                          ? "Make a commit before publishing"
-                          : "Push and set upstream to \(viewModel.publishRemoteName)")
-                } else {
-                    Button {
-                        viewModel.push()
-                    } label: {
-                        Label(viewModel.status.ahead > 0
-                              ? "Push (\(viewModel.status.ahead))" : "Push",
-                              systemImage: "arrow.up.to.line")
-                    }
-                    .disabled(!viewModel.canPush)
-                    .help(viewModel.mergeState.isInProgress
-                          ? "Finish or abort the in-progress operation first"
-                          : viewModel.remotes.isEmpty
-                          ? "No remotes configured"
-                          : "Push (⇧⌘P)")
+                // One button for both Push and Publish: `pushCapability` decides
+                // which it is, so label, tooltip and action can't drift apart.
+                // The ahead count rides on the plain-push label — that number is
+                // most of the reason to glance at this button.
+                Button {
+                    viewModel.pushOrPublish()
+                } label: {
+                    Label(viewModel.pushCapability == .push && viewModel.status.ahead > 0
+                          ? "Push (\(viewModel.status.ahead))"
+                          : viewModel.pushCapability.label,
+                          systemImage: "arrow.up.to.line")
                 }
+                .disabled(!viewModel.canPushOrPublish)
+                // An in-progress merge/rebase isn't part of the capability's
+                // repository shape, so it needs to explain itself here.
+                .help(viewModel.mergeState.isInProgress
+                      ? "Finish or abort the in-progress operation first"
+                      : viewModel.pushCapability.help)
 
                 Button {
                     viewModel.openPullRequest()

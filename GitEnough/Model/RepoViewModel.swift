@@ -347,74 +347,54 @@ final class RepoViewModel: ObservableObject, Identifiable {
         perform(rebase ? "Pulling (rebase)…" : "Pulling…") { try $0.pull(rebase: rebase) }
     }
 
-    func push() {
+    /// The current Push button/menu state, resolved from one central, pure
+    /// decision so presentation and execution cannot drift apart.
+    var pushCapability: PushCapability {
+        PushCapability.resolve(status: status, remotes: remotes)
+    }
+
+    /// Whether the Push/Publish surfaces should be enabled. `pushCapability`
+    /// answers "what would this button do", which is about repository *shape*
+    /// (upstream, remotes, detached/unborn HEAD); this adds the two liveness
+    /// guards that shape can't express — a busy queue and an in-progress
+    /// sequencer operation, where push dies on "not currently on a branch".
+    var canPushOrPublish: Bool {
+        pushCapability.isAvailable && !isBusy && !mergeState.isInProgress
+    }
+
+    /// The Push action's single entry point, shared by the toolbar and the
+    /// Repository menu (⇧⌘P). The capability is resolved again at click time:
+    /// even a stale menu item cannot push from detached/unborn HEAD or without
+    /// a remote, and the error explains the next useful step.
+    func pushOrPublish() {
+        switch pushCapability {
+        case .push:
+            push()
+        case .publish(let remote):
+            publishBranch(to: remote)
+        case .unavailable(let reason):
+            errorMessage = reason.message
+        }
+    }
+
+    private func push() {
         perform("Pushing…", invalidatesMessageGeneration: false) {
             try $0.push(setUpstream: false)
         }
     }
 
-    /// Whether a Push action should set an upstream (publish) instead of a
-    /// plain push: the branch has no upstream and there is a remote to publish
-    /// to. Pure so the decision is unit-testable.
-    static func shouldPublish(upstream: String?, remotes: [Remote]) -> Bool {
-        upstream == nil && !remotes.isEmpty
-    }
-
-    /// The Push action's single entry point, shared by the toolbar and the
-    /// Repository menu (⌘⇧P): publishes when the branch has no upstream, plain-
-    /// pushes otherwise. The toolbar swaps its visible button (Publish ↔ Push)
-    /// to explain the same decision; routing the menu through here keeps ⌘⇧P
-    /// from running a raw `git push` that would only fail — or, under a legacy
-    /// `push.default=matching` config, push every name-matching branch.
-    func pushOrPublish() {
-        guard !remotes.isEmpty else {
-            errorMessage = "Can't push: this repository has no remotes configured. Add a remote first."
-            return
-        }
-        if Self.shouldPublish(upstream: status.upstream, remotes: remotes) {
-            publishBranch()
-        } else {
-            push()
-        }
-    }
-
-    /// The remote a branch without an upstream should be published to — "origin"
-    /// when it exists (it's the natural target even alongside other remotes),
-    /// otherwise the first configured remote.
-    var publishRemoteName: String {
-        remotes.first { $0.name == "origin" }?.name ?? remotes.first?.name ?? "origin"
-    }
-
-    /// Single source of truth for the toolbar's and the menus' enablement, so
-    /// the two surfaces can't drift apart. Pull needs an upstream; plain Push
-    /// needs one too (its slot shows Publish otherwise); everything needs a
-    /// remote, a quiet queue, and no in-progress sequencer operation (pull
-    /// would die on "You have not concluded your merge", push on "not
-    /// currently on a branch" mid-rebase).
-    private var canSyncWithUpstream: Bool {
+    /// Pull's enablement. Push/Publish go through `canPushOrPublish` instead —
+    /// `PushCapability` already models their shape — but Pull has no such
+    /// capability type, so it keeps this explicit form. Pull needs an upstream,
+    /// a remote, a quiet queue, and no in-progress sequencer operation (it
+    /// would otherwise die on "You have not concluded your merge").
+    var canPull: Bool {
         !isBusy && !remotes.isEmpty && status.upstream != nil && !mergeState.isInProgress
     }
 
-    var canPull: Bool { canSyncWithUpstream }
-
-    var canPush: Bool { canSyncWithUpstream }
-
-    /// `push -u <remote> HEAD` on an unborn HEAD fails with "src refspec HEAD
-    /// does not match any", and on a detached HEAD it does something
-    /// surprising — so Publish gates on having a real branch, not just on
-    /// `upstream == nil`.
-    var canPublish: Bool {
-        !isBusy && !remotes.isEmpty && status.upstream == nil
-            && !status.isUnborn && !status.isDetached && !mergeState.isInProgress
-    }
-
-    /// Push -u <publishRemoteName> HEAD for a branch with no upstream yet — which
-    /// is not necessarily a remote named "origin". Guarded: with no remotes at
-    /// all there is nothing to publish to (the Publish button hides, but no call
-    /// path should be able to push to a fabricated "origin").
-    func publishBranch() {
-        guard !remotes.isEmpty else { return }
-        let remote = publishRemoteName
+    /// Push -u <remote> HEAD for a branch with no upstream yet. Only invoked
+    /// with the remote selected by `PushCapability.resolve`.
+    private func publishBranch(to remote: String) {
         perform("Publishing branch…", invalidatesMessageGeneration: false) {
             try $0.push(setUpstream: true, remote: remote)
         }

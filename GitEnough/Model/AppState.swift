@@ -49,7 +49,7 @@ final class AppState: ObservableObject {
     /// Forwards the ACTIVE view model's objectWillChange through AppState, so
     /// SwiftUI Commands (whose @ObservedObject is AppState) re-evaluate menu
     /// enablement when repo state moves — without it, items gated on
-    /// canPull/canPush/canPublish go stale until AppState itself changes.
+    /// canPull/canPushOrPublish go stale until AppState itself changes.
     /// Only the active repo is forwarded: wiring every repo would invalidate
     /// every AppState observer (the whole window) on any background publish.
     private var activeVMCancellable: AnyCancellable?
@@ -133,6 +133,11 @@ final class AppState: ObservableObject {
     func viewModel(for repo: Repository) -> RepoViewModel {
         if let existing = viewModels[repo.path] { return existing }
         let vm = RepoViewModel(repo: repo)
+        // Menu enablement is kept fresh by `forwardActiveViewModelChanges`
+        // below, which republishes the active view model's objectWillChange.
+        // Deliberately not also poked from here: two mechanisms for the same
+        // staleness would double-invalidate every AppState observer, and only
+        // one of them can stay correct as the surfaces change.
         vm.onStatusChange = { [weak self] summary in
             self?.store.summaries[repo.path] = summary
         }
