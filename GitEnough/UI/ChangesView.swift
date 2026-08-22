@@ -155,6 +155,7 @@ struct ChangesView: View {
                         Button("Unstage All") { viewModel.unstage(viewModel.status.staged) }
                             .buttonStyle(.borderless)
                             .font(.caption)
+                            .disabled(viewModel.isBusy)
                     }
                 }
             }
@@ -184,9 +185,26 @@ struct ChangesView: View {
                         Button("Stage All") { viewModel.stageAll() }
                             .buttonStyle(.borderless)
                             .font(.caption)
+                            .disabled(viewModel.isBusy)
+                    }
+                }
+            } footer: {
+                // The stash entry point lives in the section footer so it stays
+                // reachable even when everything is staged (the usual
+                // "stage, then stash to switch branches" flow). It is hidden
+                // only when there is nothing to stash.
+                if !viewModel.status.staged.isEmpty || !viewModel.status.unstaged.isEmpty {
+                    HStack {
+                        Spacer()
                         Button("Stash…") { showingStashSheet = true }
                             .buttonStyle(.borderless)
                             .font(.caption)
+                            .disabled(viewModel.isBusy || conflictUIActive)
+                            .help(viewModel.isBusy
+                                  ? "Stash is unavailable while an operation is running"
+                                  : conflictUIActive
+                                  ? "Stash is unavailable while a merge/rebase is in progress"
+                                  : "Stash your changes and restore them later")
                     }
                 }
             }
