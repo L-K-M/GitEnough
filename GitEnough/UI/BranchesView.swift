@@ -8,6 +8,7 @@ struct BranchesView: View {
     @EnvironmentObject var appState: AppState
 
     @State private var branchToDelete: Branch?
+    @State private var remoteBranchToDelete: Branch?
     @State private var branchToMerge: Branch?
     @State private var stashToDrop: StashEntry?
     @State private var branchToRename: Branch?
@@ -69,6 +70,10 @@ struct BranchesView: View {
                             Button("Check Out as \(local)") { viewModel.checkout(branch: branch) }
                         }
                         Button("Merge into Current Branch…") { branchToMerge = branch }
+                        Divider()
+                        Button("Delete Remote Branch…", role: .destructive) {
+                            remoteBranchToDelete = branch
+                        }
                     }
                 }
             } header: {
@@ -132,6 +137,18 @@ struct BranchesView: View {
             }
             Button("Cancel", role: .cancel) {}
         }
+        .confirmationDialog("Delete remote branch “\(remoteBranchToDelete?.name ?? "")”?",
+                            isPresented: deleteRemoteConfirmationPresented,
+                            titleVisibility: .visible) {
+            Button("Delete on Remote", role: .destructive) {
+                if let branch = remoteBranchToDelete {
+                    viewModel.deleteRemoteBranch(branch)
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This deletes the branch on the remote for everyone. Local branches tracking it keep their commits.")
+        }
         .confirmationDialog("Drop this stash entry?",
                             isPresented: dropConfirmationPresented,
                             titleVisibility: .visible) {
@@ -173,6 +190,10 @@ struct BranchesView: View {
 
     private var deleteConfirmationPresented: Binding<Bool> {
         Binding(get: { branchToDelete != nil }, set: { if !$0 { branchToDelete = nil } })
+    }
+
+    private var deleteRemoteConfirmationPresented: Binding<Bool> {
+        Binding(get: { remoteBranchToDelete != nil }, set: { if !$0 { remoteBranchToDelete = nil } })
     }
 
     private var mergeConfirmationPresented: Binding<Bool> {

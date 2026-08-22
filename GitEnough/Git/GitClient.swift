@@ -417,6 +417,43 @@ final class GitClient {
             ["-C", worktree.path, "branch", force ? "-D" : "-d", name], in: nil)
     }
 
+    /// Deletes a branch on its remote (`push <remote> --delete <branch>`).
+    /// `remoteBranch` is the for-each-ref short name "<remote>/<branch>".
+    func deleteRemoteBranch(_ remoteBranch: String) throws {
+        // Remote names may themselves contain "/" ("up/stream" — git allows
+        // it), so split by longest-prefix match against the configured
+        // remotes, never by first slash: splitting "up/stream/feature" at the
+        // first slash would push the deletion of "stream/feature" to the
+        // remote "up" — the wrong server, and the wrong branch if it has one
+        // by that name.
+        let remoteNames = try remotes().map(\.name)
+        guard let remote = remoteNames
+            .filter({ remoteBranch.hasPrefix($0 + "/") })
+            .max(by: { $0.count < $1.count }) else {
+            throw GitError(message: "No configured remote matches \(remoteBranch)", exitCode: -1)
+        }
+        let branch = String(remoteBranch.dropFirst(remote.count + 1))
+        guard !branch.isEmpty else {
+            throw GitError(message: "Not a remote branch: \(remoteBranch)", exitCode: -1)
+        }
+        // "origin/HEAD" is the remote's default-branch symref: deleting it
+        // asks the remote to delete its default branch. (branches() filters
+        // the symref from the UI already; guard here regardless.)
+        guard branch != "HEAD" else {
+            throw GitError(message: "Can't delete the remote's HEAD — it points at the remote's default branch.", exitCode: -1)
+        }
+        // The parts come from for-each-ref output, never free-typed — but a
+        // leading dash would still land in option position, so guard anyway.
+        guard !remote.hasPrefix("-"), !branch.hasPrefix("-") else {
+            throw GitError(message: "Refusing to delete a ref starting with “-”.", exitCode: -1)
+        }
+        // Fully qualified: a tag sharing the branch's name would otherwise
+        // fail the deletion with "dst refspec matches more than one".
+        try runChecked(
+            ["-C", worktree.path, "push", remote, "--delete", "refs/heads/\(branch)"],
+            in: nil)
+    }
+
     func renameBranch(old: String, new: String) throws {
         try runChecked(["-C", worktree.path, "branch", "-m", old, new], in: nil)
     }
