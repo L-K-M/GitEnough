@@ -36,13 +36,14 @@ struct Commit: Identifiable, Hashable {
 /// A local or remote branch, from `git for-each-ref`.
 struct Branch: Identifiable, Hashable {
     let name: String            // short name, e.g. "main" or "origin/feature"
+    let refName: String         // canonical full ref, e.g. "refs/heads/main"
     let isRemote: Bool
     let isHead: Bool
     let upstream: String?       // e.g. "origin/main"
     let ahead: Int
     let behind: Int
 
-    var id: String { (isRemote ? "remote/" : "local/") + name }
+    var id: String { refName }
 
     /// For a remote branch like "origin/main", the local name "main" a tracking
     /// checkout would get. Nil for HEAD symref entries (e.g. "origin/HEAD").

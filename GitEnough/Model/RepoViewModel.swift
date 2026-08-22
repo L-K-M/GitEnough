@@ -417,7 +417,9 @@ final class RepoViewModel: ObservableObject, Identifiable {
     func checkout(branch: Branch) {
         if branch.isRemote {
             guard let local = branch.localNameForRemote else { return }
-            perform("Checking out \(local)…") { try $0.checkoutTracking(remoteBranch: branch.name, localName: local) }
+            perform("Checking out \(local)…") {
+                try $0.checkoutTracking(remoteBranch: branch.refName, localName: local)
+            }
         } else {
             guard !branch.isHead else { return }
             perform("Checking out \(branch.name)…") { try $0.checkout(branch: branch.name) }
@@ -433,7 +435,7 @@ final class RepoViewModel: ObservableObject, Identifiable {
     }
 
     func merge(branch: Branch) {
-        perform("Merging \(branch.name)…") { try $0.merge(branch.name) }
+        perform("Merging \(branch.name)…") { try $0.merge(branch.refName) }
     }
 
     func renameBranch(_ branch: Branch, to newName: String) {

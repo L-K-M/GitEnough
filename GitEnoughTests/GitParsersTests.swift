@@ -193,7 +193,7 @@ final class GitParsersTests: XCTestCase {
     // MARK: - Branches
 
     func testParseBranches() {
-        let line1 = ["refs/heads/main", "main", "origin/main", "[ahead 1, behind 2]", "*"]
+        let line1 = ["refs/heads/main", "main", "refs/remotes/origin/main", "[ahead 1, behind 2]", "*"]
             .joined(separator: f)
         let line2 = ["refs/heads/feature", "feature", "", "", ""]
             .joined(separator: f)
@@ -206,6 +206,7 @@ final class GitParsersTests: XCTestCase {
         XCTAssertEqual(branches.count, 3) // origin/HEAD symref is skipped
         let main = branches[0]
         XCTAssertEqual(main.name, "main")
+        XCTAssertEqual(main.refName, "refs/heads/main")
         XCTAssertFalse(main.isRemote)
         XCTAssertTrue(main.isHead)
         XCTAssertEqual(main.upstream, "origin/main")
@@ -214,7 +215,21 @@ final class GitParsersTests: XCTestCase {
 
         XCTAssertTrue(branches[1].upstream == nil)
         XCTAssertTrue(branches[2].isRemote)
+        XCTAssertEqual(branches[2].refName, "refs/remotes/origin/main")
         XCTAssertEqual(branches[2].localNameForRemote, "main")
+    }
+
+    func testParseBranchesIgnoresAmbiguousShortName() {
+        let local = ["refs/heads/same", "heads/same", "", "", ""]
+            .joined(separator: f)
+        let remote = ["refs/remotes/origin/same", "remotes/origin/same", "", "", ""]
+            .joined(separator: f)
+
+        let branches = GitParsers.parseBranches(local + "\n" + remote)
+
+        XCTAssertEqual(branches.map(\.name), ["same", "origin/same"])
+        XCTAssertEqual(branches.map(\.refName),
+                       ["refs/heads/same", "refs/remotes/origin/same"])
     }
 
     // MARK: - Remotes

@@ -117,7 +117,9 @@ final class GitClient {
 
     func branches() throws -> [Branch] {
         let f = GitParsers.fieldSep
-        let format = "%(refname)\(f)%(refname:short)\(f)%(upstream:short)\(f)%(upstream:track)\(f)%(HEAD)"
+        // Derive display names from the full refs. `refname:short` becomes
+        // ambiguous when, for example, a branch and tag share the same name.
+        let format = "%(refname)\(f)%(refname:short)\(f)%(upstream)\(f)%(upstream:track)\(f)%(HEAD)"
         let result = try runChecked(
             ["-C", worktree.path, "for-each-ref",
              "--format=\(format)", "refs/heads", "refs/remotes"],
