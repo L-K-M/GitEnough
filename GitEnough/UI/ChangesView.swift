@@ -76,6 +76,10 @@ struct ChangesView: View {
         } message: {
             if fileToDiscard?.isUntracked == true {
                 Text("“\(fileToDiscard?.lastPathComponent ?? "")” is untracked and will be moved to the Trash.")
+            } else if fileToDiscard?.isRename == true {
+                Text("The original path will be restored. The destination is kept as an untracked file so its contents are not destroyed; discard it again to move it to the Trash.")
+            } else if fileToDiscard?.isCopy == true {
+                Text("The source file will not be changed. The copied destination is kept as an untracked file; discard it again to move it to the Trash.")
             } else {
                 Text("All uncommitted changes to “\(fileToDiscard?.lastPathComponent ?? "")” will be lost.")
             }
