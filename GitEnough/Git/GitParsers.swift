@@ -8,11 +8,16 @@ enum GitParsers {
     static let fieldSep = "\u{1F}"
     static let recordSep = "\u{1E}"
 
+    /// Never mutated after creation: `parseDate` runs on every repo's serial
+    /// queue, so with several repositories refreshing at once the old per-call
+    /// `formatOptions` assignment was a genuine data race on shared state
+    /// (ISO8601DateFormatter is only thread-safe while treated as immutable).
+    /// The default options are exactly `[.withInternetDateTime]` — what `%aI`
+    /// emits — so no configuration is needed.
     private static let iso = ISO8601DateFormatter()
 
     static func parseDate(_ raw: String) -> Date? {
-        iso.formatOptions = [.withInternetDateTime]
-        return iso.date(from: raw)
+        iso.date(from: raw)
     }
 
     // MARK: - git log
@@ -40,27 +45,85 @@ enum GitParsers {
         return commits
     }
 
-    /// Parses `%D` output: "HEAD -> main, origin/main, tag: v1.0".
+    /// Parses `%D` output from `git log --decorate=full`:
+    /// "HEAD -> refs/heads/main, refs/remotes/origin/main, tag: refs/tags/v1.0".
+    /// Full ref names make classification exact — a local branch named
+    /// "feature/foo" can no longer be mistaken for a remote branch (the old
+    /// short-form contains-"/" guess mischipped the most common branch naming
+    /// convention), and the remote's HEAD symref (refs/remotes/<remote>/HEAD)
+    /// is dropped: it decorates the default branch's tip in every repo with a
+    /// remote without naming anything the user can act on. Short-form input
+    /// (no refs/ prefix) still falls back to the old heuristic, so the parser
+    /// stays tolerant of hand-written or older output.
     static func parseDecorations(_ raw: String) -> [RefDecoration] {
         let trimmed = raw.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return [] }
         var decorations: [RefDecoration] = []
-        for part in trimmed.components(separatedBy: ", ") {
+        for rawPart in trimmed.components(separatedBy: ", ") {
+            // A trailing ", " leaves a comma on the last part after the
+            // whitespace trim ("main,"), and ", ," an empty one — never a
+            // comma-tainted or empty-name chip.
+            let part = rawPart.trimmingCharacters(in: CharacterSet(charactersIn: ", "))
+            guard !part.isEmpty else { continue }
             if part.hasPrefix("HEAD -> ") {
                 decorations.append(RefDecoration(kind: .head, name: "HEAD"))
-                let branch = String(part.dropFirst("HEAD -> ".count))
-                decorations.append(RefDecoration(kind: .localBranch, name: branch))
+                let target = String(part.dropFirst("HEAD -> ".count))
+                if target.hasPrefix("refs/") || target.hasPrefix("tag: ") {
+                    // Full-form and tag targets classify exactly (a "tag: "
+                    // arrow target can't just drop 5 chars — that would leak
+                    // "refs/tags/…" into the chip).
+                    if let decoration = classifyDecoration(target) {
+                        decorations.append(decoration)
+                    }
+                } else {
+                    // HEAD only ever points at a LOCAL branch: in the
+                    // short-form fallback (no refs/ prefix) a slashed target
+                    // like "feature/foo" must not be guessed as remote.
+                    decorations.append(RefDecoration(kind: .localBranch, name: target))
+                }
             } else if part == "HEAD" {
                 decorations.append(RefDecoration(kind: .head, name: "HEAD"))
-            } else if part.hasPrefix("tag: ") {
-                decorations.append(RefDecoration(kind: .tag, name: String(part.dropFirst(5))))
-            } else if part.contains("/") {
-                decorations.append(RefDecoration(kind: .remoteBranch, name: part))
-            } else {
-                decorations.append(RefDecoration(kind: .localBranch, name: part))
+            } else if let decoration = classifyDecoration(part) {
+                decorations.append(decoration)
             }
         }
         return decorations
+    }
+
+    /// One decoration (never the HEAD marker) → its chip, or nil for noise to
+    /// drop (the remote HEAD symref).
+    private static func classifyDecoration(_ part: String) -> RefDecoration? {
+        if part.hasPrefix("tag: refs/tags/") {
+            return RefDecoration(kind: .tag, name: String(part.dropFirst("tag: refs/tags/".count)))
+        }
+        if part.hasPrefix("tag: ") {           // short form: "tag: v1.0"
+            return RefDecoration(kind: .tag, name: String(part.dropFirst(5)))
+        }
+        if part.hasPrefix("refs/tags/") {
+            return RefDecoration(kind: .tag, name: String(part.dropFirst("refs/tags/".count)))
+        }
+        if part.hasPrefix("refs/heads/") {
+            return RefDecoration(kind: .localBranch, name: String(part.dropFirst("refs/heads/".count)))
+        }
+        if part.hasPrefix("refs/remotes/") {
+            let name = String(part.dropFirst("refs/remotes/".count))
+            // The remote's default-branch symref ("origin/HEAD") — not a real
+            // branch, and branches() skips it too.
+            return name.hasSuffix("/HEAD") ? nil : RefDecoration(kind: .remoteBranch, name: name)
+        }
+        // Unknown refs/ namespace (refs/stash, refs/bisect, refs/notes,
+        // Gerrit's refs/changes, GitLab's refs/merge-requests): neither a
+        // branch nor a tag the user can act on — drop instead of guessing.
+        // (The stash & tool refs in hiddenRefs never reach here — they're
+        // excluded from the log — but forge-specific namespaces aren't.)
+        if part.hasPrefix("refs/") {
+            return nil
+        }
+        // Short-form fallback (no --decorate=full): a "/" guesses remote.
+        if part.contains("/") {
+            return part.hasSuffix("/HEAD") ? nil : RefDecoration(kind: .remoteBranch, name: part)
+        }
+        return RefDecoration(kind: .localBranch, name: part)
     }
 
     // MARK: - git status --porcelain=v2 --branch
@@ -148,8 +211,9 @@ enum GitParsers {
 
     // MARK: - git for-each-ref
 
-    /// Parses lines of `%(refname) \x1F %(refname:short) \x1F %(upstream:short) \x1F
-    /// %(upstream:track) \x1F %(HEAD)`.
+    /// Parses lines of `%(refname) \x1F %(refname:short) \x1F %(upstream) \x1F
+    /// %(upstream:track) \x1F %(HEAD) [\x1F %(committerdate:iso8601-strict)]` — the
+    /// optional trailing date keeps older five-field output parsing unchanged.
     static func parseBranches(_ output: String) -> [Branch] {
         var branches: [Branch] = []
         for line in output.components(separatedBy: "\n") where !line.isEmpty {
@@ -158,26 +222,45 @@ enum GitParsers {
             let refname = fields[0]
             let isRemote = refname.hasPrefix("refs/remotes/")
             guard refname.hasPrefix("refs/heads/") || isRemote else { continue }
+            let name = branchDisplayName(for: refname)
             // Skip the remote HEAD symref (e.g. "origin/HEAD") — it's not a real branch.
-            if isRemote && fields[1].hasSuffix("/HEAD") { continue }
+            if isRemote && name.hasSuffix("/HEAD") { continue }
             var ahead = 0, behind = 0
+            var upstreamGone = false
             let track = fields[3]
             if track.hasPrefix("[") && track.hasSuffix("]") {
                 for part in track.dropFirst().dropLast().components(separatedBy: ", ") {
+                    // "[gone]": the upstream is configured but its ref no
+                    // longer exists (deleted on the remote, then pruned).
+                    if part == "gone" { upstreamGone = true }
                     if part.hasPrefix("ahead ") { ahead = Int(part.dropFirst(6)) ?? 0 }
                     if part.hasPrefix("behind ") { behind = Int(part.dropFirst(7)) ?? 0 }
                 }
             }
             branches.append(Branch(
-                name: fields[1],
+                name: name,
+                refName: refname,
                 isRemote: isRemote,
                 isHead: fields[4] == "*",
-                upstream: fields[2].isEmpty ? nil : fields[2],
+                upstream: fields[2].isEmpty ? nil : branchDisplayName(for: fields[2]),
                 ahead: ahead,
-                behind: behind
+                behind: behind,
+                upstreamGone: upstreamGone,
+                lastCommitDate: fields.count > 5 ? parseDate(fields[5]) : nil
             ))
         }
         return branches
+    }
+
+    /// Strips only a namespace that identifies a branch. Unlike
+    /// `%(refname:short)`, this cannot grow an ambiguous `heads/` prefix merely
+    /// because a tag happens to use the same display name.
+    private static func branchDisplayName(for refname: String) -> String {
+        for prefix in ["refs/heads/", "refs/remotes/"] where refname.hasPrefix(prefix) {
+            return String(refname.dropFirst(prefix.count))
+        }
+        // Tolerate the older short-upstream fixture format.
+        return refname
     }
 
     // MARK: - git remote -v

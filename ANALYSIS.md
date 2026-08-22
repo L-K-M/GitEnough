@@ -24,9 +24,21 @@ implemented or actively being repaired/reviewed; do not start a duplicate
 unless the linked PR is closed or abandoned. Check its current checks, feedback,
 base, and dependencies before relying on it:
 
+**Waves 2–3 are now integrated** (2026-08-22). All 51 non-superseded PRs of
+#36–#90 are merged into one conflict-resolved branch; #36, #56, #74 and #85 are
+superseded duplicates whose fixes arrive via #77, #59, #47 and #63 respectively,
+so they can simply be closed. The seven cross-PR defects that merge without a
+conflict marker — invisible to every PR's own CI — were fixed in the merge, not
+deferred (X1–X5 below, now shipped).
+
+The full record, including the verified landing order and the reasoning behind
+each judgement-call resolution, is `docs/open-pr-review.md`. Rows below stay as
+the per-PR index of what each change covers. X6 records why the GLM review check
+is red on ~40 PRs (an API timeout, not a code signal) — still open.
+
 | PR | Covers |
 |----|--------|
-| #36/#77 | #77 is stacked on #36: generation guards/loading plus side-aware staged/unstaged selection identity; land or retarget together |
+| #36/#77 | **Close #36.** `pr/36` is a literal git ancestor of `pr/77` — #77 already contains it, plus `ChangeSelection` and the commit-file-diff loading state. Land #77 alone |
 | #37 | `Remote.displayHost` strips only a trailing `.git` (was mangling `user.github.io` and `.git`-containing hostnames) |
 | #38 | `GitParsers.parseDate` formatter data race (configure-once) |
 | #39 | Cherry-pick/revert merge commits via `--mainline` (per-parent menu items; 1-based precondition) |
@@ -37,7 +49,7 @@ base, and dependencies before relying on it:
 | #44 | Make Stash reachable with staged-only changes |
 | #45 | Skip bare repositories and submodules during watch-folder discovery |
 | #46 | Let the Settings window size to content instead of clipping |
-| #47/#74 | Overlapping alternatives for matching branch/remote/tag decorations in history filtering; merge one |
+| #47/#74 | **Close #74.** Near-identical diffs; #47 additionally puts the cheap hash-prefix check ahead of the two localized folds |
 | #48 | Name the real Git command in synthesized GitShell errors |
 | #49 | Add a visible New Branch action to the Branches tab |
 | #50 | Squash / no-fast-forward merge options in the merge dialog |
@@ -46,13 +58,13 @@ base, and dependencies before relying on it:
 | #53 | Copy Name on branch rows; Copy Hash and Subject on commits; shared `NSPasteboard.copyString` |
 | #54 | Per-repo commit-draft persistence (restore on launch, cleanup on repo removal, injectable defaults); restore must never overwrite fresh typing (glm-M4) |
 | #55 | Empty states: zero-commit History, empty Remote Branches section |
-| #56/#59 | #59 is the preferred superset (slash-named locals, full-ref parsing, remote HEAD suppression); #56 is only the local-slash subset |
-| #57/#71/#80/#83 | Complementary guardrail series: menu/toolbar state, context-aware Push/Publish, unborn amend, and central mutation admission; #83 is stacked on #57 |
+| #56/#59 | **Close #56.** #59 is the preferred superset (full-ref parsing, remote HEAD suppression, `HEAD -> tag:`, forge namespaces) and needs no `remoteNames` plumbing. Ordering hazard: plain numeric merge order lands #56 first and permanently blocks #59 |
+| #57/#71/#80/#83 | Complementary guardrail series: menu/toolbar state, context-aware Push/Publish, unborn amend, and central mutation admission. **None is an ancestor of another** (verified) — see X1 for the #57×#83 merge that turns CI red, and X2 for #71/#83's duplicate menu-invalidation mechanisms |
 | #58 | Remove inherited repository-routing Git environment variables from child processes |
 | #60 | Correct literal `.gitignore` escaping, trailing whitespace, and duplicate detection |
 | #61 | Treat conflict-only repositories as dirty and count unique changed paths |
 | #62 | Show useful content instead of “No diff” for an untracked directory |
-| #63/#85 | #63 is the fixed preferred superset for stage/unstage/discard plus copy-source safety; #85 is discard-only and now carries the same copy-source guard (only renames expand to both paths) |
+| #63/#85 | **Close #85.** Confirmed: #63 covers stage/unstage/discard via `affectedPaths` and excludes copies (`if isRename`); #85 is discard-only with the same guard |
 | #64 | Copy structured activity argv as POSIX-shell-safe commands; disable unsafe legacy copies |
 | #65 | Suppress duplicate activation and post-operation refreshes |
 | #66 | Preserve canonical branch identities across local/tag/remote short-name collisions |
@@ -72,7 +84,7 @@ base, and dependencies before relying on it:
 | #86 | Copy a paste-ready cherry-pick command from a history row |
 | #87 | Confirm before aborting an in-progress merge/rebase/cherry-pick/revert (resolutions not yet committed are lost) |
 | #88 | Renames/copies render as "old → new" in the Changes and commit-detail file rows (`FilePathText`, a11y label "Was x, now y") |
-| #89 | Status bar shows the preferred remote (upstream's remote, else origin, else first) with a URL tooltip; pure tested selector |
+| #89 | Status bar shows the preferred remote (upstream's remote, else origin, else first) with a URL tooltip; pure tested selector. **Its new static selector re-introduces the split-at-first-slash bug #73 removes** — see X3 |
 | #90 | Branch lists carry each tip's committer date (`%(committerdate:iso8601-strict)`) and render relative recency next to ahead/behind |
 
 Verified non-issues, kept for the record (don't re-audit):
@@ -85,10 +97,59 @@ Verified non-issues, kept for the record (don't re-audit):
 - **TimelineView minute-boundary alignment** (suggested in #52's review) does
   not help: relative-date rollovers are anchored at each commit's own second,
   not wall-clock minutes, and the staleness bound is <60 s either way.
+- **#58 does not defeat #68.** #58 strips `GIT_LITERAL_PATHSPECS` from the
+  *inherited* environment; #68 sets it as an explicit override for
+  `git mergetool`. Overrides are merged after sanitization
+  (`childEnvironment.merging(overrides) { _, override in override }`).
+- **#64 survives #79.** `GitActivityLog.normalizedArguments` already strips
+  `--no-optional-locks`, so activity display and the paste-safe copy stay
+  correct once the flag is centralized.
+- **#66's non-defaulted `Branch.refName` breaks no fixture.** `Branch(` is
+  constructed in exactly one place in the repo (`GitParsers.swift`); no test
+  builds one directly. (#40 and #90 add defaulted fields. All three still
+  contend over `parseBranches` and should land as one deliberate change.)
+- **#80's mutation gate cannot wedge.** `perform` funnels success and failure
+  through a single `DispatchQueue.main.async`, so `operationGate.finish(id)` is
+  always reached. Its `dispatchPrecondition(.onQueue(.main))` is also safe: the
+  one non-UI caller, `AppState.autoFetchIfDue`, runs on a `RunLoop.main` timer.
+- **#38's formatter change is correct.** `ISO8601DateFormatter`'s default
+  `formatOptions` is exactly `[.withInternetDateTime]`, so dropping the
+  per-call assignment (the actual data race) still parses `%aI`.
 
 ---
 
 ## Correctness & safety
+
+### X1–X5 · Cross-PR defects — **shipped** (fixed in the integration merge)
+
+The five cross-PR defects found in the wave-2/3 review no longer exist as
+backlog: the integration branch merges all 51 non-superseded PRs and fixes each
+one in the merge itself. Kept here only as a pointer, since the resolutions were
+judgement calls a future reader will want explained —
+`docs/open-pr-review.md` §8 records which side won and why for the #57×#83 pull
+guard, the #71×#83 duplicate invalidation mechanisms and push surface, the
+#73×#89 slash-remote regression, the #48×#79 error message, and the #54×#81
+single `didSet`.
+
+### X6 · The GLM review workflow silently reviews almost nothing — S
+
+`Review PR with GLM 5.2` fails on roughly 40 of the 55 open PRs, and the cause
+is not flakiness: the Z.ai request times out. The job log shows the whole diff
+sent as one chunk and retried three times, each attempt cut off at ~300 s —
+`API call failed for chunk 1/1, 2 file(s), 26369 patch chars … Request timed
+out` ×3, then `All review chunks failed. No review could be generated.`
+
+`.github/workflows/zai-code-review.yml` never sets `MAX_DIFF_CHARS`, so it takes
+the action's `0` default and no size-based splitting happens. The PRs where the
+check passes are the small ones. The result is that automated review quietly
+does not run on exactly the PRs big enough to need it — while the red X on those
+PRs trains everyone to ignore the check entirely.
+
+Fix: set a non-zero `MAX_DIFF_CHARS` so a large diff splits into several
+requests that can finish inside the timeout, and confirm against a known-large
+PR that the review actually posts. This is a `pull_request_target` workflow
+holding repository secrets, so treat the edit as privileged: keep the existing
+same-repo `if:` gate and the pinned action SHA untouched.
 
 ### C1 · Make sidebar summaries generation-safe — S/M
 

@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 /// The right pane: everything about the selected repository. Hosts the toolbar
 /// (branch picker, fetch/pull/push), the three tabs, a merge-in-progress banner,
@@ -13,6 +14,16 @@ struct RepoDetailView: View {
     @State private var newBranchName = ""
     @State private var checkoutNewBranch = true
     @State private var showingActivityLog = false
+    /// Confirms aborting an in-progress merge/rebase/cherry-pick/revert —
+    /// the single most destructive unguarded action in the banner.
+    @State private var confirmingAbort = false
+    @State private var showingForcePushConfirmation = false
+
+    /// Lowercase noun of the in-progress operation for the abort dialog's
+    /// sentence text ("… before the merge started").
+    private var inProgressNoun: String {
+        (viewModel.mergeState.operation?.noun ?? "Operation").lowercased()
+    }
 
     private var localBranches: [Branch] {
         viewModel.branches.filter { !$0.isRemote }
@@ -92,28 +103,45 @@ struct RepoDetailView: View {
                 Button {
                     viewModel.pull(rebase: pullRebase)
                 } label: {
-                    Label("Pull", systemImage: "arrow.down.to.line")
+                    Label(viewModel.status.behind > 0
+                          ? "Pull (\(viewModel.status.behind))" : "Pull",
+                          systemImage: "arrow.down.to.line")
                 }
-                .disabled(viewModel.isBusy || viewModel.remotes.isEmpty || viewModel.status.upstream == nil)
-                .help(pullRebase ? "Pull with rebase (⇧⌘L)" : "Pull (⇧⌘L)")
+                .disabled(!viewModel.canPull)
+                .help(viewModel.mergeState.isInProgress
+                      ? "Finish or abort the in-progress operation first"
+                      : viewModel.remotes.isEmpty
+                      ? "No remotes configured"
+                      : viewModel.status.upstream == nil
+                      ? "No upstream branch — publish first"
+                      : pullRebase ? "Pull with rebase (⇧⌘L)" : "Pull (⇧⌘L)")
 
-                if viewModel.status.upstream == nil && !viewModel.remotes.isEmpty {
-                    Button {
-                        viewModel.publishBranch()
-                    } label: {
-                        Label("Publish", systemImage: "arrow.up.to.line")
+                // One control for Push and Publish: `pushCapability` decides
+                // which it is, so label, tooltip and action can't drift apart.
+                // The ahead count rides on the plain-push label — that number is
+                // most of the reason to glance at this button. Split button:
+                // clicking pushes (or publishes); the menu half holds the rarely
+                // needed, confirmed force push, offered only for a plain push —
+                // a branch with no upstream yet has nothing to overwrite.
+                Menu {
+                    Button("Force Push (with Lease)…") {
+                        showingForcePushConfirmation = true
                     }
-                    .disabled(viewModel.isBusy || viewModel.remotes.isEmpty)
-                    .help("Push and set upstream to \(viewModel.publishRemoteName)")
-                } else {
-                    Button {
-                        viewModel.push()
-                    } label: {
-                        Label("Push", systemImage: "arrow.up.to.line")
-                    }
-                    .disabled(viewModel.isBusy || viewModel.remotes.isEmpty)
-                    .help("Push (⇧⌘P)")
+                    .disabled(viewModel.pushCapability != .push)
+                } label: {
+                    Label(viewModel.pushCapability == .push && viewModel.status.ahead > 0
+                          ? "Push (\(viewModel.status.ahead))"
+                          : viewModel.pushCapability.label,
+                          systemImage: "arrow.up.to.line")
+                } primaryAction: {
+                    viewModel.pushOrPublish()
                 }
+                .disabled(!viewModel.canPushOrPublish)
+                // An in-progress merge/rebase isn't part of the capability's
+                // repository shape, so it needs to explain itself here.
+                .help(viewModel.mergeState.isInProgress
+                      ? "Finish or abort the in-progress operation first"
+                      : viewModel.pushCapability.help)
 
                 Button {
                     viewModel.openPullRequest()
@@ -128,6 +156,27 @@ struct RepoDetailView: View {
         }
         .sheet(isPresented: $appState.showingNewBranch) {
             newBranchSheet
+        }
+        .confirmationDialog("Abort this \(inProgressNoun)?",
+                            isPresented: $confirmingAbort,
+                            titleVisibility: .visible) {
+            Button("Abort", role: .destructive) {
+                viewModel.abortOperation()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Aborting returns the repository to the state before the \(inProgressNoun) started. Any conflict resolutions you haven't committed will be lost.")
+        }
+
+        .confirmationDialog("Force push “\(viewModel.status.head ?? "")”?",
+                            isPresented: $showingForcePushConfirmation,
+                            titleVisibility: .visible) {
+            Button("Force Push (with Lease)", role: .destructive) {
+                viewModel.forcePush()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This rewrites the remote branch to match your local history. “With lease” refuses to overwrite commits you haven't fetched yet, so a teammate's new work can't be lost silently — but anyone who pulled the old history will have to recover.")
         }
     }
 
@@ -188,7 +237,7 @@ struct RepoDetailView: View {
                 }
             }
             Button("Abort \(noun)") {
-                viewModel.abortOperation()
+                confirmingAbort = true
             }
             .disabled(viewModel.isBusy)
             if state.conflictedFiles.isEmpty {
@@ -228,8 +277,9 @@ struct RepoDetailView: View {
                 }
                 .foregroundStyle(.secondary)
             }
-            if let remote = viewModel.remotes.first {
+            if let remote = viewModel.preferredRemote {
                 Label(remote.displayHost, systemImage: "network")
+                    .help("The remote fetch, pull, push and pull requests use: \(remote.name) — \(remote.url)")
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
@@ -299,20 +349,59 @@ struct RepoDetailView: View {
     }
 }
 
-/// A dismissable error strip shown at the top of the detail pane.
+/// A dismissable error strip shown at the top of the detail pane. Long git
+/// output (hook failures regularly exceed the collapsed four lines, with the
+/// useful part last) can be expanded into a scrollable monospaced view; the
+/// full text is always one click away on the clipboard.
 struct ErrorBanner: View {
     let message: String
     let dismiss: () -> Void
+
+    @State private var isExpanded = false
+
+    /// Expansion only pays off when the collapsed view actually truncates.
+    private var isLong: Bool {
+        message.count > 240 || message.filter { $0 == "\n" }.count >= 4
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(.red)
-            Text(message)
-                .font(.callout)
-                .lineLimit(4)
-                .textSelection(.enabled)
+            if isExpanded {
+                ScrollView {
+                    Text(message)
+                        .font(.system(.caption, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 180)
+            } else {
+                Text(message)
+                    .font(.callout)
+                    .lineLimit(4)
+                    .textSelection(.enabled)
+            }
             Spacer()
+            if isLong {
+                Button {
+                    isExpanded.toggle()
+                } label: {
+                    Image(systemName: isExpanded ? "chevron.up.circle" : "chevron.down.circle")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help(isExpanded ? "Collapse the output" : "Show the full output")
+            }
+            Button {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(message, forType: .string)
+            } label: {
+                Image(systemName: "doc.on.doc")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Copy the full error text")
             Button {
                 dismiss()
             } label: {
@@ -320,6 +409,7 @@ struct ErrorBanner: View {
                     .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
+            .help("Dismiss")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
