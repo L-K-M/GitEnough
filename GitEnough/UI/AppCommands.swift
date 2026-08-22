@@ -29,13 +29,19 @@ struct AppCommands: Commands {
 
             Button(pullRebase ? "Pull (Rebase)" : "Pull") { active?.pull(rebase: pullRebase) }
                 .keyboardShortcut("l", modifiers: [.shift, .command])
-                .disabled(active == nil || active?.isBusy == true)
+                .disabled(active?.canPull != true)
 
             // Shared entry point with the toolbar's Publish/Push button: with no
             // upstream this publishes the branch instead of a raw `git push`.
             Button("Push") { active?.pushOrPublish() }
                 .keyboardShortcut("p", modifiers: [.shift, .command])
-                .disabled(active == nil || active?.isBusy == true)
+                .disabled(active?.canPush != true)
+
+            // The menu's counterpart to the toolbar's Publish button — menu
+            // Push disables without an upstream (plain push would only fail),
+            // so publishing needs its own path here.
+            Button("Publish Branch") { active?.publishBranch() }
+                .disabled(active?.canPublish != true)
 
             Button("Open Pull Request…") { active?.openPullRequest() }
                 .keyboardShortcut("p", modifiers: [.option, .command])

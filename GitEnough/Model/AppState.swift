@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 
 /// The detail pane's tabs. In AppState (not the view) so menu commands with
@@ -21,7 +22,10 @@ final class AppState: ObservableObject {
     let store: RepoStore
 
     @Published var selectedRepoPath: String? {
-        didSet { Self.persistSelection(selectedRepoPath, in: defaults) }
+        didSet {
+            Self.persistSelection(selectedRepoPath, in: defaults)
+            forwardActiveViewModelChanges()
+        }
     }
     @Published var selectedTab: DetailTab = .history
 
@@ -42,6 +46,13 @@ final class AppState: ObservableObject {
     @Published var lastAddedRepoPath: String?
 
     private var viewModels: [String: RepoViewModel] = [:]
+    /// Forwards the ACTIVE view model's objectWillChange through AppState, so
+    /// SwiftUI Commands (whose @ObservedObject is AppState) re-evaluate menu
+    /// enablement when repo state moves — without it, items gated on
+    /// canPull/canPush/canPublish go stale until AppState itself changes.
+    /// Only the active repo is forwarded: wiring every repo would invalidate
+    /// every AppState observer (the whole window) on any background publish.
+    private var activeVMCancellable: AnyCancellable?
 
     /// App-wide persistent git command history ("shell history" window).
     /// Every repo view model's activity log forwards events here.
@@ -129,8 +140,22 @@ final class AppState: ObservableObject {
             self?.activityStore.record(event, repoName: repo.name, repoPath: repo.path)
         }
         viewModels[repo.path] = vm
+        // The restored-selection path never goes through select(), so wire
+        // the forwarding here too when the created VM is the active one.
+        if repo.path == selectedRepoPath { forwardActiveViewModelChanges() }
         vm.start()
         return vm
+    }
+
+    /// Re-subscribes the menu-enablement forwarding to the currently selected
+    /// repo's view model. Delivery is hopped to main: @Published mutations
+    /// are main-thread by contract, and the sink must not rely on it.
+    private func forwardActiveViewModelChanges() {
+        activeVMCancellable = selectedRepository
+            .flatMap { viewModels[$0.path] }?
+            .objectWillChange
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.objectWillChange.send() }
     }
 
     func select(_ repo: Repository) {
