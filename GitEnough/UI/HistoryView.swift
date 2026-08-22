@@ -164,28 +164,41 @@ struct HistoryView: View {
         // Evaluated once per body evaluation and shared by the list, the
         // empty-state check, and the filter bar's counter.
         let visible = visibleCommits
+        let showsUnbornEmptyState = viewModel.status.isUnborn && viewModel.commits.isEmpty
         return ScrollViewReader { proxy in
             VStack(spacing: 0) {
-                filterBar(matchCount: visible.count)
-                Divider()
-                ScrollView {
-                    VStack(spacing: 0) {
-                        commitRows(visible)
-                        if viewModel.canLoadMoreHistory {
-                            Button("Load older commits…") {
-                                viewModel.loadMoreHistory()
+                if showsUnbornEmptyState {
+                    // A fresh `git init` used to render a silent blank pane here —
+                    // and a filter bar over it would be noise, so the whole layout
+                    // branches on one condition. (Gated on isUnborn, not on the
+                    // commit list alone — an empty list is also the initial-load
+                    // state of a normal repo.)
+                    EmptyPane(systemImage: "clock.arrow.circlepath",
+                              title: "No commits yet",
+                              subtitle: "The history graph starts with your first commit — stage your files in the Changes tab and commit.")
+                        .background(Color(nsColor: .textBackgroundColor))
+                } else {
+                    filterBar(matchCount: visible.count)
+                    Divider()
+                    ScrollView {
+                        VStack(spacing: 0) {
+                            commitRows(visible)
+                            if viewModel.canLoadMoreHistory {
+                                Button("Load older commits…") {
+                                    viewModel.loadMoreHistory()
+                                }
+                                .buttonStyle(.link)
+                                .padding(.vertical, 10)
+                                .frame(maxWidth: .infinity)
                             }
-                            .buttonStyle(.link)
-                            .padding(.vertical, 10)
-                            .frame(maxWidth: .infinity)
                         }
                     }
+                    .background(Color(nsColor: .textBackgroundColor))
+                    // Reset the scroll offset whenever the (debounced) filter changes —
+                    // otherwise a deep scroll position can land the shorter result
+                    // list in blank space. Constant ("") while unfiltered.
+                    .id(activeFilter)
                 }
-                .background(Color(nsColor: .textBackgroundColor))
-                // Reset the scroll offset whenever the (debounced) filter changes —
-                // otherwise a deep scroll position can land the shorter result
-                // list in blank space. Constant ("") while unfiltered.
-                .id(activeFilter)
             }
             .onChange(of: scrollTarget) { _, target in
                 guard let target else { return }
