@@ -17,6 +17,7 @@ struct RepoDetailView: View {
     /// Confirms aborting an in-progress merge/rebase/cherry-pick/revert —
     /// the single most destructive unguarded action in the banner.
     @State private var confirmingAbort = false
+    @State private var showingForcePushConfirmation = false
 
     /// Lowercase noun of the in-progress operation for the abort dialog's
     /// sentence text ("… before the merge started").
@@ -115,17 +116,25 @@ struct RepoDetailView: View {
                       ? "No upstream branch — publish first"
                       : pullRebase ? "Pull with rebase (⇧⌘L)" : "Pull (⇧⌘L)")
 
-                // One button for both Push and Publish: `pushCapability` decides
+                // One control for Push and Publish: `pushCapability` decides
                 // which it is, so label, tooltip and action can't drift apart.
                 // The ahead count rides on the plain-push label — that number is
-                // most of the reason to glance at this button.
-                Button {
-                    viewModel.pushOrPublish()
+                // most of the reason to glance at this button. Split button:
+                // clicking pushes (or publishes); the menu half holds the rarely
+                // needed, confirmed force push, offered only for a plain push —
+                // a branch with no upstream yet has nothing to overwrite.
+                Menu {
+                    Button("Force Push (with Lease)…") {
+                        showingForcePushConfirmation = true
+                    }
+                    .disabled(viewModel.pushCapability != .push)
                 } label: {
                     Label(viewModel.pushCapability == .push && viewModel.status.ahead > 0
                           ? "Push (\(viewModel.status.ahead))"
                           : viewModel.pushCapability.label,
                           systemImage: "arrow.up.to.line")
+                } primaryAction: {
+                    viewModel.pushOrPublish()
                 }
                 .disabled(!viewModel.canPushOrPublish)
                 // An in-progress merge/rebase isn't part of the capability's
@@ -157,6 +166,17 @@ struct RepoDetailView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Aborting returns the repository to the state before the \(inProgressNoun) started. Any conflict resolutions you haven't committed will be lost.")
+        }
+
+        .confirmationDialog("Force push “\(viewModel.status.head ?? "")”?",
+                            isPresented: $showingForcePushConfirmation,
+                            titleVisibility: .visible) {
+            Button("Force Push (with Lease)", role: .destructive) {
+                viewModel.forcePush()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This rewrites the remote branch to match your local history. “With lease” refuses to overwrite commits you haven't fetched yet, so a teammate's new work can't be lost silently — but anyone who pulled the old history will have to recover.")
         }
     }
 

@@ -347,8 +347,18 @@ final class RepoViewModel: ObservableObject, Identifiable {
         perform(rebase ? "Pulling (rebase)…" : "Pulling…") { try $0.pull(rebase: rebase) }
     }
 
+    /// Force push with lease. The UI gates this behind an explicit
+    /// confirmation dialog — it rewrites the remote branch.
+    func forcePush() {
+        perform("Force pushing…", invalidatesMessageGeneration: false) {
+            try $0.push(setUpstream: false, forceWithLease: true)
+        }
+    }
+
     /// The current Push button/menu state, resolved from one central, pure
-    /// decision so presentation and execution cannot drift apart.
+    /// decision so presentation and execution cannot drift apart. It also
+    /// picks the publish remote, which is why there is no separate
+    /// `publishRemoteName` any more.
     var pushCapability: PushCapability {
         PushCapability.resolve(status: status, remotes: remotes)
     }
