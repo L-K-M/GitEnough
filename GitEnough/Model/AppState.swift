@@ -155,6 +155,9 @@ final class AppState: ObservableObject {
     func remove(_ repo: Repository) {
         viewModels.removeValue(forKey: repo.path)
         store.remove(repo)
+        // The persisted commit draft goes with the repo — otherwise the key
+        // orphans, and re-adding the repo later would resurrect a stale draft.
+        RepoViewModel.removePersistedDraft(for: repo.path)
         if selectedRepoPath == repo.path {
             selectedRepoPath = store.repositories.first?.path
         }
