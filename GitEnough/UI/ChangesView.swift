@@ -261,7 +261,8 @@ struct ChangesView: View {
                         Label("Generate", systemImage: "sparkles")
                     }
                 }
-                .disabled(viewModel.isGeneratingMessage || viewModel.status.staged.isEmpty)
+                .disabled(viewModel.isGeneratingMessage || viewModel.isBusy
+                    || viewModel.status.staged.isEmpty)
                 .help("Write the commit message with the configured LLM (Settings → AI)")
 
                 if !viewModel.draftCommitMessage.isEmpty {
