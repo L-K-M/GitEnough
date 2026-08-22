@@ -308,8 +308,13 @@ struct HistoryView: View {
         Button("Copy Hash") {
             NSPasteboard.general.copyString(commit.hash)
         }
-        Button("Copy Message") {
+        Button("Copy Subject") {
             NSPasteboard.general.copyString(commit.subject)
+        }
+        // "abc1234 Subject" — the shape reflog, PR descriptions, and chat
+        // references use.
+        Button("Copy Hash and Subject") {
+            NSPasteboard.general.copyString("\(commit.shortHash) \(commit.subject)")
         }
         // Built once per render: the command both feeds the action and gates
         // the item (disabled, never silently dead, in the
