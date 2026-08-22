@@ -521,10 +521,8 @@ final class RepoViewModel: ObservableObject, Identifiable {
         perform("Discarding changes…", includeHistory: false) { client in
             let tracked = changes.filter { !$0.isUntracked }.flatMap(\.affectedPaths)
             if !tracked.isEmpty { try client.discard(paths: tracked) }
-            for change in changes where change.isUntracked {
-                let url = self.repo.url.appendingPathComponent(change.path)
-                try? FileManager.default.trashItem(at: url, resultingItemURL: nil)
-            }
+            let untracked = changes.filter(\.isUntracked).map(\.path)
+            try TrashMover.move(paths: untracked, from: self.repo.url)
         }
     }
 
