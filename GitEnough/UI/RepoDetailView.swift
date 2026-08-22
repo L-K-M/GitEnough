@@ -248,8 +248,9 @@ struct RepoDetailView: View {
                 }
                 .foregroundStyle(.secondary)
             }
-            if let remote = viewModel.remotes.first {
+            if let remote = viewModel.preferredRemote {
                 Label(remote.displayHost, systemImage: "network")
+                    .help("The remote fetch, pull, push and pull requests use: \(remote.name) — \(remote.url)")
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
