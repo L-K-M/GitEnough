@@ -105,6 +105,41 @@ final class GitActivityLogTests: XCTestCase {
             "status --porcelain=v2")
     }
 
+    func testReadOnlyArgumentsKeepWorktreeSwitchFirst() {
+        XCTAssertEqual(
+            GitClient.readOnlyArguments(["-C", "/r", "log", "--all"]),
+            ["-C", "/r", "--no-optional-locks", "log", "--all"])
+        XCTAssertEqual(
+            GitActivityLog.displayCommand(for:
+                GitClient.readOnlyArguments(["-C", "/r", "log", "--all"])),
+            "log --all")
+    }
+
+    func testReadOnlyArgumentsWithoutWorktreeArePrefixedAndIdempotent() {
+        XCTAssertEqual(
+            GitClient.readOnlyArguments(["rev-parse", "--show-toplevel"]),
+            ["--no-optional-locks", "rev-parse", "--show-toplevel"])
+        XCTAssertEqual(
+            GitActivityLog.displayCommand(for:
+                GitClient.readOnlyArguments(["rev-parse", "--show-toplevel"])),
+            "rev-parse --show-toplevel")
+        let guarded = ["-C", "/r", "--no-optional-locks", "status"]
+        XCTAssertEqual(GitClient.readOnlyArguments(guarded), guarded)
+    }
+
+    func testReadOnlyArgumentsDoNotMistakeAPathspecForTheGlobalFlag() {
+        XCTAssertEqual(
+            GitClient.readOnlyArguments(
+                ["-C", "/r", "diff", "--", "--no-optional-locks"]),
+            ["-C", "/r", "--no-optional-locks", "diff", "--",
+             "--no-optional-locks"])
+        XCTAssertEqual(
+            GitClient.readOnlyArguments(
+                ["check-ignore", "--", "--no-optional-locks"]),
+            ["--no-optional-locks", "check-ignore", "--",
+             "--no-optional-locks"])
+    }
+
     func testStderrTailHasCredentialsRedacted() {
         let log = GitActivityLog()
         let id = log.begin(command: "fetch")

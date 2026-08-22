@@ -310,6 +310,13 @@ final class GitShell {
         while argv.count >= 2, argv[0] == "-C" {
             argv.removeFirst(2)
         }
+        // Read-only queries carry global flags between the -C pair and the
+        // subcommand (GitClient.readOnlyArguments inserts --no-optional-locks
+        // there). Skipping them is what keeps this message naming a command
+        // rather than a flag — the whole point of not saying "git -C failed".
+        while let first = argv.first, first.hasPrefix("-") {
+            argv.removeFirst()
+        }
         return argv.first ?? ""
     }
 
