@@ -479,8 +479,22 @@ final class GitClient {
 
     // MARK: - Merging
 
-    func merge(_ branch: String) throws {
-        try runChecked(["-C", worktree.path, "merge", "--no-edit", branch], in: nil)
+    /// Merge modifiers: `squash` stages the branch's combined changes without
+    /// creating a commit (the user then commits via the commit box — message,
+    /// hooks and all); `noFastForward` records a merge commit even when a
+    /// fast-forward would do. Mutually exclusive in git; callers pass at most
+    /// one. `--no-edit` only applies to the non-squash path (squash never
+    /// commits, so there is no message to edit).
+    func merge(_ branch: String, squash: Bool = false, noFastForward: Bool = false) throws {
+        var args = ["-C", worktree.path, "merge"]
+        if squash {
+            args.append("--squash")
+        } else {
+            args.append("--no-edit")
+            if noFastForward { args.append("--no-ff") }
+        }
+        args.append(branch)
+        try runChecked(args, in: nil)
     }
 
     func mergeAbort() throws {
