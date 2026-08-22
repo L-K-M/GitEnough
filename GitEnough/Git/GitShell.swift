@@ -218,7 +218,8 @@ final class GitShell {
     /// Runs git with `args` in `directory` and returns the raw result without
     /// throwing on non-zero exit. Throws only when git can't be executed at all.
     @discardableResult
-    func run(_ args: [String], in directory: URL?) throws -> GitResult {
+    func run(_ args: [String], in directory: URL?,
+             environmentOverrides: [String: String] = [:]) throws -> GitResult {
         _ = Self.ignoreSIGPIPE
         guard let gitURL else {
             throw GitError(message: "git is not installed. Install the Xcode Command Line Tools (`xcode-select --install`) and relaunch GitEnough.", exitCode: -1)
@@ -229,7 +230,9 @@ final class GitShell {
         if let directory {
             process.currentDirectoryURL = directory
         }
-        process.environment = GitShell.childEnvironment
+        process.environment = GitShell.childEnvironment.merging(environmentOverrides) {
+            _, override in override
+        }
         process.arguments = args
 
         let outPipe = Pipe()
@@ -273,12 +276,16 @@ final class GitShell {
     /// Throws `GitError` carrying stderr when the exit code is non-zero.
     func runChecked(_ args: [String],
                     in directory: URL?,
-                    stdin: String? = nil) throws -> GitResult {
+                    stdin: String? = nil,
+                    environmentOverrides: [String: String] = [:]) throws -> GitResult {
         let result: GitResult
         if let stdin {
-            result = try runWithStdin(args, in: directory, stdin: stdin)
+            result = try runWithStdin(
+                args, in: directory, stdin: stdin,
+                environmentOverrides: environmentOverrides)
         } else {
-            result = try run(args, in: directory)
+            result = try run(
+                args, in: directory, environmentOverrides: environmentOverrides)
         }
         guard result.exitCode == 0 else {
             let message = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -307,7 +314,8 @@ final class GitShell {
     }
 
     /// Separate entry point because `standardInput` must be assigned before `run()`.
-    private func runWithStdin(_ args: [String], in directory: URL?, stdin: String) throws -> GitResult {
+    private func runWithStdin(_ args: [String], in directory: URL?, stdin: String,
+                              environmentOverrides: [String: String]) throws -> GitResult {
         _ = Self.ignoreSIGPIPE
         guard let gitURL else {
             throw GitError(message: "git is not installed. Install the Xcode Command Line Tools (`xcode-select --install`) and relaunch GitEnough.", exitCode: -1)
@@ -317,7 +325,9 @@ final class GitShell {
         if let directory {
             process.currentDirectoryURL = directory
         }
-        process.environment = GitShell.childEnvironment
+        process.environment = GitShell.childEnvironment.merging(environmentOverrides) {
+            _, override in override
+        }
         process.arguments = args
 
         let outPipe = Pipe()
