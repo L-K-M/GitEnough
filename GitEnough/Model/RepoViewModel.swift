@@ -415,15 +415,13 @@ final class RepoViewModel: ObservableObject, Identifiable {
         Self.preferredRemote(upstream: status.upstream, remotes: remotes)
     }
 
-    /// Pure form of the property above: the upstream's remote when configured,
-    /// else "origin", else the first remote. Testable without a repo.
+    /// Pure form of the property above: testable without a repo. The match
+    /// itself lives in `Remote.preferred`, which compares against the longest
+    /// *configured* remote name rather than splitting at the first slash —
+    /// remote names may themselves contain slashes ("team/fork"), so a split
+    /// would attribute "team/fork/topic" to a remote named "team".
     static func preferredRemote(upstream: String?, remotes: [Remote]) -> Remote? {
-        if let upstream,
-           let remoteName = upstream.split(separator: "/").first.map(String.init),
-           let remote = remotes.first(where: { $0.name == remoteName }) {
-            return remote
-        }
-        return remotes.first { $0.name == "origin" } ?? remotes.first
+        Remote.preferred(for: upstream, among: remotes)
     }
 
     // MARK: Branches

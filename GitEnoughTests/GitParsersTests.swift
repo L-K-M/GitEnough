@@ -282,6 +282,30 @@ final class GitParsersTests: XCTestCase {
                        "example.com/team/repo")
     }
 
+    func testPreferredRemoteMatchesLongestConfiguredUpstreamPrefix() {
+        let remotes = [
+            Remote(name: "origin", url: "https://example.com/acme/app.git"),
+            Remote(name: "team", url: "https://example.com/team/app.git"),
+            Remote(name: "team/fork", url: "https://example.com/fork/app.git"),
+        ]
+
+        XCTAssertEqual(
+            Remote.preferred(for: "team/fork/feature/topic", among: remotes)?.name,
+            "team/fork")
+        XCTAssertEqual(Remote.preferred(for: "team/main", among: remotes)?.name,
+                       "team")
+    }
+
+    func testPreferredRemoteFallsBackToOriginThenFirst() {
+        let origin = Remote(name: "origin", url: "https://example.com/acme/app.git")
+        let backup = Remote(name: "backup", url: "https://example.com/backup/app.git")
+
+        XCTAssertEqual(Remote.preferred(for: "missing/main", among: [backup, origin]),
+                       origin)
+        XCTAssertEqual(Remote.preferred(for: nil, among: [backup]), backup)
+        XCTAssertNil(Remote.preferred(for: nil, among: []))
+    }
+
     // MARK: - Stash
 
     func testParseStash() {
