@@ -716,6 +716,8 @@ final class GitIntegrationTests: XCTestCase {
         _ = try client.status()
         let entry = log.entries.last
         XCTAssertEqual(entry?.command.hasPrefix("status"), true)
+        XCTAssertEqual(entry?.arguments?.first, "status")
+        XCTAssertFalse(entry?.arguments?.contains(repoURL.path) ?? true)
         XCTAssertEqual(entry?.isRunning, false)
         XCTAssertEqual(entry?.exitCode, 0)
     }
