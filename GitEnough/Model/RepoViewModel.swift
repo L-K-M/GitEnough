@@ -460,10 +460,8 @@ final class RepoViewModel: ObservableObject, Identifiable {
                 var autoResolved = false
                 if caught == nil {
                     do {
-                        if !self.client.fileHasConflictMarkers(path) {
-                            try self.client.markResolved(path: path)
-                            autoResolved = true
-                        }
+                        try self.client.markResolved(path: path)
+                        autoResolved = true
                     } catch {
                         caught = error
                     }
