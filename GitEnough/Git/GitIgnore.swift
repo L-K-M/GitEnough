@@ -11,12 +11,21 @@ enum GitIgnore {
     /// - a leading `#` would read as a comment, a leading `!` as a negation;
     /// - trailing spaces are stripped by git unless escaped.
     static func escape(_ path: String) -> String {
-        var escaped = path.map { "\\*?[]".contains($0) ? "\\\($0)" : String($0) }.joined()
-        if escaped.hasPrefix("#") || escaped.hasPrefix("!") {
-            escaped = "\\" + escaped
-        }
-        if escaped.hasSuffix(" ") || escaped.hasSuffix("\t") {
-            escaped += "\\"
+        let trailingWhitespaceStart = path.lastIndex(where: { $0 != " " && $0 != "\t" })
+            .map { path.index(after: $0) } ?? path.startIndex
+        var escaped = ""
+        escaped.reserveCapacity(path.count)
+
+        for index in path.indices {
+            let character = path[index]
+            let isLeadingMarker = index == path.startIndex
+                && (character == "#" || character == "!")
+            let isTrailingWhitespace = index >= trailingWhitespaceStart
+                && (character == " " || character == "\t")
+            if isLeadingMarker || isTrailingWhitespace || "\\*?[]".contains(character) {
+                escaped.append("\\")
+            }
+            escaped.append(character)
         }
         return escaped
     }
@@ -26,7 +35,11 @@ enum GitIgnore {
     /// an equivalent entry already exists.
     static func appending(_ path: String, to existing: String) -> String {
         let escaped = escape(path)
-        let candidates = [path, "/" + path, escaped, "/" + escaped]
+        // Only the escaped pattern is guaranteed to mean this literal path.
+        // For a plain path `escaped == path`, while raw glob metacharacters or
+        // trailing whitespace have different gitignore semantics and must not
+        // suppress the literal rule.
+        let candidates = [escaped, "/" + escaped]
         let duplicates = existing.components(separatedBy: .newlines)
             .map(strippingTrailingUnescapedWhitespace)
             // Comment and negation lines can never ignore a path, so they
