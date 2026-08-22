@@ -380,8 +380,7 @@ private struct FileRow: View {
                 }
             }
             Button {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(file.path, forType: .string)
+                NSPasteboard.general.copyString(file.path)
             } label: {
                 Label("Copy Path", systemImage: "doc.on.doc")
             }
