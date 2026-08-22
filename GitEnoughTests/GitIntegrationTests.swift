@@ -611,6 +611,35 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertEqual(main.upstream, "origin/main")
     }
 
+    func testUnpushedCommitHashes() throws {
+        // No upstream configured: the concept doesn't apply — empty set.
+        XCTAssertTrue(try client.unpushedCommitHashes().isEmpty)
+
+        let remoteURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitEnoughTests-remote-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: remoteURL) }
+        try run(["init", "--bare", remoteURL.path])
+        try run(["remote", "add", "origin", remoteURL.path])
+        try client.push(setUpstream: true, remote: "origin")
+        XCTAssertTrue(try client.unpushedCommitHashes().isEmpty)
+
+        try write("five\n", to: "e.txt")
+        try client.stage(paths: ["e.txt"])
+        try client.commit(message: "Unpushed 1")
+        try write("six\n", to: "f.txt")
+        try client.stage(paths: ["f.txt"])
+        try client.commit(message: "Unpushed 2")
+
+        // Exactly the two new commits are flagged — nothing older.
+        let unpushed = try client.unpushedCommitHashes()
+        let newest = try client.log(limit: 2).map(\.hash)
+        XCTAssertEqual(unpushed, Set(newest))
+
+        // Pushing clears the markers.
+        try client.push(setUpstream: false)
+        XCTAssertTrue(try client.unpushedCommitHashes().isEmpty)
+    }
+
     func testCreateTagLightweightAndAnnotated() throws {
         let head = try XCTUnwrap(try client.log(limit: 1).first?.hash)
         try client.createTag(name: "v1.0", message: nil, at: head)
