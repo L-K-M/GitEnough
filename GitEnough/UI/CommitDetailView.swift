@@ -33,10 +33,8 @@ struct CommitDetailView: View {
                     ForEach(detail.files) { file in
                         HStack(spacing: 6) {
                             FileStatusBadge(status: file.status)
-                            Text(file.path)
+                            FilePathText(path: file.path, originalPath: file.originalPath)
                                 .font(.callout)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
                         }
                         .contextMenu {
                             Button {
