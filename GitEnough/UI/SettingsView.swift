@@ -208,14 +208,12 @@ private struct AISettingsView: View {
             Text("Used by the ✨ Generate button in the commit box to write commit messages from your staged diff.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            Text("Opening Settings never contacts the provider. Only Generate, Load Models, and Test Connection make requests.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
         }
         .formStyle(.grouped)
         .padding()
-        .onAppear {
-            if models.isEmpty && !apiKey.isEmpty && !baseURL.isEmpty {
-                loadModels()
-            }
-        }
     }
 
     private func save() {
