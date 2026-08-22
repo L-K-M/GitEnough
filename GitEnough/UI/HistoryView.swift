@@ -20,6 +20,9 @@ struct HistoryView: View {
     @State private var commitToTag: Commit?
     @State private var tagName = ""
     @State private var tagMessage = ""
+    /// Set by parent-chip navigation: the row the list should scroll into
+    /// view (consumed by the ScrollViewReader in historyList).
+    @State private var scrollTarget: String?
 
     private var isFiltering: Bool { !activeFilter.isEmpty }
 
@@ -98,7 +101,28 @@ struct HistoryView: View {
             historyList
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             Divider()
-            CommitDetailView(viewModel: viewModel, selectedHash: selectedHash)
+            CommitDetailView(viewModel: viewModel, selectedHash: selectedHash,
+                             onSelectCommit: { hash in
+                                 // Parent navigation must be able to reveal
+                                 // the target: a filter hiding it would leave
+                                 // a selection the list can't show. (Both
+                                 // fields: the debounce window can leave
+                                 // filterText set while activeFilter lags.)
+                                 if !filterText.isEmpty || !activeFilter.isEmpty {
+                                     filterText = ""
+                                     filterDebounceTask?.cancel()
+                                     activeFilter = ""
+                                 }
+                                 // Only scroll when there IS a row to land
+                                 // on — a parent beyond the loaded page still
+                                 // loads its detail (git show needs no list
+                                 // membership), but a scroll would silently
+                                 // no-op.
+                                 if viewModel.commits.contains(where: { $0.hash == hash }) {
+                                     scrollTarget = hash
+                                 }
+                                 selectedHash = hash
+                             })
                 .frame(maxHeight: .infinity)
                 .frame(width: 360)
         }
@@ -140,27 +164,45 @@ struct HistoryView: View {
         // Evaluated once per body evaluation and shared by the list, the
         // empty-state check, and the filter bar's counter.
         let visible = visibleCommits
-        return VStack(spacing: 0) {
-            filterBar(matchCount: visible.count)
-            Divider()
-            ScrollView {
-                VStack(spacing: 0) {
-                    commitRows(visible)
-                    if viewModel.canLoadMoreHistory {
-                        Button("Load older commits…") {
-                            viewModel.loadMoreHistory()
+        return ScrollViewReader { proxy in
+            VStack(spacing: 0) {
+                filterBar(matchCount: visible.count)
+                Divider()
+                ScrollView {
+                    VStack(spacing: 0) {
+                        commitRows(visible)
+                        if viewModel.canLoadMoreHistory {
+                            Button("Load older commits…") {
+                                viewModel.loadMoreHistory()
+                            }
+                            .buttonStyle(.link)
+                            .padding(.vertical, 10)
+                            .frame(maxWidth: .infinity)
                         }
-                        .buttonStyle(.link)
-                        .padding(.vertical, 10)
-                        .frame(maxWidth: .infinity)
+                    }
+                }
+                .background(Color(nsColor: .textBackgroundColor))
+                // Reset the scroll offset whenever the (debounced) filter changes —
+                // otherwise a deep scroll position can land the shorter result
+                // list in blank space. Constant ("") while unfiltered.
+                .id(activeFilter)
+            }
+            .onChange(of: scrollTarget) { _, target in
+                guard let target else { return }
+                // A beat for the row set to settle (a just-cleared filter
+                // re-keys the ScrollView; the target row must exist first).
+                // The LazyVStack materializes rows on demand, so a far-off
+                // target may still be missing on the first pass — retry once
+                // after layout, then give up silently (the detail pane is
+                // already showing the commit either way).
+                DispatchQueue.main.async {
+                    withAnimation { proxy.scrollTo(target, anchor: .center) }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                        withAnimation { proxy.scrollTo(target, anchor: .center) }
+                        scrollTarget = nil
                     }
                 }
             }
-            .background(Color(nsColor: .textBackgroundColor))
-            // Reset the scroll offset whenever the (debounced) filter changes —
-            // otherwise a deep scroll position can land the shorter result
-            // list in blank space. Constant ("") while unfiltered.
-            .id(activeFilter)
         }
     }
 
@@ -202,6 +244,8 @@ struct HistoryView: View {
         .contextMenu {
             commitContextMenu(commit)
         }
+        // Stable identity for ScrollViewProxy.scrollTo (parent navigation).
+        .id(commit.hash)
     }
 
     private var emptyFilterState: some View {
