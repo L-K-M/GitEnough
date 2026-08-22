@@ -154,7 +154,9 @@ final class GitParsersTests: XCTestCase {
         XCTAssertEqual(rename?.originalPath, "old name.txt")
 
         XCTAssertTrue(status.isDirty)
-        XCTAssertEqual(status.changeCount, 6)
+        // `both.txt` is partially staged and appears in both arrays, but it is
+        // one changed path in the user-facing count.
+        XCTAssertEqual(status.changeCount, 5)
     }
 
     func testParseStatusDetachedAndConflicted() {
@@ -171,6 +173,8 @@ final class GitParsersTests: XCTestCase {
         // Conflicted files are surfaced separately, not as ordinary staged changes.
         XCTAssertTrue(status.staged.isEmpty)
         XCTAssertTrue(status.unstaged.isEmpty)
+        XCTAssertTrue(status.isDirty)
+        XCTAssertEqual(status.changeCount, 1)
     }
 
     func testParseStatusUnbornBranch() {

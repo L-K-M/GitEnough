@@ -147,8 +147,19 @@ struct RepoStatus: Equatable {
 
     var isDetached: Bool { head == nil && headHash != nil && headHash != "(initial)" }
     var isUnborn: Bool { headHash == "(initial)" }
-    var isDirty: Bool { !staged.isEmpty || !unstaged.isEmpty }
-    var changeCount: Int { staged.count + unstaged.count }
+    var isDirty: Bool { !staged.isEmpty || !unstaged.isEmpty || !conflicted.isEmpty }
+
+    /// Number of changed paths, not status buckets. A partially staged file is
+    /// present in both `staged` and `unstaged`, while an unmerged path may also
+    /// be represented in `conflicted`; each still counts as one file to a user.
+    var changeCount: Int {
+        var paths = Set<String>()
+        paths.reserveCapacity(staged.count + unstaged.count + conflicted.count)
+        for change in staged { paths.insert(change.path) }
+        for change in unstaged { paths.insert(change.path) }
+        for change in conflicted { paths.insert(change.path) }
+        return paths.count
+    }
 }
 
 /// A stash entry from `git stash list`.
