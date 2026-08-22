@@ -14,6 +14,15 @@ struct RepoDetailView: View {
     @State private var newBranchName = ""
     @State private var checkoutNewBranch = true
     @State private var showingActivityLog = false
+    /// Confirms aborting an in-progress merge/rebase/cherry-pick/revert —
+    /// the single most destructive unguarded action in the banner.
+    @State private var confirmingAbort = false
+
+    /// Lowercase noun of the in-progress operation for the abort dialog's
+    /// sentence text ("… before the merge started").
+    private var inProgressNoun: String {
+        (viewModel.mergeState.operation?.noun ?? "Operation").lowercased()
+    }
 
     private var localBranches: [Branch] {
         viewModel.branches.filter { !$0.isRemote }
@@ -130,6 +139,16 @@ struct RepoDetailView: View {
         .sheet(isPresented: $appState.showingNewBranch) {
             newBranchSheet
         }
+        .confirmationDialog("Abort this \(inProgressNoun)?",
+                            isPresented: $confirmingAbort,
+                            titleVisibility: .visible) {
+            Button("Abort", role: .destructive) {
+                viewModel.abortOperation()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Aborting returns the repository to the state before the \(inProgressNoun) started. Any conflict resolutions you haven't committed will be lost.")
+        }
     }
 
     // MARK: - Toolbar pieces
@@ -189,7 +208,7 @@ struct RepoDetailView: View {
                 }
             }
             Button("Abort \(noun)") {
-                viewModel.abortOperation()
+                confirmingAbort = true
             }
             .disabled(viewModel.isBusy)
             if state.conflictedFiles.isEmpty {
