@@ -282,11 +282,29 @@ struct HistoryView: View {
             commitToCheckout = commit
         }
         Divider()
-        Button("Cherry-pick onto Current Branch") {
-            viewModel.cherryPick(commit.hash)
-        }
-        Button("Revert Commit") {
-            viewModel.revert(commit.hash)
+        if commit.isMerge {
+            // A merge replays differently depending on which parent is the
+            // baseline: -m 1 is "what the merge brought onto the branch it
+            // landed on", -m 2 the reverse (relevant for merge-back commits).
+            // One item per parent keeps the choice explicit — and covers
+            // octopus merges too.
+            ForEach(Array(commit.parents.enumerated()), id: \.offset) { index, parent in
+                Button("Cherry-pick Merge vs. Parent \(index + 1) (\(String(parent.prefix(7))))") {
+                    viewModel.cherryPick(commit.hash, mainline: index + 1)
+                }
+            }
+            // Reverting keeps the canonical "undo what the merge brought onto
+            // this branch" semantic: always against the first parent.
+            Button("Revert Merge (vs. First Parent)") {
+                viewModel.revert(commit.hash, mainline: 1)
+            }
+        } else {
+            Button("Cherry-pick onto Current Branch") {
+                viewModel.cherryPick(commit.hash)
+            }
+            Button("Revert Commit") {
+                viewModel.revert(commit.hash)
+            }
         }
         Divider()
         Button("Reset Current Branch to Here…") {

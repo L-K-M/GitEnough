@@ -609,6 +609,52 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertFalse(try client.status().isDirty)
     }
 
+    func testCherryPickMergeCommitNeedsMainline() throws {
+        // The setup repo's HEAD is a merge. Cherry-picking it must specify the
+        // parent to diff against; the UI always passes 1 (the first parent).
+        let commits = try client.log(limit: 50)
+        let merge = try XCTUnwrap(commits.first)
+        XCTAssertTrue(merge.isMerge)
+        let initial = try XCTUnwrap(commits.last)
+
+        try run(["checkout", "-b", "pick-target", initial.hash])
+        // Without a mainline git refuses outright ("is a merge but no -m
+        // option was given") — and does so before writing sequencer state.
+        XCTAssertThrowsError(try client.cherryPick(merge.hash))
+        XCTAssertNil(client.inProgressOperation())
+
+        // With mainline 1 the merge's first-parent diff (b.txt, brought in by
+        // the feature branch) replays cleanly — and only that diff: c.txt was
+        // already on the first parent and must not come along.
+        try client.cherryPick(merge.hash, mainline: 1)
+        XCTAssertNil(client.inProgressOperation())
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: repoURL.appendingPathComponent("b.txt").path))
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: repoURL.appendingPathComponent("c.txt").path))
+        XCTAssertFalse(try client.status().isDirty)
+    }
+
+    func testRevertMergeCommitNeedsMainline() throws {
+        let commits = try client.log(limit: 50)
+        let merge = try XCTUnwrap(commits.first)
+        XCTAssertTrue(merge.isMerge)
+
+        XCTAssertThrowsError(try client.revert(merge.hash))
+        XCTAssertNil(client.inProgressOperation())
+
+        // Reverting against the first parent undoes what the merge brought
+        // onto main: b.txt disappears, a.txt/c.txt stay.
+        try client.revert(merge.hash, mainline: 1)
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: repoURL.appendingPathComponent("b.txt").path))
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: repoURL.appendingPathComponent("c.txt").path))
+        let head = try XCTUnwrap(try client.log(limit: 1).first)
+        XCTAssertTrue(head.subject.hasPrefix("Revert"))
+        XCTAssertFalse(try client.status().isDirty)
+    }
+
     func testValidationHelpers() throws {
         XCTAssertTrue(GitClient.isRepository(at: repoURL))
         // git reports the physical path; temporaryDirectory may sit behind the
