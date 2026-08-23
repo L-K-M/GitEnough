@@ -231,6 +231,75 @@ final class PullRequestFinderTests: XCTestCase {
         XCTAssertEqual(probed as? [String], ["forgejo", "gitlab"])
     }
 
+    func testGenericGitLabWithNoOpenMRUsesGitLabCreateURL() async {
+        let probed: NSMutableArray = []
+        MockURLProtocol.handler = { request in
+            let url = request.url!
+            if url.absoluteString.contains("/api/v1/") {
+                probed.add("forgejo")
+                return (MockURLProtocol.notFound(url), Data("{}".utf8))
+            }
+            probed.add("gitlab")
+            return (MockURLProtocol.ok(url), Data("[]".utf8))
+        }
+        defer { MockURLProtocol.handler = nil }
+        let generic = ForgeRepo(kind: .generic, origin: URL(string: "https://git.acme.dev")!,
+                                owner: "acme", repo: "widget")
+
+        let resolution = await stubbedFinder()
+            .resolvePullRequest(for: generic, headBranch: "topic")
+
+        XCTAssertNil(resolution.pullRequest)
+        XCTAssertEqual(resolution.forge.kind, .gitlab)
+        XCTAssertEqual(
+            resolution.forge.newPullRequestURL(base: "main", head: "topic").absoluteString,
+            "https://git.acme.dev/acme/widget/-/merge_requests/new"
+                + "?merge_request%5Bsource_branch%5D=topic"
+                + "&merge_request%5Btarget_branch%5D=main")
+        XCTAssertEqual(probed as? [String], ["forgejo", "gitlab"])
+    }
+
+    func testGenericForgejoWithNoOpenPRStopsAfterForgejoResponse() async {
+        let probed: NSMutableArray = []
+        MockURLProtocol.handler = { request in
+            let url = request.url!
+            probed.add(url.absoluteString.contains("/api/v1/") ? "forgejo" : "gitlab")
+            return (MockURLProtocol.ok(url), Data("[]".utf8))
+        }
+        defer { MockURLProtocol.handler = nil }
+        let generic = ForgeRepo(kind: .generic, origin: URL(string: "https://code.acme.dev")!,
+                                owner: "acme", repo: "widget")
+
+        let resolution = await stubbedFinder()
+            .resolvePullRequest(for: generic, headBranch: "topic")
+
+        XCTAssertNil(resolution.pullRequest)
+        XCTAssertEqual(resolution.forge.kind, .forgejo)
+        XCTAssertEqual(probed as? [String], ["forgejo"])
+    }
+
+    func testMalformedSuccessfulForgejoResponseFallsThroughToGitLab() async {
+        let probed: NSMutableArray = []
+        MockURLProtocol.handler = { request in
+            let url = request.url!
+            if url.absoluteString.contains("/api/v1/") {
+                probed.add("forgejo")
+                return (MockURLProtocol.ok(url), Data("not json".utf8))
+            }
+            probed.add("gitlab")
+            return (MockURLProtocol.ok(url), Data("[]".utf8))
+        }
+        defer { MockURLProtocol.handler = nil }
+        let generic = ForgeRepo(kind: .generic, origin: URL(string: "https://git.acme.dev")!,
+                                owner: "acme", repo: "widget")
+
+        let resolution = await stubbedFinder()
+            .resolvePullRequest(for: generic, headBranch: "topic")
+
+        XCTAssertEqual(resolution.forge.kind, .gitlab)
+        XCTAssertEqual(probed as? [String], ["forgejo", "gitlab"])
+    }
+
     func testNon200YieldsNothing() async {
         MockURLProtocol.handler = { request in
             (MockURLProtocol.notFound(request.url!), Data("{}".utf8))

@@ -91,8 +91,46 @@ final class GitIntegrationTests: XCTestCase {
         let branches = try client.branches()
         XCTAssertEqual(branches.count, 2)
         XCTAssertEqual(branches.first { $0.isHead }?.name, "main")
+        XCTAssertEqual(branches.first { $0.isHead }?.refName, "refs/heads/main")
         XCTAssertNotNil(branches.first { $0.name == "feature" })
         XCTAssertTrue(branches.allSatisfy { !$0.isRemote })
+    }
+
+    func testBranchAndTagWithSameNameStillChecksOutBranch() throws {
+        try run(["branch", "same"])
+        try run(["tag", "same"])
+        let branch = try XCTUnwrap(client.branches().first { $0.name == "same" })
+        XCTAssertEqual(branch.refName, "refs/heads/same")
+
+        try client.checkout(branch: branch.name)
+
+        XCTAssertEqual(try client.status().head, "same")
+        XCTAssertFalse(try client.status().isDetached)
+    }
+
+    func testRemoteBranchAndTagCollisionKeepsCanonicalRemoteRef() throws {
+        try run(["remote", "add", "origin", "https://example.com/acme/widget.git"])
+        try run(["update-ref", "refs/remotes/origin/same", "refs/heads/main"])
+        try run(["tag", "origin/same"])
+        let branch = try XCTUnwrap(
+            client.branches().first { $0.refName == "refs/remotes/origin/same" })
+
+        try client.checkoutTracking(remoteBranch: branch.refName,
+                                    localName: "tracked-collision")
+
+        XCTAssertEqual(try client.status().head, "tracked-collision")
+    }
+
+    func testBranchesCarryLastCommitDate() throws {
+        let branches = try client.branches()
+        // Both branches were committed to moments ago in setUp. Recency only,
+        // not cross-branch ordering: git's committer date is second-granular and
+        // a fast CI runner finishes the whole fixture inside one second.
+        for branch in branches {
+            let date = try XCTUnwrap(branch.lastCommitDate,
+                                     "\(branch.name) should carry its tip's committer date")
+            XCTAssertEqual(date.timeIntervalSinceNow, 0, accuracy: 120)
+        }
     }
 
     func testModifyStageUnstageFlow() throws {
@@ -212,6 +250,110 @@ final class GitIntegrationTests: XCTestCase {
             atPath: repoURL.appendingPathComponent("b-new.txt").path))
     }
 
+    func testUnstageStagedRenameIncludesOriginalPath() throws {
+        try run(["mv", "a.txt", "renamed.txt"])
+        var status = try client.status()
+        let rename = try XCTUnwrap(status.staged.first { $0.stagedStatus == .renamed })
+        XCTAssertEqual(rename.path, "renamed.txt")
+        XCTAssertEqual(rename.originalPath, "a.txt")
+
+        try client.unstage(paths: rename.affectedPaths)
+
+        status = try client.status()
+        XCTAssertTrue(status.staged.isEmpty)
+        XCTAssertEqual(Set(status.unstaged.map(\.path)), ["a.txt", "renamed.txt"])
+    }
+
+    func testDiscardStagedRenameRestoresSourceAndPreservesDestination() throws {
+        try run(["mv", "a.txt", "renamed.txt"])
+        let rename = try XCTUnwrap(
+            try client.status().staged.first { $0.stagedStatus == .renamed })
+
+        try client.discard(paths: rename.affectedPaths)
+
+        let status = try client.status()
+        XCTAssertTrue(status.staged.isEmpty)
+        XCTAssertEqual(status.unstaged.map(\.path), ["renamed.txt"])
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: repoURL.appendingPathComponent("a.txt").path))
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: repoURL.appendingPathComponent("renamed.txt").path))
+        let original = try String(
+            contentsOf: repoURL.appendingPathComponent("a.txt"), encoding: .utf8)
+        let destination = try String(
+            contentsOf: repoURL.appendingPathComponent("renamed.txt"), encoding: .utf8)
+        XCTAssertEqual(original, "one\n")
+        XCTAssertEqual(destination, "one\n")
+    }
+
+    func testDiscardStagedCopyPreservesModifiedSource() throws {
+        try run(["config", "status.renames", "copies"])
+        try write("one\n", to: "copied.txt")
+        try write("changed source\n", to: "a.txt")
+        try client.stage(paths: ["a.txt", "copied.txt"])
+
+        let copy = try XCTUnwrap(
+            try client.status().staged.first { $0.stagedStatus == .copied })
+        XCTAssertEqual(copy.originalPath, "a.txt")
+        XCTAssertEqual(copy.affectedPaths, ["copied.txt"])
+
+        try client.discard(paths: copy.affectedPaths)
+
+        let status = try client.status()
+        XCTAssertTrue(status.staged.contains {
+            $0.path == "a.txt" && $0.stagedStatus == .modified
+        })
+        XCTAssertTrue(status.unstaged.contains {
+            $0.path == "copied.txt" && $0.isUntracked
+        })
+        XCTAssertEqual(
+            try String(contentsOf: repoURL.appendingPathComponent("a.txt"),
+                       encoding: .utf8),
+            "changed source\n")
+        XCTAssertEqual(
+            try String(contentsOf: repoURL.appendingPathComponent("copied.txt"),
+                       encoding: .utf8),
+            "one\n")
+    }
+
+    func testStageAndUnstageCopyDoNotTouchSourceState() throws {
+        try run(["config", "status.renames", "copies"])
+        try write("one\n", to: "copied.txt")
+        try write("staged source\n", to: "a.txt")
+        try client.stage(paths: ["a.txt", "copied.txt"])
+
+        var copy = try XCTUnwrap(
+            try client.status().staged.first { $0.stagedStatus == .copied })
+        try client.unstage(paths: copy.affectedPaths)
+
+        var status = try client.status()
+        XCTAssertTrue(status.staged.contains {
+            $0.path == "a.txt" && $0.stagedStatus == .modified
+        })
+        XCTAssertTrue(status.unstaged.contains {
+            $0.path == "copied.txt" && $0.isUntracked
+        })
+
+        // Re-stage the copy, then give its independently staged source another
+        // worktree edit. Staging the copy row must not absorb that source edit.
+        try client.stage(paths: ["copied.txt"])
+        try write("unstaged source\n", to: "a.txt")
+        status = try client.status()
+        copy = try XCTUnwrap(status.staged.first { $0.stagedStatus == .copied })
+        XCTAssertEqual(copy.affectedPaths, ["copied.txt"])
+
+        try client.stage(paths: copy.affectedPaths)
+
+        status = try client.status()
+        let source = try XCTUnwrap(status.staged.first { $0.path == "a.txt" })
+        XCTAssertEqual(source.stagedStatus, .modified)
+        XCTAssertEqual(source.unstagedStatus, .modified)
+        XCTAssertEqual(
+            try String(contentsOf: repoURL.appendingPathComponent("a.txt"),
+                       encoding: .utf8),
+            "unstaged source\n")
+    }
+
     func testDiscardTreatsGlobCharactersInFilenamesLiterally() throws {
         try write("star\n", to: "a*.txt")
         try write("plain\n", to: "abc.txt")
@@ -227,6 +369,61 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertEqual(reverted, "star\n")
         let untouched = try String(contentsOf: repoURL.appendingPathComponent("abc.txt"), encoding: .utf8)
         XCTAssertEqual(untouched, "plain changed\n")
+    }
+
+    func testPathTakingCommandsTreatGitPathspecSyntaxLiterally() throws {
+        let pairs = [
+            (target: "star*.txt", decoy: "star-hit.txt"),
+            (target: "question?.txt", decoy: "question1.txt"),
+            (target: "bracket[1].txt", decoy: "bracket1.txt"),
+            (target: ":(glob)magic*.txt", decoy: "magic-hit.txt"),
+        ]
+
+        for (index, pair) in pairs.enumerated() {
+            try write("base target \(index)\n", to: pair.target)
+            try write("base decoy \(index)\n", to: pair.decoy)
+        }
+        try run(["add", "-A"])
+        try run(["commit", "-m", "Add pathspec fixtures"])
+
+        for (index, pair) in pairs.enumerated() {
+            try write("changed target \(index)\n", to: pair.target)
+            try write("changed decoy \(index)\n", to: pair.decoy)
+        }
+
+        let targets = pairs.map { $0.target }
+        let decoys = pairs.map { $0.decoy }
+        try client.stage(paths: targets)
+
+        var status = try client.status()
+        XCTAssertEqual(Set(status.staged.map(\.path)), Set(targets))
+        XCTAssertEqual(Set(status.unstaged.map(\.path)), Set(decoys))
+        for (index, pair) in pairs.enumerated() {
+            let patch = try client.diff(path: pair.target, staged: true)
+            XCTAssertTrue(patch.contains("+changed target \(index)"), pair.target)
+            XCTAssertFalse(patch.contains("+changed decoy \(index)"), pair.target)
+        }
+
+        try client.unstage(paths: targets)
+        status = try client.status()
+        XCTAssertTrue(status.staged.isEmpty)
+        XCTAssertEqual(Set(status.unstaged.map(\.path)), Set(targets + decoys))
+        for (index, pair) in pairs.enumerated() {
+            let patch = try client.diff(path: pair.target, staged: false)
+            XCTAssertTrue(patch.contains("+changed target \(index)"), pair.target)
+            XCTAssertFalse(patch.contains("+changed decoy \(index)"), pair.target)
+        }
+
+        // Put target and lookalike changes in the same commit: a commit-file
+        // diff must still return only the exact filename selected in the UI.
+        try run(["add", "-A"])
+        try run(["commit", "-m", "Change pathspec fixtures"])
+        let hash = try XCTUnwrap(client.log(limit: 1).first?.hash)
+        for (index, pair) in pairs.enumerated() {
+            let patch = try client.commitFileDiff(hash: hash, path: pair.target)
+            XCTAssertTrue(patch.contains("+changed target \(index)"), pair.target)
+            XCTAssertFalse(patch.contains("+changed decoy \(index)"), pair.target)
+        }
     }
 
     func testDiffRoundTrip() throws {
@@ -245,6 +442,46 @@ final class GitIntegrationTests: XCTestCase {
         try write("brand new\n", to: "new.txt")
         let diff = try client.diffForUntracked(path: "new.txt")
         XCTAssertTrue(diff.contains("+brand new"))
+    }
+
+    func testUntrackedDirectoryDiffListsContents() throws {
+        // status --untracked-files=normal collapses a fully-untracked directory
+        // to a single "dir/" entry; diffing it with --no-index against /dev/null
+        // fails ("Could not access 'dir/null'"), so directories get a listing.
+        try FileManager.default.createDirectory(
+            at: repoURL.appendingPathComponent("newdir/sub"), withIntermediateDirectories: true)
+        try write("one\n", to: "newdir/one.txt")
+        try write("two\n", to: "newdir/two.txt")
+        // Nested untracked directories are recursed into, and ignore rules are
+        // honored so the listing matches what status considers untracked.
+        try write("three\n", to: "newdir/sub/three.txt")
+        try write("*.log\n", to: "newdir/.gitignore")
+        try write("log\n", to: "newdir/ignored.log")
+
+        let status = try client.status()
+        XCTAssertTrue(status.unstaged.contains { $0.path == "newdir/" && $0.isUntracked })
+
+        let listing = try client.diffForUntracked(path: "newdir/")
+        XCTAssertTrue(listing.contains("newdir/one.txt"))
+        XCTAssertTrue(listing.contains("newdir/two.txt"))
+        XCTAssertTrue(listing.contains("newdir/sub/three.txt"))
+        XCTAssertFalse(listing.contains("ignored.log"))
+
+        // Staging the directory works through the collapsed path, too.
+        try client.stage(paths: ["newdir/"])
+        XCTAssertEqual(try client.status().staged.count, 4)
+    }
+
+    func testUntrackedDirectoryListingIsCapped() throws {
+        let directory = repoURL.appendingPathComponent("huge")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        for index in 0..<210 {
+            try write("x\n", to: "huge/f\(String(format: "%03d", index)).txt")
+        }
+        let listing = try client.diffForUntracked(path: "huge/")
+        XCTAssertTrue(listing.contains("… and 10 more"))
+        XCTAssertTrue(listing.contains("huge/f000.txt"))
+        XCTAssertFalse(listing.contains("huge/f209.txt"))
     }
 
     func testCommitViaStdinMessage() throws {
@@ -359,6 +596,46 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertEqual(content, "from main\n")
     }
 
+    func testConflictActionsTreatPathspecsLiterally() throws {
+        let paths = ["tool*.txt", "tool-one.txt",
+                     "resolve*.txt", "resolve-one.txt",
+                     "mark?.txt", "mark1.txt"]
+        for path in paths { try write("base\n", to: path) }
+        try run(["add", "-A"])
+        try run(["commit", "-m", "Add conflict pathspec fixtures"])
+
+        try run(["checkout", "-b", "pathspec-conflicter"])
+        for path in paths { try write("from other branch\n", to: path) }
+        try run(["add", "-A"])
+        try run(["commit", "-m", "Change conflict fixtures on branch"])
+
+        try run(["checkout", "main"])
+        for path in paths { try write("from main\n", to: path) }
+        try run(["add", "-A"])
+        try run(["commit", "-m", "Change conflict fixtures on main"])
+        XCTAssertThrowsError(try client.merge("pathspec-conflicter"))
+        XCTAssertEqual(Set(try client.conflictedPaths()), Set(paths))
+
+        // A deterministic custom mergetool chooses the other branch's version.
+        // Its wildcard-looking target must not resolve the lookalike conflict.
+        try run(["config", "mergetool.pathspec-test.cmd", "cp \"$REMOTE\" \"$MERGED\""])
+        try run(["config", "mergetool.pathspec-test.trustExitCode", "true"])
+        try client.runMergeTool("pathspec-test", path: "tool*.txt")
+        XCTAssertEqual(
+            Set(try client.conflictedPaths()),
+            Set(paths.filter { $0 != "tool*.txt" }))
+
+        try client.resolveConflict(path: "resolve*.txt", ours: true)
+        XCTAssertEqual(
+            Set(try client.conflictedPaths()),
+            Set(paths.filter { $0 != "tool*.txt" && $0 != "resolve*.txt" }))
+
+        try write("resolved by hand\n", to: "mark?.txt")
+        try client.markResolved(path: "mark?.txt")
+        XCTAssertEqual(Set(try client.conflictedPaths()),
+                       Set(["tool-one.txt", "resolve-one.txt", "mark1.txt"]))
+    }
+
     func testRemoteDefaultBranch() throws {
         // No remote yet — nothing to read.
         XCTAssertNil(client.remoteDefaultBranch(remote: "origin"))
@@ -387,6 +664,180 @@ final class GitIntegrationTests: XCTestCase {
         let main = try XCTUnwrap(client.branches().first { $0.name == "main" },
                                  "expected default branch 'main'")
         XCTAssertEqual(main.upstream, "work/main")
+    }
+
+    func testOrdinaryFetchAndPullDoNotForceUpdateEveryTag() throws {
+        let remoteURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitEnoughTests-remote-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: remoteURL) }
+        try run(["init", "--bare", remoteURL.path])
+        try run(["remote", "add", "origin", remoteURL.path])
+        try run(["push", "-u", "origin", "main"])
+
+        let head = try GitShell.shared.runChecked(
+            ["rev-parse", "HEAD"], in: repoURL).stdout
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let parent = try GitShell.shared.runChecked(
+            ["rev-parse", "HEAD^"], in: repoURL).stdout
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        try run(["tag", "shared-name", head])
+        _ = try GitShell.shared.runChecked(
+            ["update-ref", "refs/tags/shared-name", parent], in: remoteURL)
+
+        // `--tags` would reject this routine sync with “would clobber existing
+        // tag”. Normal fetch semantics leave the divergent local tag alone.
+        try client.fetch()
+        try client.pull(rebase: false)
+
+        let localTag = try GitShell.shared.runChecked(
+            ["rev-parse", "refs/tags/shared-name"], in: repoURL).stdout
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        XCTAssertEqual(localTag, head)
+    }
+
+    func testBranchUpstreamGoneAfterRemoteDeletion() throws {
+        let remoteURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitEnoughTests-remote-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: remoteURL) }
+        try run(["init", "--bare", remoteURL.path])
+        try run(["remote", "add", "origin", remoteURL.path])
+        try client.push(setUpstream: true, remote: "origin")
+
+        var main = try XCTUnwrap(client.branches().first { $0.name == "main" && !$0.isRemote })
+        XCTAssertEqual(main.upstream, "origin/main")
+        XCTAssertFalse(main.upstreamGone)
+
+        // Delete the branch on the remote, then prune: the tracking config
+        // survives but its ref is gone — for-each-ref reports "[gone]".
+        _ = try GitShell.shared.runChecked(
+            ["-C", remoteURL.path, "update-ref", "-d", "refs/heads/main"], in: nil)
+        try run(["fetch", "--prune", "origin"])
+
+        main = try XCTUnwrap(client.branches().first { $0.name == "main" && !$0.isRemote })
+        XCTAssertTrue(main.upstreamGone)
+        XCTAssertEqual(main.upstream, "origin/main")
+    }
+
+    func testUnpushedCommitHashes() throws {
+        // No upstream configured: the concept doesn't apply — empty set.
+        XCTAssertTrue(try client.unpushedCommitHashes().isEmpty)
+
+        let remoteURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitEnoughTests-remote-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: remoteURL) }
+        try run(["init", "--bare", remoteURL.path])
+        try run(["remote", "add", "origin", remoteURL.path])
+        try client.push(setUpstream: true, remote: "origin")
+        XCTAssertTrue(try client.unpushedCommitHashes().isEmpty)
+
+        try write("five\n", to: "e.txt")
+        try client.stage(paths: ["e.txt"])
+        try client.commit(message: "Unpushed 1")
+        try write("six\n", to: "f.txt")
+        try client.stage(paths: ["f.txt"])
+        try client.commit(message: "Unpushed 2")
+
+        // Exactly the two new commits are flagged — nothing older.
+        let unpushed = try client.unpushedCommitHashes()
+        let newest = try client.log(limit: 2).map(\.hash)
+        XCTAssertEqual(unpushed, Set(newest))
+
+        // Pushing clears the markers.
+        try client.push(setUpstream: false)
+        XCTAssertTrue(try client.unpushedCommitHashes().isEmpty)
+    }
+
+    func testDeleteRemoteBranch() throws {
+        let remoteURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitEnoughTests-remote-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: remoteURL) }
+        try run(["init", "--bare", remoteURL.path])
+        try run(["remote", "add", "origin", remoteURL.path])
+        // Publish something to delete, then mirror the remote-tracking ref
+        // like a fetch would.
+        try run(["checkout", "-b", "to-delete"])
+        try client.push(setUpstream: true, remote: "origin")
+        try run(["checkout", "main"])
+        try client.fetch()
+        XCTAssertTrue(try client.branches().contains { $0.name == "origin/to-delete" })
+
+        try client.deleteRemoteBranch("origin/to-delete")
+
+        try client.fetch()
+        XCTAssertFalse(try client.branches().contains { $0.name == "origin/to-delete" })
+        // The local branch is untouched — remote deletion never cascades.
+        XCTAssertTrue(try client.branches().contains { $0.name == "to-delete" && !$0.isRemote })
+    }
+
+    func testDeleteRemoteBranchRejectsInvalidRefs() throws {
+        // Guard paths: no push happens for any of these. (A remote must exist
+        // so the prefix-matching guard, not just "no configured remote", is
+        // what rejects the malformed inputs.)
+        try run(["remote", "add", "origin", "https://example.com/x/y.git"])
+        XCTAssertThrowsError(try client.deleteRemoteBranch("noremote/branch"))
+        XCTAssertThrowsError(try client.deleteRemoteBranch("origin/"))
+        XCTAssertThrowsError(try client.deleteRemoteBranch("origin/HEAD"))
+        XCTAssertThrowsError(try client.deleteRemoteBranch("origin/-dash"))
+    }
+
+    func testDeleteRemoteBranchOnSlashNamedRemote() throws {
+        // Remote names may contain "/": "up/stream/port" must split into
+        // remote "up/stream" + branch "port" (longest-prefix match), never
+        // remote "up" + branch "stream/port". (Branch name "port": the shared
+        // fixture already has a "feature" branch.)
+        let upURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitEnoughTests-up-\(UUID().uuidString)")
+        let upStreamURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitEnoughTests-upstream-\(UUID().uuidString)")
+        defer {
+            try? FileManager.default.removeItem(at: upURL)
+            try? FileManager.default.removeItem(at: upStreamURL)
+        }
+        try run(["init", "--bare", upURL.path])
+        try run(["init", "--bare", upStreamURL.path])
+        try run(["remote", "add", "up", upURL.path])
+        try run(["remote", "add", "up/stream", upStreamURL.path])
+
+        try run(["checkout", "-b", "port"])
+        try client.push(setUpstream: true, remote: "up/stream")
+        try run(["push", "up", "port"])   // the same branch on both remotes
+        try run(["checkout", "main"])
+
+        try client.deleteRemoteBranch("up/stream/port")
+
+        // Gone from up/stream …
+        let upStreamRefs = try GitShell.shared.runChecked(
+            ["-C", upStreamURL.path, "for-each-ref", "--format=%(refname)"], in: nil).stdout
+        XCTAssertFalse(upStreamRefs.contains("refs/heads/port"))
+        // … but untouched on up.
+        let upRefs = try GitShell.shared.runChecked(
+            ["-C", upURL.path, "for-each-ref", "--format=%(refname)"], in: nil).stdout
+        XCTAssertTrue(upRefs.contains("refs/heads/port"))
+    }
+
+    func testForcePushWithLease() throws {
+        let remoteURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitEnoughTests-remote-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: remoteURL) }
+        try run(["init", "--bare", remoteURL.path])
+        try run(["remote", "add", "origin", remoteURL.path])
+        try client.push(setUpstream: true, remote: "origin")
+
+        // Rewrite local history so local and remote diverge.
+        try write("amended\n", to: "a.txt")
+        try client.stage(paths: ["a.txt"])
+        try client.commit(message: "Amended tip", amend: true)
+
+        // A plain push is refused (non-fast-forward)…
+        XCTAssertThrowsError(try client.push(setUpstream: false))
+        // …the lease push succeeds, and the remote tip matches local HEAD.
+        try client.push(setUpstream: false, forceWithLease: true)
+        let localHead = try GitShell.shared.runChecked(["rev-parse", "HEAD"], in: repoURL)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let remoteHead = try GitShell.shared.runChecked(
+            ["-C", remoteURL.path, "rev-parse", "refs/heads/main"], in: nil)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        XCTAssertEqual(localHead, remoteHead)
     }
 
     func testCreateTagLightweightAndAnnotated() throws {
@@ -451,6 +902,26 @@ final class GitIntegrationTests: XCTestCase {
         try run(["commit", "-m", "Change a on main"])
     }
 
+    func testConflictMarkerScanIsStreamingAndThrowsOnReadFailure() throws {
+        try write("ordinary\n<<<<<<< HEAD\nours\n>>>>>>> topic\n", to: "markers.txt")
+        // A deliberately tiny chunk makes both markers cross read boundaries.
+        XCTAssertTrue(try client.fileHasConflictMarkers("markers.txt", chunkSize: 3))
+
+        try write("Title\n=======\nnot an angle marker\n", to: "setext.md")
+        XCTAssertFalse(try client.fileHasConflictMarkers("setext.md", chunkSize: 2))
+        XCTAssertThrowsError(try client.fileHasConflictMarkers("missing.txt"))
+    }
+
+    func testMarkResolvedRefusesAFileThatStillHasMarkers() throws {
+        try makeConflictingBranch("marker-conflict")
+        XCTAssertThrowsError(try client.merge("marker-conflict"))
+
+        XCTAssertThrowsError(try client.markResolved(path: "a.txt")) { error in
+            XCTAssertTrue(error.localizedDescription.contains("still contains conflict markers"))
+        }
+        XCTAssertEqual(try client.conflictedPaths(), ["a.txt"])
+    }
+
     func testRebaseConflictDetectionResolutionAndContinue() throws {
         try makeConflictingBranch("conflicter")
         XCTAssertNil(client.inProgressOperation())
@@ -505,6 +976,96 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertFalse(try client.status().isDirty)
     }
 
+    func testCherryPickMergeCommitNeedsMainline() throws {
+        // The setup repo's HEAD is a merge. Cherry-picking it must specify the
+        // parent to diff against; the UI always passes 1 (the first parent).
+        let commits = try client.log(limit: 50)
+        let merge = try XCTUnwrap(commits.first)
+        XCTAssertTrue(merge.isMerge)
+        let initial = try XCTUnwrap(commits.last)
+
+        try run(["checkout", "-b", "pick-target", initial.hash])
+        // Without a mainline git refuses outright ("is a merge but no -m
+        // option was given") — and does so before writing sequencer state.
+        XCTAssertThrowsError(try client.cherryPick(merge.hash))
+        XCTAssertNil(client.inProgressOperation())
+
+        // With mainline 1 the merge's first-parent diff (b.txt, brought in by
+        // the feature branch) replays cleanly — and only that diff: c.txt was
+        // already on the first parent and must not come along.
+        try client.cherryPick(merge.hash, mainline: 1)
+        XCTAssertNil(client.inProgressOperation())
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: repoURL.appendingPathComponent("b.txt").path))
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: repoURL.appendingPathComponent("c.txt").path))
+        XCTAssertFalse(try client.status().isDirty)
+    }
+
+    func testRevertMergeCommitNeedsMainline() throws {
+        let commits = try client.log(limit: 50)
+        let merge = try XCTUnwrap(commits.first)
+        XCTAssertTrue(merge.isMerge)
+
+        XCTAssertThrowsError(try client.revert(merge.hash))
+        XCTAssertNil(client.inProgressOperation())
+
+        // Reverting against the first parent undoes what the merge brought
+        // onto main: b.txt disappears, a.txt/c.txt stay.
+        try client.revert(merge.hash, mainline: 1)
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: repoURL.appendingPathComponent("b.txt").path))
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: repoURL.appendingPathComponent("c.txt").path))
+        let head = try XCTUnwrap(try client.log(limit: 1).first)
+        XCTAssertTrue(head.subject.hasPrefix("Revert"))
+        XCTAssertFalse(try client.status().isDirty)
+    }
+
+    func testSquashMergeStagesWithoutCommitting() throws {
+        // A fresh divergence on top of the setup repo: side gets e.txt,
+        // main gets f.txt.
+        try run(["checkout", "-b", "side"])
+        try write("side change\n", to: "e.txt")
+        try run(["add", "e.txt"])
+        try run(["commit", "-m", "Add e on side"])
+        try run(["checkout", "main"])
+        try write("main change\n", to: "f.txt")
+        try run(["add", "f.txt"])
+        try run(["commit", "-m", "Add f on main"])
+        let commitsBefore = try client.log(limit: 50).count
+
+        try client.merge("side", squash: true)
+
+        // Changes staged, nothing committed, no sequencer state left behind.
+        let status = try client.status()
+        XCTAssertEqual(status.staged.map(\.path), ["e.txt"])
+        XCTAssertNil(client.inProgressOperation())
+        XCTAssertEqual(try client.log(limit: 50).count, commitsBefore)
+
+        // The normal commit-box flow then lands a single-parent commit.
+        try client.commit(message: "Squash side into main")
+        let head = try XCTUnwrap(try client.log(limit: 1).first)
+        XCTAssertEqual(head.parents.count, 1)
+        XCTAssertEqual(head.subject, "Squash side into main")
+    }
+
+    func testNoFastForwardMergeCreatesMergeCommit() throws {
+        // ff-side is strictly ahead of main — a plain merge would fast-forward
+        // and record no merge commit.
+        try run(["checkout", "-b", "ff-side"])
+        try write("ff change\n", to: "g.txt")
+        try run(["add", "g.txt"])
+        try run(["commit", "-m", "Add g on ff-side"])
+        try run(["checkout", "main"])
+
+        try client.merge("ff-side", noFastForward: true)
+
+        let head = try XCTUnwrap(try client.log(limit: 1).first)
+        XCTAssertEqual(head.parents.count, 2)
+        XCTAssertFalse(try client.status().isDirty)
+    }
+
     func testValidationHelpers() throws {
         XCTAssertTrue(GitClient.isRepository(at: repoURL))
         // git reports the physical path; temporaryDirectory may sit behind the
@@ -526,6 +1087,8 @@ final class GitIntegrationTests: XCTestCase {
         _ = try client.status()
         let entry = log.entries.last
         XCTAssertEqual(entry?.command.hasPrefix("status"), true)
+        XCTAssertEqual(entry?.arguments?.first, "status")
+        XCTAssertFalse(entry?.arguments?.contains(repoURL.path) ?? true)
         XCTAssertEqual(entry?.isRunning, false)
         XCTAssertEqual(entry?.exitCode, 0)
     }

@@ -13,7 +13,7 @@ final class GitParsersTests: XCTestCase {
     func testParseLog() {
         let output = [
             ["abc123", "def456", "Lukas Mathis", "l@example.com",
-             "2026-08-17T19:00:00+02:00", "HEAD -> main, origin/main, tag: v1.0", "Ship it"].joined(separator: f),
+             "2026-08-17T19:00:00+02:00", "HEAD -> refs/heads/main, refs/remotes/origin/main, tag: refs/tags/v1.0", "Ship it"].joined(separator: f),
             ["def456", "", "Claude", "c@example.com",
              "2026-08-17T18:00:00+02:00", "", "Initial commit"].joined(separator: f),
         ].joined(separator: r) + r + "\n"
@@ -44,9 +44,77 @@ final class GitParsersTests: XCTestCase {
     }
 
     func testParseLogDecorationsClassifyRemoteBranches() {
-        let decorations = GitParsers.parseDecorations("origin/feature, HEAD")
+        let decorations = GitParsers.parseDecorations("refs/remotes/origin/feature, HEAD")
         XCTAssertEqual(decorations[0], RefDecoration(kind: .remoteBranch, name: "origin/feature"))
         XCTAssertEqual(decorations[1], RefDecoration(kind: .head, name: "HEAD"))
+    }
+
+    func testParseLogDecorationsClassifySlashedLocalBranchAsLocal() {
+        // The short-form contains-"/" heuristic used to mischip the most common
+        // branch naming convention as a remote branch; --decorate=full output
+        // makes the classification exact.
+        let decorations = GitParsers.parseDecorations(
+            "HEAD -> refs/heads/feature/foo, refs/remotes/origin/feature/foo")
+        XCTAssertEqual(decorations[0], RefDecoration(kind: .head, name: "HEAD"))
+        XCTAssertEqual(decorations[1], RefDecoration(kind: .localBranch, name: "feature/foo"))
+        XCTAssertEqual(decorations[2], RefDecoration(kind: .remoteBranch, name: "origin/feature/foo"))
+    }
+
+    func testParseLogDecorationsDropRemoteHeadSymref() {
+        // refs/remotes/<remote>/HEAD decorates the default branch's tip in every
+        // repo with a remote; it is a symref, not a branch, and names nothing
+        // the user can act on — branches() filters it too.
+        let decorations = GitParsers.parseDecorations(
+            "refs/remotes/origin/HEAD, refs/remotes/origin/main")
+        XCTAssertEqual(decorations, [RefDecoration(kind: .remoteBranch, name: "origin/main")])
+    }
+
+    func testParseLogDecorationsShortFormFallback() {
+        // Hand-written or pre---decorate=full output (no refs/ prefix) keeps the
+        // old heuristic: "/" guesses remote, bare names are local.
+        let decorations = GitParsers.parseDecorations("origin/feature, HEAD, stable")
+        XCTAssertEqual(decorations[0], RefDecoration(kind: .remoteBranch, name: "origin/feature"))
+        XCTAssertEqual(decorations[1], RefDecoration(kind: .head, name: "HEAD"))
+        XCTAssertEqual(decorations[2], RefDecoration(kind: .localBranch, name: "stable"))
+    }
+
+    func testParseLogDecorationsShortFormHeadTargetStaysLocal() {
+        // HEAD only ever points at a local branch — even a slashed one, which
+        // the fallback's "/"-guesses-remote heuristic would otherwise mischip.
+        let decorations = GitParsers.parseDecorations("HEAD -> feature/foo, stable")
+        XCTAssertEqual(decorations, [RefDecoration(kind: .head, name: "HEAD"),
+                                     RefDecoration(kind: .localBranch, name: "feature/foo"),
+                                     RefDecoration(kind: .localBranch, name: "stable")])
+    }
+
+    func testParseLogDecorationsTolerateEmptyParts() {
+        // A trailing ", " (comma clings to the last name after the
+        // whitespace trim) and ", ," must not produce tainted or
+        // empty-name chips.
+        XCTAssertEqual(GitParsers.parseDecorations("HEAD -> main, "),
+                       [RefDecoration(kind: .head, name: "HEAD"),
+                        RefDecoration(kind: .localBranch, name: "main")])
+        XCTAssertEqual(GitParsers.parseDecorations("HEAD -> main, , stable"),
+                       [RefDecoration(kind: .head, name: "HEAD"),
+                        RefDecoration(kind: .localBranch, name: "main"),
+                        RefDecoration(kind: .localBranch, name: "stable")])
+    }
+
+    func testParseLogDecorationsTagHeadTargetClassifiesExactly() {
+        // A tag target must not leak "refs/tags/…" into the chip name.
+        let decorations = GitParsers.parseDecorations("HEAD -> tag: refs/tags/v1.0")
+        XCTAssertEqual(decorations, [RefDecoration(kind: .head, name: "HEAD"),
+                                     RefDecoration(kind: .tag, name: "v1.0")])
+    }
+
+    func testParseLogDecorationsDropUnknownRefNamespaces() {
+        // refs/ namespaces that are neither branches nor tags (forge-specific
+        // refs survive the hiddenRefs exclusion) must not become bogus
+        // remote-branch chips bearing the full refname.
+        XCTAssertTrue(GitParsers.parseDecorations("refs/stash").isEmpty)
+        let decorations = GitParsers.parseDecorations(
+            "refs/remotes/origin/main, refs/changes/12/345/1, refs/merge-requests/7/head")
+        XCTAssertEqual(decorations, [RefDecoration(kind: .remoteBranch, name: "origin/main")])
     }
 
     func testParseLogToleratesBlankRecords() {
@@ -86,7 +154,9 @@ final class GitParsersTests: XCTestCase {
         XCTAssertEqual(rename?.originalPath, "old name.txt")
 
         XCTAssertTrue(status.isDirty)
-        XCTAssertEqual(status.changeCount, 6)
+        // `both.txt` is partially staged and appears in both arrays, but it is
+        // one changed path in the user-facing count.
+        XCTAssertEqual(status.changeCount, 5)
     }
 
     func testParseStatusDetachedAndConflicted() {
@@ -103,6 +173,8 @@ final class GitParsersTests: XCTestCase {
         // Conflicted files are surfaced separately, not as ordinary staged changes.
         XCTAssertTrue(status.staged.isEmpty)
         XCTAssertTrue(status.unstaged.isEmpty)
+        XCTAssertTrue(status.isDirty)
+        XCTAssertEqual(status.changeCount, 1)
     }
 
     func testParseStatusUnbornBranch() {
@@ -121,7 +193,7 @@ final class GitParsersTests: XCTestCase {
     // MARK: - Branches
 
     func testParseBranches() {
-        let line1 = ["refs/heads/main", "main", "origin/main", "[ahead 1, behind 2]", "*"]
+        let line1 = ["refs/heads/main", "main", "refs/remotes/origin/main", "[ahead 1, behind 2]", "*"]
             .joined(separator: f)
         let line2 = ["refs/heads/feature", "feature", "", "", ""]
             .joined(separator: f)
@@ -134,6 +206,7 @@ final class GitParsersTests: XCTestCase {
         XCTAssertEqual(branches.count, 3) // origin/HEAD symref is skipped
         let main = branches[0]
         XCTAssertEqual(main.name, "main")
+        XCTAssertEqual(main.refName, "refs/heads/main")
         XCTAssertFalse(main.isRemote)
         XCTAssertTrue(main.isHead)
         XCTAssertEqual(main.upstream, "origin/main")
@@ -142,7 +215,64 @@ final class GitParsersTests: XCTestCase {
 
         XCTAssertTrue(branches[1].upstream == nil)
         XCTAssertTrue(branches[2].isRemote)
+        XCTAssertEqual(branches[2].refName, "refs/remotes/origin/main")
         XCTAssertEqual(branches[2].localNameForRemote, "main")
+        XCTAssertTrue(branches.allSatisfy { !$0.upstreamGone })
+    }
+
+    func testParseBranchesGoneUpstream() {
+        // %(upstream:track) prints "[gone]" when the upstream is configured
+        // but its ref no longer exists (deleted on the remote, then pruned).
+        let gone = ["refs/heads/old-feature", "old-feature", "origin/old-feature", "[gone]", ""]
+            .joined(separator: f)
+        let tracking = ["refs/heads/main", "main", "origin/main", "[ahead 1]", "*"]
+            .joined(separator: f)
+        let branches = GitParsers.parseBranches([gone, tracking].joined(separator: "\n"))
+        XCTAssertEqual(branches.count, 2)
+        XCTAssertTrue(branches[0].upstreamGone)
+        XCTAssertEqual(branches[0].upstream, "origin/old-feature")
+        XCTAssertEqual(branches[0].ahead, 0)
+        XCTAssertEqual(branches[0].behind, 0)
+        XCTAssertFalse(branches[1].upstreamGone)
+        XCTAssertEqual(branches[1].ahead, 1)
+    }
+
+    func testParseBranchesIgnoresAmbiguousShortName() {
+        let local = ["refs/heads/same", "heads/same", "", "", ""]
+            .joined(separator: f)
+        let remote = ["refs/remotes/origin/same", "remotes/origin/same", "", "", ""]
+            .joined(separator: f)
+
+        let branches = GitParsers.parseBranches(local + "\n" + remote)
+
+        XCTAssertEqual(branches.map(\.name), ["same", "origin/same"])
+        XCTAssertEqual(branches.map(\.refName),
+                       ["refs/heads/same", "refs/remotes/origin/same"])
+    }
+
+    func testParseBranchesWithLastCommitDate() {
+        // The branches() format's optional trailing field: strict ISO 8601,
+        // parseable by the same formatter the log format uses.
+        let line1 = ["refs/heads/main", "main", "", "", "", "2026-08-17T19:00:00+02:00"]
+            .joined(separator: f)
+        // Legacy five-field lines (tests, older callers) parse unchanged.
+        let line2 = ["refs/heads/feature", "feature", "", "", ""]
+            .joined(separator: f)
+        // An unparseable date degrades to nil rather than dropping the branch.
+        let line3 = ["refs/heads/broken", "broken", "", "", "", "not-a-date"]
+            .joined(separator: f)
+        let branches = GitParsers.parseBranches([line1, line2, line3].joined(separator: "\n"))
+
+        XCTAssertEqual(branches.count, 3)
+        // Fail loudly when the fixture's date doesn't parse — comparing an
+        // optional against nil would pass vacuously otherwise.
+        guard let expected = GitParsers.parseDate("2026-08-17T19:00:00+02:00") else {
+            XCTFail("strict ISO 8601 with a numeric offset (+02:00) must parse")
+            return
+        }
+        XCTAssertEqual(branches[0].lastCommitDate, expected)
+        XCTAssertNil(branches[1].lastCommitDate)
+        XCTAssertNil(branches[2].lastCommitDate)
     }
 
     // MARK: - Remotes
@@ -157,6 +287,48 @@ final class GitParsersTests: XCTestCase {
         XCTAssertEqual(remotes[0].url, "https://github.com/L-K-M/GitEnough.git")
         XCTAssertEqual(remotes[0].displayHost, "github.com/L-K-M/GitEnough")
         XCTAssertEqual(remotes[1].displayHost, "github.com/apple/swift")
+    }
+
+    func testDisplayHostStripsOnlyTrailingGitSuffix() {
+        // ".git" occurring inside the name must survive — only a suffix goes.
+        XCTAssertEqual(Remote(name: "o", url: "https://github.com/u/u.github.io.git").displayHost,
+                       "github.com/u/u.github.io")
+        XCTAssertEqual(Remote(name: "o", url: "https://github.com/u/u.github.io").displayHost,
+                       "github.com/u/u.github.io")
+        XCTAssertEqual(Remote(name: "o", url: "git@github.com:u/my.gitops.git").displayHost,
+                       "github.com/u/my.gitops")
+        XCTAssertEqual(Remote(name: "o", url: "git@github.com:u/plain.git").displayHost,
+                       "github.com/u/plain")
+        // ".git" inside the HOST must survive too (the old replace-all
+        // mangled hostnames like my.gitlab.dev).
+        XCTAssertEqual(Remote(name: "o", url: "git@my.gitlab.dev:u/repo.git").displayHost,
+                       "my.gitlab.dev/u/repo")
+        XCTAssertEqual(Remote(name: "o", url: "https://example.com/team/repo").displayHost,
+                       "example.com/team/repo")
+    }
+
+    func testPreferredRemoteMatchesLongestConfiguredUpstreamPrefix() {
+        let remotes = [
+            Remote(name: "origin", url: "https://example.com/acme/app.git"),
+            Remote(name: "team", url: "https://example.com/team/app.git"),
+            Remote(name: "team/fork", url: "https://example.com/fork/app.git"),
+        ]
+
+        XCTAssertEqual(
+            Remote.preferred(for: "team/fork/feature/topic", among: remotes)?.name,
+            "team/fork")
+        XCTAssertEqual(Remote.preferred(for: "team/main", among: remotes)?.name,
+                       "team")
+    }
+
+    func testPreferredRemoteFallsBackToOriginThenFirst() {
+        let origin = Remote(name: "origin", url: "https://example.com/acme/app.git")
+        let backup = Remote(name: "backup", url: "https://example.com/backup/app.git")
+
+        XCTAssertEqual(Remote.preferred(for: "missing/main", among: [backup, origin]),
+                       origin)
+        XCTAssertEqual(Remote.preferred(for: nil, among: [backup]), backup)
+        XCTAssertNil(Remote.preferred(for: nil, among: []))
     }
 
     // MARK: - Stash

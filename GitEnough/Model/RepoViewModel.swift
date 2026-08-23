@@ -17,6 +17,7 @@ final class RepoViewModel: ObservableObject, Identifiable {
     let queue: DispatchQueue
     private var watcher: RepoWatcher?
     private var historyLimit: Int
+    private var operationGate = RepoOperationGate()
 
     /// Called on the main thread after each applied snapshot, so the sidebar
     /// summary (branch, dirty dot, ahead/behind) tracks repo operations live
@@ -38,6 +39,9 @@ final class RepoViewModel: ObservableObject, Identifiable {
     @Published private(set) var mergeState = MergeState(operation: nil, operationLabel: nil,
                                                         conflictedFiles: [])
     @Published private(set) var canLoadMoreHistory = false
+    /// Hashes `git push` would send (HEAD ahead of its upstream). History rows
+    /// on these hashes draw a hollow graph dot. Empty without an upstream.
+    @Published private(set) var unpushedHashes: Set<String> = []
 
     @Published private(set) var isBusy = false
     @Published private(set) var activity: String?
@@ -62,16 +66,60 @@ final class RepoViewModel: ObservableObject, Identifiable {
     /// Commit detail pane.
     @Published private(set) var selectedCommitDetail: CommitDetail?
     @Published private(set) var selectedCommitFileDiff: String = ""
+    @Published private(set) var isLoadingCommitFileDiff = false
+    /// True when loading the selected commit's detail failed (`git show`
+    /// errored — object rewritten or garbage-collected, corrupt repo). The
+    /// detail pane shows an error state instead of the eternal spinner it
+    /// used to display when the load could never succeed.
+    @Published private(set) var selectedCommitDetailFailed = false
+    /// The failed load's actual error text (git's stderr), shown in the error
+    /// pane so the user sees the real cause instead of a guessed one. Nil when
+    /// git succeeded but the output didn't parse.
+    @Published private(set) var selectedCommitDetailErrorMessage: String?
 
     /// Changes pane: the diff of the currently selected worktree file.
     @Published private(set) var selectedFileDiff: String = ""
     @Published private(set) var isLoadingDiff = false
 
-    /// Commit box.
-    @Published var draftCommitMessage: String = ""
+    /// Commit box. The draft persists per repository (UserDefaults) so an app
+    /// restart doesn't eat a half-written message; a successful commit clears
+    /// it through the existing onSuccess hook. UserDefaults keeps values in
+    /// memory and flushes asynchronously, so the per-keystroke write is cheap.
+    ///
+    /// One observer, two jobs — persistence and AI-generation invalidation.
+    /// Swift allows a single `didSet`, so dropping either half here silently
+    /// loses that feature: the draft would stop surviving relaunch, or a late
+    /// AI response would overwrite what the user has since typed. The
+    /// init-time restore deliberately writes through `_draftCommitMessage`
+    /// so it does not run this observer — restoring a draft is not typing.
+    @Published var draftCommitMessage: String = "" {
+        didSet {
+            guard draftCommitMessage != oldValue else { return }
+            let key = Self.commitDraftKey(for: repo.path)
+            if draftCommitMessage.isEmpty {
+                defaults.removeObject(forKey: key)
+            } else {
+                defaults.set(draftCommitMessage, forKey: key)
+            }
+            draftCommitMessageRevision &+= 1
+            // The editor deliberately remains usable while the request is in
+            // flight. Typing means that response no longer owns the field.
+            invalidateCommitMessageGeneration()
+        }
+    }
+
+    /// Injected so draft persistence is testable against an isolated suite;
+    /// production call sites use `.standard`.
+    private let defaults: UserDefaults
+
     @Published var amendLastCommit = false
     @Published private(set) var isGeneratingMessage = false
     @Published var messageGenerationError: String?
+
+    private var nextMessageGenerationToken: UInt64 = 0
+    private var activeMessageGenerationToken: UInt64?
+    private var draftCommitMessageRevision: UInt64 = 0
+    private var stagedContentRevision: UInt64 = 0
 
     /// True when amending would rewrite a commit the upstream already has
     /// (upstream set, nothing ahead → HEAD is reachable from upstream) —
@@ -80,11 +128,30 @@ final class RepoViewModel: ObservableObject, Identifiable {
         amendLastCommit && status.upstream != nil && status.ahead == 0
     }
 
-    init(repo: Repository, historyLimit: Int = RepoViewModel.historyPageSize) {
+    /// UserDefaults key for a repository's persisted commit-box draft.
+    private static func commitDraftKey(for path: String) -> String {
+        "commitDraft." + path
+    }
+
+    /// Clears a repository's persisted commit-box draft. Called when the repo
+    /// is removed from the sidebar, so keys can't orphan — and a repo removed
+    /// and later re-added starts with a clean box instead of a stale draft.
+    static func removePersistedDraft(for path: String,
+                                     in defaults: UserDefaults = .standard) {
+        defaults.removeObject(forKey: commitDraftKey(for: path))
+    }
+
+    init(repo: Repository, historyLimit: Int = RepoViewModel.historyPageSize,
+         defaults: UserDefaults = .standard) {
         self.repo = repo
         self.client = GitClient(worktree: repo.url)
         self.queue = DispatchQueue(label: "gitenough.repo.\(repo.name)", qos: .userInitiated)
         self.historyLimit = historyLimit
+        self.defaults = defaults
+        // Restore via the backing storage: a plain assignment could re-run
+        // didSet and re-persist what was just loaded.
+        _draftCommitMessage = Published(initialValue:
+            defaults.string(forKey: Self.commitDraftKey(for: repo.path)) ?? "")
         self.queue.setSpecific(key: queueKey, value: 1)
         client.activityLog = activityLog
         activityLog.onChange = { [weak self] entries in
@@ -124,6 +191,10 @@ final class RepoViewModel: ObservableObject, Identifiable {
         let commits: [Commit]?
         let layout: GraphLayout?
         let canLoadMore: Bool
+        /// Only collected with history (nil otherwise): staging-type refreshes
+        /// can't change what's unpushed, and every push/commit/fetch refresh
+        /// includes history.
+        let unpushed: Set<String>?
     }
 
     /// Must be called on `queue`.
@@ -142,6 +213,7 @@ final class RepoViewModel: ObservableObject, Identifiable {
         )
         var commits: [Commit]?
         var layout: GraphLayout?
+        var unpushed: Set<String>?
         var canLoadMore = canLoadMoreHistory
         if includeHistory {
             // Load one extra commit to know whether "Load more" should be offered.
@@ -150,14 +222,19 @@ final class RepoViewModel: ObservableObject, Identifiable {
             let trimmed = Array(loaded.prefix(historyLimit))
             commits = trimmed
             layout = GraphLayout.layout(commits: trimmed)
+            unpushed = (try? client.unpushedCommitHashes()) ?? []
         }
         return Snapshot(status: status, branches: branches, remotes: remotes, stash: stash,
                         mergeState: mergeState, commits: commits, layout: layout,
-                        canLoadMore: canLoadMore)
+                        canLoadMore: canLoadMore, unpushed: unpushed)
     }
 
     /// Must be called on the main thread.
     private func apply(_ snapshot: Snapshot) {
+        if status.staged != snapshot.status.staged {
+            stagedContentRevision &+= 1
+            invalidateCommitMessageGeneration()
+        }
         status = snapshot.status
         branches = snapshot.branches
         remotes = snapshot.remotes
@@ -166,6 +243,12 @@ final class RepoViewModel: ObservableObject, Identifiable {
         canLoadMoreHistory = snapshot.canLoadMore
         if let commits = snapshot.commits { self.commits = commits }
         if let layout = snapshot.layout { self.layout = layout }
+        if let unpushed = snapshot.unpushed { self.unpushedHashes = unpushed }
+        // Nothing to amend on an unborn HEAD — and a stale true must not
+        // survive the orphan's first commit either (it would silently amend
+        // the commit just made). commit() guards independently; this clears
+        // the flag regardless of which tab is mounted.
+        if snapshot.status.isUnborn, amendLastCommit { amendLastCommit = false }
         onStatusChange?(RepoSummary(status: snapshot.status))
     }
 
@@ -200,8 +283,19 @@ final class RepoViewModel: ObservableObject, Identifiable {
     /// the commit box only after a successful commit).
     private func perform(_ activity: String,
                          includeHistory: Bool = true,
+                         invalidatesMessageGeneration: Bool = true,
                          onSuccess: (() -> Void)? = nil,
                          _ work: @escaping (GitClient) throws -> Void) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard let operationID = operationGate.begin() else { return }
+        // Invalidate at intent time, not after the queued git command finishes:
+        // an already-returned AI callback must not win the race with a click on
+        // Commit, Stage, Checkout, or another operation that can replace HEAD or
+        // the index. Deliberately *after* the gate: an operation the gate turned
+        // away never runs, so it must not cancel a generation either.
+        if invalidatesMessageGeneration {
+            invalidateCommitMessageGeneration()
+        }
         isBusy = true
         self.activity = activity
         errorMessage = nil
@@ -213,7 +307,12 @@ final class RepoViewModel: ObservableObject, Identifiable {
                 caught = error
             }
             let snapshot = self.collectSnapshot(includeHistory: includeHistory)
+            // We just snapshotted the aftermath of our own command — without
+            // re-baselining, the watcher would see our command's .git writes
+            // on its next tick and run the same full snapshot a second time.
+            self.watcher?.restamp()
             DispatchQueue.main.async {
+                guard self.operationGate.finish(operationID) else { return }
                 self.apply(snapshot)
                 self.isBusy = false
                 self.activity = nil
@@ -228,29 +327,87 @@ final class RepoViewModel: ObservableObject, Identifiable {
 
     // MARK: Network
 
-    func fetch() { perform("Fetching…") { try $0.fetch() } }
+    func fetch() {
+        perform("Fetching…", invalidatesMessageGeneration: false) { try $0.fetch() }
+    }
 
+    /// Pulls into the current branch. Guarded: without an upstream there is
+    /// nothing to pull from — the toolbar already disables its Pull button in
+    /// that state, but the Repository menu (⇧⌘L) reaches this method from any
+    /// repo state, and a raw `git pull` would only surface git's
+    /// "no tracking information" error. A plain-language message names the fix
+    /// (publish the branch) instead.
     func pull(rebase: Bool) {
+        guard status.upstream != nil else {
+            errorMessage = remotes.isEmpty
+                ? "Can't pull: this repository has no remotes configured. Add a remote first."
+                : "Can't pull: the current branch has no upstream branch to pull from. Publish it first, or check out a branch that tracks a remote."
+            return
+        }
         perform(rebase ? "Pulling (rebase)…" : "Pulling…") { try $0.pull(rebase: rebase) }
     }
 
-    func push() { perform("Pushing…") { try $0.push(setUpstream: false) } }
-
-    /// The remote a branch without an upstream should be published to — "origin"
-    /// when it exists (it's the natural target even alongside other remotes),
-    /// otherwise the first configured remote.
-    var publishRemoteName: String {
-        remotes.first { $0.name == "origin" }?.name ?? remotes.first?.name ?? "origin"
+    /// Force push with lease. The UI gates this behind an explicit
+    /// confirmation dialog — it rewrites the remote branch.
+    func forcePush() {
+        perform("Force pushing…", invalidatesMessageGeneration: false) {
+            try $0.push(setUpstream: false, forceWithLease: true)
+        }
     }
 
-    /// Push -u <publishRemoteName> HEAD for a branch with no upstream yet — which
-    /// is not necessarily a remote named "origin". Guarded: with no remotes at
-    /// all there is nothing to publish to (the Publish button hides, but no call
-    /// path should be able to push to a fabricated "origin").
-    func publishBranch() {
-        guard !remotes.isEmpty else { return }
-        let remote = publishRemoteName
-        perform("Publishing branch…") { try $0.push(setUpstream: true, remote: remote) }
+    /// The current Push button/menu state, resolved from one central, pure
+    /// decision so presentation and execution cannot drift apart. It also
+    /// picks the publish remote, which is why there is no separate
+    /// `publishRemoteName` any more.
+    var pushCapability: PushCapability {
+        PushCapability.resolve(status: status, remotes: remotes)
+    }
+
+    /// Whether the Push/Publish surfaces should be enabled. `pushCapability`
+    /// answers "what would this button do", which is about repository *shape*
+    /// (upstream, remotes, detached/unborn HEAD); this adds the two liveness
+    /// guards that shape can't express — a busy queue and an in-progress
+    /// sequencer operation, where push dies on "not currently on a branch".
+    var canPushOrPublish: Bool {
+        pushCapability.isAvailable && !isBusy && !mergeState.isInProgress
+    }
+
+    /// The Push action's single entry point, shared by the toolbar and the
+    /// Repository menu (⇧⌘P). The capability is resolved again at click time:
+    /// even a stale menu item cannot push from detached/unborn HEAD or without
+    /// a remote, and the error explains the next useful step.
+    func pushOrPublish() {
+        switch pushCapability {
+        case .push:
+            push()
+        case .publish(let remote):
+            publishBranch(to: remote)
+        case .unavailable(let reason):
+            errorMessage = reason.message
+        }
+    }
+
+    private func push() {
+        perform("Pushing…", invalidatesMessageGeneration: false) {
+            try $0.push(setUpstream: false)
+        }
+    }
+
+    /// Pull's enablement. Push/Publish go through `canPushOrPublish` instead —
+    /// `PushCapability` already models their shape — but Pull has no such
+    /// capability type, so it keeps this explicit form. Pull needs an upstream,
+    /// a remote, a quiet queue, and no in-progress sequencer operation (it
+    /// would otherwise die on "You have not concluded your merge").
+    var canPull: Bool {
+        !isBusy && !remotes.isEmpty && status.upstream != nil && !mergeState.isInProgress
+    }
+
+    /// Push -u <remote> HEAD for a branch with no upstream yet. Only invoked
+    /// with the remote selected by `PushCapability.resolve`.
+    private func publishBranch(to remote: String) {
+        perform("Publishing branch…", invalidatesMessageGeneration: false) {
+            try $0.push(setUpstream: true, remote: remote)
+        }
     }
 
     // MARK: Pull request
@@ -275,7 +432,7 @@ final class RepoViewModel: ObservableObject, Identifiable {
             errorMessage = "Can't open a pull request: HEAD is detached — check out a branch first."
             return
         }
-        guard let remote = preferredRemote() else {
+        guard let remote = preferredRemote else {
             errorMessage = "Can't open a pull request: the repository has no remotes."
             return
         }
@@ -302,9 +459,10 @@ final class RepoViewModel: ObservableObject, Identifiable {
         queue.async { [weak self] in
             let base = self?.client.remoteDefaultBranch(remote: remote.name) ?? fallbackBase
             Task { [weak self] in
-                let pullRequest = await PullRequestFinder.shared
-                    .findOpenPullRequest(for: forge, headBranch: branch)
-                let url = pullRequest?.url ?? forge.newPullRequestURL(base: base, head: branch)
+                let resolution = await PullRequestFinder.shared
+                    .resolvePullRequest(for: forge, headBranch: branch)
+                let url = resolution.pullRequest?.url
+                    ?? resolution.forge.newPullRequestURL(base: base, head: branch)
                 await MainActor.run { [weak self] in
                     self?.isResolvingPullRequest = false
                     NSWorkspace.shared.open(url)
@@ -313,15 +471,22 @@ final class RepoViewModel: ObservableObject, Identifiable {
         }
     }
 
-    /// The remote a pull request would live on: the branch's upstream remote
+    /// The remote the app actually works against: the branch's upstream remote
     /// when one is configured, else "origin", else the first configured remote.
-    private func preferredRemote() -> Remote? {
-        if let upstream = status.upstream,
-           let remoteName = upstream.split(separator: "/").first.map(String.init),
-           let remote = remotes.first(where: { $0.name == remoteName }) {
-            return remote
-        }
-        return remotes.first { $0.name == "origin" } ?? remotes.first
+    /// Shown in the status bar — it's the remote fetch/pull/push/PR target, so
+    /// it must match what those buttons do (a first-configured remote can be a
+    /// fork nobody pushes to) — and used for pull-request resolution.
+    var preferredRemote: Remote? {
+        Self.preferredRemote(upstream: status.upstream, remotes: remotes)
+    }
+
+    /// Pure form of the property above: testable without a repo. The match
+    /// itself lives in `Remote.preferred`, which compares against the longest
+    /// *configured* remote name rather than splitting at the first slash —
+    /// remote names may themselves contain slashes ("team/fork"), so a split
+    /// would attribute "team/fork/topic" to a remote named "team".
+    static func preferredRemote(upstream: String?, remotes: [Remote]) -> Remote? {
+        Remote.preferred(for: upstream, among: remotes)
     }
 
     // MARK: Branches
@@ -329,7 +494,9 @@ final class RepoViewModel: ObservableObject, Identifiable {
     func checkout(branch: Branch) {
         if branch.isRemote {
             guard let local = branch.localNameForRemote else { return }
-            perform("Checking out \(local)…") { try $0.checkoutTracking(remoteBranch: branch.name, localName: local) }
+            perform("Checking out \(local)…") {
+                try $0.checkoutTracking(remoteBranch: branch.refName, localName: local)
+            }
         } else {
             guard !branch.isHead else { return }
             perform("Checking out \(branch.name)…") { try $0.checkout(branch: branch.name) }
@@ -337,15 +504,32 @@ final class RepoViewModel: ObservableObject, Identifiable {
     }
 
     func createBranch(named name: String, at startPoint: String? = nil, checkout: Bool) {
-        perform("Creating branch \(name)…") { try $0.createBranch(name, at: startPoint, checkout: checkout) }
+        perform("Creating branch \(name)…", invalidatesMessageGeneration: checkout) {
+            try $0.createBranch(name, at: startPoint, checkout: checkout)
+        }
     }
 
     func deleteBranch(_ branch: Branch, force: Bool) {
-        perform("Deleting \(branch.name)…") { try $0.deleteBranch(branch.name, force: force) }
+        perform("Deleting \(branch.name)…", invalidatesMessageGeneration: false) {
+            try $0.deleteBranch(branch.name, force: force)
+        }
     }
 
-    func merge(branch: Branch) {
-        perform("Merging \(branch.name)…") { try $0.merge(branch.name) }
+    /// Deletes a branch on its remote (push --delete) — the counterpart to
+    /// local deletion for stale published branches.
+    func deleteRemoteBranch(_ branch: Branch) {
+        guard branch.isRemote else { return }
+        perform("Deleting \(branch.name)…") { try $0.deleteRemoteBranch(branch.name) }
+    }
+
+    /// Merges `branch` into the current one. The merge target is the canonical
+    /// `refName`, not the short name: a branch and a tag can share a short
+    /// name, and only the full ref names the branch unambiguously.
+    func merge(branch: Branch, squash: Bool = false, noFastForward: Bool = false) {
+        let verb = squash ? "Squash merging" : "Merging"
+        perform("\(verb) \(branch.name)…") {
+            try $0.merge(branch.refName, squash: squash, noFastForward: noFastForward)
+        }
     }
 
     func renameBranch(_ branch: Branch, to newName: String) {
@@ -418,15 +602,14 @@ final class RepoViewModel: ObservableObject, Identifiable {
                 var autoResolved = false
                 if caught == nil {
                     do {
-                        if !self.client.fileHasConflictMarkers(path) {
-                            try self.client.markResolved(path: path)
-                            autoResolved = true
-                        }
+                        try self.client.markResolved(path: path)
+                        autoResolved = true
                     } catch {
                         caught = error
                     }
                 }
                 let snapshot = self.collectSnapshot(includeHistory: false)
+                self.watcher?.restamp()   // see perform(): don't re-snapshot our own staging
                 DispatchQueue.main.async {
                     self.apply(snapshot)
                     self.mergeToolActivity = nil
@@ -458,7 +641,9 @@ final class RepoViewModel: ObservableObject, Identifiable {
     // MARK: Staging / commit
 
     func stage(_ changes: [FileChange]) {
-        perform("Staging…", includeHistory: false) { try $0.stage(paths: changes.map(\.path)) }
+        perform("Staging…", includeHistory: false) {
+            try $0.stage(paths: changes.flatMap(\.affectedPaths))
+        }
     }
 
     func stageAll() {
@@ -466,7 +651,9 @@ final class RepoViewModel: ObservableObject, Identifiable {
     }
 
     func unstage(_ changes: [FileChange]) {
-        perform("Unstaging…", includeHistory: false) { try $0.unstage(paths: changes.map(\.path)) }
+        perform("Unstaging…", includeHistory: false) {
+            try $0.unstage(paths: changes.flatMap(\.affectedPaths))
+        }
     }
 
     /// Adds an untracked file's path to the repo's root `.gitignore` (creating
@@ -476,7 +663,8 @@ final class RepoViewModel: ObservableObject, Identifiable {
         // gitignore doesn't affect tracked files — ignoring one would be a
         // silent no-op, so refuse it here like the UI does.
         guard change.isUntracked else { return }
-        perform("Updating .gitignore…", includeHistory: false) { client in
+        perform("Updating .gitignore…", includeHistory: false,
+                invalidatesMessageGeneration: false) { client in
             // A broader existing pattern (*.log, build/) already covers it.
             guard !client.isIgnored(path: change.path) else { return }
             let url = client.worktree.appendingPathComponent(".gitignore")
@@ -508,19 +696,20 @@ final class RepoViewModel: ObservableObject, Identifiable {
     /// (recoverable, unlike a hard delete).
     func discard(_ changes: [FileChange]) {
         perform("Discarding changes…", includeHistory: false) { client in
-            let tracked = changes.filter { !$0.isUntracked }.map(\.path)
+            let tracked = changes.filter { !$0.isUntracked }.flatMap(\.affectedPaths)
             if !tracked.isEmpty { try client.discard(paths: tracked) }
-            for change in changes where change.isUntracked {
-                let url = self.repo.url.appendingPathComponent(change.path)
-                try? FileManager.default.trashItem(at: url, resultingItemURL: nil)
-            }
+            let untracked = changes.filter(\.isUntracked).map(\.path)
+            try TrashMover.move(paths: untracked, from: self.repo.url)
         }
     }
 
     func commit() {
         let message = draftCommitMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !message.isEmpty else { return }
-        let amend = amendLastCommit
+        // Amending an unborn HEAD dies on git's "You have nothing to amend" —
+        // the UI disables the toggle, but a stale true (orphan checkout) must
+        // not reach the command line either.
+        let amend = amendLastCommit && !status.isUnborn
         // Only clear the box on success — a rejected hook must not eat the message.
         perform("Committing…", onSuccess: {
             self.draftCommitMessage = ""
@@ -539,29 +728,38 @@ final class RepoViewModel: ObservableObject, Identifiable {
     }
 
     func stashDrop(_ entry: StashEntry) {
-        perform("Dropping stash…") { try $0.stashDrop(index: entry.index) }
+        perform("Dropping stash…", invalidatesMessageGeneration: false) {
+            try $0.stashDrop(index: entry.index)
+        }
     }
 
     // MARK: Commit-targeted
 
     func createBranchAtCommit(named name: String, hash: String) {
-        perform("Creating branch…") { try $0.createBranch(name, at: hash, checkout: false) }
+        perform("Creating branch…", invalidatesMessageGeneration: false) {
+            try $0.createBranch(name, at: hash, checkout: false)
+        }
     }
 
     func createTag(named name: String, message: String?, at hash: String) {
-        perform("Creating tag…") { try $0.createTag(name: name, message: message, at: hash) }
+        perform("Creating tag…", invalidatesMessageGeneration: false) {
+            try $0.createTag(name: name, message: message, at: hash)
+        }
     }
 
     func checkoutCommit(_ hash: String) {
         perform("Checking out commit…") { try $0.checkout(branch: hash) }
     }
 
-    func cherryPick(_ hash: String) {
-        perform("Cherry-picking…") { try $0.cherryPick(hash) }
+    /// `mainline` must be set (1 = first parent) when `hash` is a merge commit;
+    /// bare cherry-picks/reverts of merges die on git's "is a merge but no -m
+    /// option was given" — see the History context menu, which passes 1.
+    func cherryPick(_ hash: String, mainline: Int? = nil) {
+        perform("Cherry-picking…") { try $0.cherryPick(hash, mainline: mainline) }
     }
 
-    func revert(_ hash: String) {
-        perform("Reverting…") { try $0.revert(hash) }
+    func revert(_ hash: String, mainline: Int? = nil) {
+        perform("Reverting…") { try $0.revert(hash, mainline: mainline) }
     }
 
     func reset(to hash: String, mode: GitClient.ResetMode) {
@@ -570,39 +768,94 @@ final class RepoViewModel: ObservableObject, Identifiable {
 
     // MARK: - Selections / detail loading
 
+    /// Superseded-load guard for `selectCommit`. Loads run on the serial repo
+    /// queue, so completions can't reorder among themselves — but a completion
+    /// CAN land after the selection has already moved on (most visibly after
+    /// deselecting), and must not write a stale detail or failure over the
+    /// newer state. Main-thread only: bumped here, compared in the completion.
+    private var commitDetailGeneration = 0
+
     func selectCommit(_ hash: String?) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        // A fresh selection starts clean — a failure only ever describes the
+        // most recently completed load.
+        selectedCommitDetailFailed = false
+        selectedCommitDetailErrorMessage = nil
+        commitDetailGeneration += 1
+        let generation = commitDetailGeneration
         guard let hash else {
             selectedCommitDetail = nil
             selectedCommitFileDiff = ""
             return
         }
         queue.async {
-            let detail = try? self.client.commitDetail(hash)
+            let result = Result { try self.client.commitDetail(hash) }
             DispatchQueue.main.async {
-                self.selectedCommitDetail = detail
+                guard generation == self.commitDetailGeneration else { return }
+                switch result {
+                case .success(let detail?):
+                    self.selectedCommitDetail = detail
+                    self.selectedCommitDetailFailed = false
+                    self.selectedCommitDetailErrorMessage = nil
+                case .success(nil):
+                    // git succeeded but the output didn't parse — still a
+                    // failure, just without an error message to show.
+                    self.selectedCommitDetail = nil
+                    self.selectedCommitDetailFailed = true
+                case .failure(let error):
+                    self.selectedCommitDetail = nil
+                    self.selectedCommitDetailFailed = true
+                    self.selectedCommitDetailErrorMessage = error.localizedDescription
+                }
                 self.selectedCommitFileDiff = ""
             }
         }
     }
 
+    /// Generation tokens for the two diff loads below. Selecting enqueues a
+    /// load on the serial repo queue; without a token, deselecting (or
+    /// switching files) while a load is in flight lets the stale completion
+    /// write the *previous* file's diff back into the published state —
+    /// resurrecting a diff for a file that is no longer selected. Main-thread
+    /// only: bumped by the select methods (UI callbacks) and compared in the
+    /// completion's main-queue hop.
+    private var commitFileDiffGeneration = 0
+    private var fileDiffGeneration = 0
+
     func selectCommitFile(hash: String, path: String?) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        commitFileDiffGeneration += 1
+        let generation = commitFileDiffGeneration
         guard let path else {
             selectedCommitFileDiff = ""
+            isLoadingCommitFileDiff = false
             return
         }
+        selectedCommitFileDiff = ""
+        isLoadingCommitFileDiff = true
         queue.async {
             let diff = (try? self.client.commitFileDiff(hash: hash, path: path)) ?? ""
-            DispatchQueue.main.async { self.selectedCommitFileDiff = diff }
+            DispatchQueue.main.async {
+                guard generation == self.commitFileDiffGeneration else { return }
+                self.selectedCommitFileDiff = diff
+                self.isLoadingCommitFileDiff = false
+            }
         }
     }
 
     /// Loads the worktree/index diff for the file selected in the Changes pane.
     func selectFile(_ change: FileChange?, staged: Bool) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        fileDiffGeneration += 1
+        let generation = fileDiffGeneration
         guard let change else {
             selectedFileDiff = ""
+            // A dropped in-flight load can no longer clear the flag — do it here.
+            isLoadingDiff = false
             return
         }
         isLoadingDiff = true
+        selectedFileDiff = ""
         queue.async {
             let diff: String
             if change.isUntracked {
@@ -611,6 +864,7 @@ final class RepoViewModel: ObservableObject, Identifiable {
                 diff = (try? self.client.diff(path: change.path, staged: staged)) ?? ""
             }
             DispatchQueue.main.async {
+                guard generation == self.fileDiffGeneration else { return }
                 self.selectedFileDiff = diff
                 self.isLoadingDiff = false
             }
@@ -619,27 +873,122 @@ final class RepoViewModel: ObservableObject, Identifiable {
 
     // MARK: - Smart commit message
 
+    private func invalidateCommitMessageGeneration() {
+        guard activeMessageGenerationToken != nil else { return }
+        activeMessageGenerationToken = nil
+        isGeneratingMessage = false
+    }
+
+    private func finishCommitMessageGeneration(
+        _ context: CommitMessageGenerationContext,
+        error: String
+    ) {
+        guard activeMessageGenerationToken == context.token else { return }
+        activeMessageGenerationToken = nil
+        isGeneratingMessage = false
+        messageGenerationError = error
+    }
+
+    private func acceptGeneratedCommitMessage(
+        _ message: String,
+        context: CommitMessageGenerationContext,
+        generatedFrom stagedDiff: String,
+        currentStagedDiff: String
+    ) {
+        guard activeMessageGenerationToken == context.token else { return }
+        let accepted = context.accepts(
+            activeToken: activeMessageGenerationToken,
+            currentDraftRevision: draftCommitMessageRevision,
+            currentStagedRevision: stagedContentRevision,
+            generatedFrom: stagedDiff,
+            currentStagedDiff: currentStagedDiff)
+        activeMessageGenerationToken = nil
+        isGeneratingMessage = false
+        guard accepted else {
+            // A status snapshot catches most staging changes. Comparing the
+            // actual patch catches same-path edits that leave porcelain status
+            // unchanged, and tells the user why no suggestion appeared.
+            messageGenerationError = "Staged changes changed while the message was being generated. Generate again to use the latest changes."
+            return
+        }
+        draftCommitMessage = message
+    }
+
+    /// Hop back through the main-thread-owned view model before scheduling the
+    /// final git read. This keeps the async task from transferring its capture
+    /// of the non-Sendable view model directly into a GCD closure.
+    private func verifyGeneratedCommitMessage(
+        _ message: String,
+        context: CommitMessageGenerationContext,
+        generatedFrom stagedDiff: String
+    ) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            do {
+                let currentDiff = try self.client.stagedDiff()
+                DispatchQueue.main.async { [weak self] in
+                    self?.acceptGeneratedCommitMessage(
+                        message,
+                        context: context,
+                        generatedFrom: stagedDiff,
+                        currentStagedDiff: currentDiff)
+                }
+            } catch {
+                let failure = "Couldn’t read staged changes: \(error.localizedDescription)"
+                DispatchQueue.main.async { [weak self] in
+                    self?.finishCommitMessageGeneration(context, error: failure)
+                }
+            }
+        }
+    }
+
     func generateCommitMessage() {
-        guard !isGeneratingMessage else { return }
+        guard !isGeneratingMessage, !isBusy else { return }
+        nextMessageGenerationToken &+= 1
+        let context = CommitMessageGenerationContext(
+            token: nextMessageGenerationToken,
+            draftRevision: draftCommitMessageRevision,
+            stagedRevision: stagedContentRevision)
+        activeMessageGenerationToken = context.token
         isGeneratingMessage = true
         messageGenerationError = nil
         let branch = status.head
-        queue.async {
-            let stat = (try? self.client.stagedDiffStat()) ?? ""
-            let diff = (try? self.client.stagedDiff()) ?? ""
-            let generator = CommitMessageGenerator(configuration: LLMConfiguration.load())
-            Task {
-                do {
-                    let message = try await generator.generateCommitMessage(
-                        diffStat: stat, diff: diff, branch: branch)
-                    await MainActor.run {
-                        self.draftCommitMessage = message
-                        self.isGeneratingMessage = false
-                    }
-                } catch {
-                    await MainActor.run {
-                        self.messageGenerationError = error.localizedDescription
-                        self.isGeneratingMessage = false
+        queue.async { [weak self] in
+            guard let self else { return }
+            let stat: String
+            let diff: String
+            do {
+                stat = try self.client.stagedDiffStat()
+                diff = try self.client.stagedDiff()
+            } catch {
+                DispatchQueue.main.async { [weak self] in
+                    self?.finishCommitMessageGeneration(
+                        context,
+                        error: "Couldn’t read staged changes: \(error.localizedDescription)")
+                }
+                return
+            }
+            DispatchQueue.main.async { [weak self] in
+                guard let self,
+                      context.isCurrent(
+                        activeToken: self.activeMessageGenerationToken,
+                        currentDraftRevision: self.draftCommitMessageRevision,
+                        currentStagedRevision: self.stagedContentRevision) else { return }
+                let generator = CommitMessageGenerator(configuration: LLMConfiguration.load())
+                Task { [weak self] in
+                    guard let self else { return }
+                    do {
+                        let message = try await generator.generateCommitMessage(
+                            diffStat: stat, diff: diff, branch: branch)
+                        await MainActor.run { [weak self] in
+                            self?.verifyGeneratedCommitMessage(
+                                message, context: context, generatedFrom: diff)
+                        }
+                    } catch {
+                        await MainActor.run { [weak self] in
+                            self?.finishCommitMessageGeneration(
+                                context, error: error.localizedDescription)
+                        }
                     }
                 }
             }

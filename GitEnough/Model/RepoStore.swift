@@ -117,26 +117,29 @@ final class RepoStore: ObservableObject {
     /// sidebar sort order.
     @Published private(set) var starredPaths: Set<String> = []
 
-    private let defaultsKey = "repositories.v1"
-    private let excludedKey = "excludedRepositories.v1"
-    private let lastOpenedKey = "repoLastOpened.v1"
-    private let starredKey = "starredRepositories.v1"
+    private static let repositoriesKey = "repositories.v1"
+    private static let excludedKey = "excludedRepositories.v1"
+    private static let lastOpenedKey = "repoLastOpened.v1"
+    private static let starredKey = "starredRepositories.v1"
+
+    private let defaults: UserDefaults
 
     /// Paths the user removed — excluded from discovery until manually re-added.
     private var excludedPaths: Set<String> = []
 
-    init() {
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
         load()
-        excludedPaths = Set(UserDefaults.standard.stringArray(forKey: excludedKey) ?? [])
-        starredPaths = Set(UserDefaults.standard.stringArray(forKey: starredKey) ?? [])
-        if let data = UserDefaults.standard.data(forKey: lastOpenedKey),
+        excludedPaths = Set(defaults.stringArray(forKey: Self.excludedKey) ?? [])
+        starredPaths = Set(defaults.stringArray(forKey: Self.starredKey) ?? [])
+        if let data = defaults.data(forKey: Self.lastOpenedKey),
            let decoded = try? JSONDecoder().decode([String: TimeInterval].self, from: data) {
             lastOpenedAt = decoded
         }
     }
 
     private func load() {
-        guard let data = UserDefaults.standard.data(forKey: defaultsKey),
+        guard let data = defaults.data(forKey: Self.repositoriesKey),
               let decoded = try? JSONDecoder().decode([Repository].self, from: data) else {
             return
         }
@@ -148,16 +151,16 @@ final class RepoStore: ObservableObject {
 
     private func persist() {
         if let data = try? JSONEncoder().encode(repositories) {
-            UserDefaults.standard.set(data, forKey: defaultsKey)
+            defaults.set(data, forKey: Self.repositoriesKey)
         }
     }
 
     private func persistExclusions() {
-        UserDefaults.standard.set(Array(excludedPaths), forKey: excludedKey)
+        defaults.set(Array(excludedPaths), forKey: Self.excludedKey)
     }
 
     private func persistStars() {
-        UserDefaults.standard.set(Array(starredPaths), forKey: starredKey)
+        defaults.set(Array(starredPaths), forKey: Self.starredKey)
     }
 
     /// Removes any exclusion for `repo` (any spelling — an exclusion stored
@@ -286,7 +289,7 @@ final class RepoStore: ObservableObject {
     func markOpened(_ repo: Repository) {
         lastOpenedAt[repo.path] = Date().timeIntervalSince1970
         if let data = try? JSONEncoder().encode(lastOpenedAt) {
-            UserDefaults.standard.set(data, forKey: lastOpenedKey)
+            defaults.set(data, forKey: Self.lastOpenedKey)
         }
     }
 }

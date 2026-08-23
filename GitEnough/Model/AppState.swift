@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 
 /// The detail pane's tabs. In AppState (not the view) so menu commands with
@@ -15,10 +16,16 @@ enum DetailTab: String, CaseIterable, Identifiable {
 /// switching repos doesn't lose scroll position or reload history).
 final class AppState: ObservableObject {
 
-    let store = RepoStore()
+    static let selectedRepositoryKey = "selectedRepository"
+
+    private let defaults: UserDefaults
+    let store: RepoStore
 
     @Published var selectedRepoPath: String? {
-        didSet { UserDefaults.standard.set(selectedRepoPath, forKey: "selectedRepository") }
+        didSet {
+            Self.persistSelection(selectedRepoPath, in: defaults)
+            forwardActiveViewModelChanges()
+        }
     }
     @Published var selectedTab: DetailTab = .history
 
@@ -39,6 +46,13 @@ final class AppState: ObservableObject {
     @Published var lastAddedRepoPath: String?
 
     private var viewModels: [String: RepoViewModel] = [:]
+    /// Forwards the ACTIVE view model's objectWillChange through AppState, so
+    /// SwiftUI Commands (whose @ObservedObject is AppState) re-evaluate menu
+    /// enablement when repo state moves — without it, items gated on
+    /// canPull/canPushOrPublish go stale until AppState itself changes.
+    /// Only the active repo is forwarded: wiring every repo would invalidate
+    /// every AppState observer (the whole window) on any background publish.
+    private var activeVMCancellable: AnyCancellable?
 
     /// App-wide persistent git command history ("shell history" window).
     /// Every repo view model's activity log forwards events here.
@@ -63,10 +77,19 @@ final class AppState: ObservableObject {
         return viewModel(for: repo)
     }
 
-    init() {
-        selectedRepoPath = UserDefaults.standard.string(forKey: "selectedRepository")
-        if selectedRepoPath == nil {
-            selectedRepoPath = store.repositories.first?.path
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        store = RepoStore(defaults: defaults)
+        let savedPath = defaults.string(forKey: Self.selectedRepositoryKey)
+        // Initialize the wrapped property before consulting another instance
+        // property (`store`), then replace it with the validated selection.
+        selectedRepoPath = savedPath
+        selectedRepoPath = Self.restoredSelection(
+            savedPath, repositories: store.repositories)
+        // Property observers don't run during initialization. Persist a repaired
+        // spelling or fallback so the stored value agrees with the live selection.
+        if selectedRepoPath != savedPath {
+            Self.persistSelection(selectedRepoPath, in: defaults)
         }
         // Watch-folder discovery: cheap file-system scan, no git invocation.
         let timer = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
@@ -75,6 +98,27 @@ final class AppState: ObservableObject {
         }
         RunLoop.main.add(timer, forMode: .common)
         discoveryTimer = timer
+    }
+
+    /// Resolves a persisted spelling to the corresponding registered row.
+    /// RepoStore treats normalized paths as identity, so startup must do the
+    /// same; otherwise a symlink or `.` spelling leaves the detail pane on the
+    /// Welcome screen even though that repository is visible in the sidebar.
+    private static func restoredSelection(_ savedPath: String?,
+                                          repositories: [Repository]) -> String? {
+        guard let savedPath else { return repositories.first?.path }
+        let normalizedSavedPath = Repository.normalizedPath(savedPath)
+        return repositories.first {
+            $0.normalizedPath == normalizedSavedPath
+        }?.path ?? repositories.first?.path
+    }
+
+    private static func persistSelection(_ path: String?, in defaults: UserDefaults) {
+        if let path {
+            defaults.set(path, forKey: selectedRepositoryKey)
+        } else {
+            defaults.removeObject(forKey: selectedRepositoryKey)
+        }
     }
 
     deinit {
@@ -89,6 +133,11 @@ final class AppState: ObservableObject {
     func viewModel(for repo: Repository) -> RepoViewModel {
         if let existing = viewModels[repo.path] { return existing }
         let vm = RepoViewModel(repo: repo)
+        // Menu enablement is kept fresh by `forwardActiveViewModelChanges`
+        // below, which republishes the active view model's objectWillChange.
+        // Deliberately not also poked from here: two mechanisms for the same
+        // staleness would double-invalidate every AppState observer, and only
+        // one of them can stay correct as the surfaces change.
         vm.onStatusChange = { [weak self] summary in
             self?.store.summaries[repo.path] = summary
         }
@@ -96,8 +145,22 @@ final class AppState: ObservableObject {
             self?.activityStore.record(event, repoName: repo.name, repoPath: repo.path)
         }
         viewModels[repo.path] = vm
+        // The restored-selection path never goes through select(), so wire
+        // the forwarding here too when the created VM is the active one.
+        if repo.path == selectedRepoPath { forwardActiveViewModelChanges() }
         vm.start()
         return vm
+    }
+
+    /// Re-subscribes the menu-enablement forwarding to the currently selected
+    /// repo's view model. Delivery is hopped to main: @Published mutations
+    /// are main-thread by contract, and the sink must not rely on it.
+    private func forwardActiveViewModelChanges() {
+        activeVMCancellable = selectedRepository
+            .flatMap { viewModels[$0.path] }?
+            .objectWillChange
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.objectWillChange.send() }
     }
 
     func select(_ repo: Repository) {
@@ -155,6 +218,9 @@ final class AppState: ObservableObject {
     func remove(_ repo: Repository) {
         viewModels.removeValue(forKey: repo.path)
         store.remove(repo)
+        // The persisted commit draft goes with the repo — otherwise the key
+        // orphans, and re-adding the repo later would resurrect a stale draft.
+        RepoViewModel.removePersistedDraft(for: repo.path)
         if selectedRepoPath == repo.path {
             selectedRepoPath = store.repositories.first?.path
         }
@@ -214,7 +280,7 @@ final class AppState: ObservableObject {
     /// discovery timer; skipped while an operation is already running so an
     /// automatic fetch never queues behind (or double-books) a manual one.
     private func autoFetchIfDue() {
-        let minutes = UserDefaults.standard.integer(forKey: Self.autoFetchMinutesKey)
+        let minutes = defaults.integer(forKey: Self.autoFetchMinutesKey)
         guard minutes > 0 else { return }
         guard let viewModel = activeViewModel, !viewModel.isBusy else { return }
         // Multiply in Double: minutes comes from UserDefaults, where a
@@ -232,7 +298,7 @@ final class AppState: ObservableObject {
     /// minute timer, on app activation, on launch, and right after the folder is
     /// changed in Settings. No-op when no folder is configured.
     func scanDiscoveryFolder() {
-        let folder = UserDefaults.standard.string(forKey: Self.discoveryFolderKey) ?? ""
+        let folder = defaults.string(forKey: Self.discoveryFolderKey) ?? ""
         guard !folder.isEmpty else { return }
         let root = URL(fileURLWithPath: (folder as NSString).expandingTildeInPath)
         guard FileManager.default.fileExists(atPath: root.path) else { return }
