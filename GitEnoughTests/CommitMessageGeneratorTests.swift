@@ -1,4 +1,8 @@
 import XCTest
+#if canImport(FoundationNetworking)
+// URLSession lives in a separate module in swift-corelibs-foundation.
+import FoundationNetworking
+#endif
 @testable import GitEnough
 
 /// Tests for the LLM commit-message plumbing that doesn't need the network:

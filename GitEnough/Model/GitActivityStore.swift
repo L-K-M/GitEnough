@@ -35,9 +35,10 @@ final class GitActivityStore: ObservableObject {
     private let ioQueue = DispatchQueue(label: "gitenough.activitystore", qos: .utility)
     private var storage: [Item] = []
 
-    /// ~/Library/Application Support/GitEnough/git-activity.jsonl
+    /// `~/Library/Application Support/GitEnough/git-activity.jsonl` on macOS,
+    /// `~/.local/share/GitEnough/git-activity.jsonl` on Linux.
     static var defaultFileURL: URL {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        Platform.applicationSupportDirectory
             .appendingPathComponent("GitEnough", isDirectory: true)
             .appendingPathComponent("git-activity.jsonl")
     }

@@ -55,11 +55,12 @@ final class GitShell {
     /// gives us thread-safe lazy initialization.
     private static let childEnvironment: [String: String] = {
         var env = ProcessInfo.processInfo.environment
-        // Apps launched from Finder inherit launchd's bare PATH
-        // (/usr/bin:/bin:/usr/sbin:/sbin), so git hooks that call node/npm/npx
-        // (husky, lint-staged, …) die with "command not found". Append the
-        // usual tool locations that actually exist on disk — purely additive;
-        // an inherited PATH (e.g. when launched from Terminal) always wins.
+        // A GUI-launched app inherits a bare PATH — launchd's
+        // (/usr/bin:/bin:/usr/sbin:/sbin) on macOS, systemd's or the display
+        // manager's on Linux — so git hooks that call node/npm/npx (husky,
+        // lint-staged, …) die with "command not found". Append the usual tool
+        // locations that actually exist on disk — purely additive; an inherited
+        // PATH (e.g. when launched from a terminal) always wins.
         let home = NSHomeDirectory()
         let fm = FileManager.default
         let nvmRoot = home + "/.nvm/versions/node"
@@ -78,7 +79,14 @@ final class GitShell {
         // Without a TTY ssh may ignore SSH_ASKPASS and probe /dev/tty instead;
         // force makes the fail-fast override deterministic (OpenSSH 8.4+).
         env["SSH_ASKPASS_REQUIRE"] = "force"
+        // Force a UTF-8 English locale so git's own messages stay parseable.
+        // Linux distributions rarely generate en_US.UTF-8, but C.UTF-8 is
+        // always present; macOS is the other way round.
+        #if os(Linux)
+        env["LC_ALL"] = "C.UTF-8"
+        #else
         env["LC_ALL"] = "en_US.UTF-8"
+        #endif
         // Keep hooks and editor invocations from opening an interactive editor.
         env["GIT_EDITOR"] = "/usr/bin/true"
         return env
@@ -104,6 +112,12 @@ final class GitShell {
             home + "/Library/pnpm",
             home + "/.local/share/pnpm",
             home + "/.yarn/bin",
+            // Linux packaging formats put their exported commands here; on
+            // macOS none of these exist, so the directoryExists filter drops
+            // them and one shared list covers both platforms.
+            "/snap/bin",
+            "/var/lib/flatpak/exports/bin",
+            home + "/.local/share/flatpak/exports/bin",
         ]
         if let nvmBin = bestNvmBin(home: home, versionDirs: nvmVersionDirs(),
                                    fileContents: fileContents) {
@@ -151,14 +165,25 @@ final class GitShell {
 
     private static func findGit() -> URL? {
         let candidates = [
-            "/usr/bin/git",                 // Xcode CLT shim (always present on macOS with CLT)
+            "/usr/bin/git",                 // Xcode CLT shim on macOS; the distro package on Linux
             "/opt/homebrew/bin/git",        // Homebrew on Apple Silicon
             "/usr/local/bin/git",           // Homebrew on Intel / git installer
         ]
         for path in candidates where FileManager.default.isExecutableFile(atPath: path) {
             return URL(fileURLWithPath: path)
         }
-        return nil
+        // Anything else — a Nix profile, /snap/bin, a self-built git — as long
+        // as it is on the PATH we inherited.
+        return ProcessRunner.which("git")
+    }
+
+    /// What to tell the user when no git could be found.
+    static var installHint: String {
+        #if os(Linux)
+        return "git is not installed. Install it (`sudo apt install git`) and relaunch GitEnough."
+        #else
+        return "git is not installed. Install the Xcode Command Line Tools (`xcode-select --install`) and relaunch GitEnough."
+        #endif
     }
 
     // MARK: - Running
@@ -168,7 +193,7 @@ final class GitShell {
     @discardableResult
     func run(_ args: [String], in directory: URL?) throws -> GitResult {
         guard let gitURL else {
-            throw GitError(message: "git is not installed. Install the Xcode Command Line Tools (`xcode-select --install`) and relaunch GitEnough.", exitCode: -1)
+            throw GitError(message: GitShell.installHint, exitCode: -1)
         }
 
         let process = Process()
@@ -240,7 +265,7 @@ final class GitShell {
     /// Separate entry point because `standardInput` must be assigned before `run()`.
     private func runWithStdin(_ args: [String], in directory: URL?, stdin: String) throws -> GitResult {
         guard let gitURL else {
-            throw GitError(message: "git is not installed. Install the Xcode Command Line Tools (`xcode-select --install`) and relaunch GitEnough.", exitCode: -1)
+            throw GitError(message: GitShell.installHint, exitCode: -1)
         }
         let process = Process()
         process.executableURL = gitURL

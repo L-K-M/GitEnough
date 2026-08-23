@@ -138,14 +138,14 @@ final class GitActivityLogTests: XCTestCase {
     // MARK: - Duration formatting
 
     func testFormatDurationUnderAMinute() {
-        XCTAssertEqual(ActivityLogView.formatDuration(0.42), "0.4s")
+        XCTAssertEqual(GitActivityLog.formatDuration(0.42), "0.4s")
     }
 
     func testFormatDurationMinutes() {
-        XCTAssertEqual(ActivityLogView.formatDuration(125), "2m 5s")
+        XCTAssertEqual(GitActivityLog.formatDuration(125), "2m 5s")
     }
 
     func testFormatDurationHours() {
-        XCTAssertEqual(ActivityLogView.formatDuration(3661), "1h 1m")
+        XCTAssertEqual(GitActivityLog.formatDuration(3661), "1h 1m")
     }
 }

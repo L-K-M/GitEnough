@@ -56,3 +56,30 @@ jobs:
           name: TestResults
           path: TestResults.xcresult
           if-no-files-found: ignore
+
+  # The Linux half of the port: the GitEnough core library has to keep building
+  # and passing the same test suite against swift-corelibs-foundation, which is
+  # where Apple's SDK papers over the differences (URLSession's module, Combine,
+  # the Trash, the Keychain). The official Swift image is pinned to a patch
+  # release, in the same spirit as the pinned Xcode above, and it means no
+  # third-party action sits in the toolchain path.
+  linux-core:
+    name: Core (Ubuntu)
+    runs-on: ubuntu-24.04
+    container: swift:6.2.1-noble
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Trust the workspace
+        # The container runs as root while the checkout is owned by the runner
+        # user; without this git refuses to operate and the integration tests,
+        # which drive real repositories, fail before they start.
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Build
+        run: swift build --build-tests
+
+      - name: Test
+        run: swift test

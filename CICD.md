@@ -5,13 +5,17 @@ sibling apps (Zap, Jetty, TopDrawer):
 
 | Workflow | Trigger | What it does |
 |---|---|---|
-| [`ci.yml`](workflows/ci.yml) | every pull request + push to `main` | `xcodebuild clean test` with **no code signing** — builds the app and runs the XCTest suite (parsers, graph layout, and a full end-to-end test that builds a real repo in a temp dir) |
+| [`ci.yml`](workflows/ci.yml) | every pull request + push to `main` | Two jobs. **Build & Test** (`macos-14`): `xcodebuild clean test` with **no code signing** — builds the app and runs the XCTest suite (parsers, graph layout, and a full end-to-end test that builds a real repo in a temp dir). **Core (Ubuntu)** (`swift:6.2.1-noble`): `swift build` + `swift test` for the platform-independent library, so the Linux port can't rot |
 | [`release.yml`](workflows/release.yml) | pushing a `v*` tag | Release build **without Developer ID signing**, ad-hoc signed so it launches on Apple Silicon, packaged as **DMG + zip**, published as a GitHub Release, then **byte-verified** by re-downloading the assets |
 | [`zai-code-review.yml`](workflows/zai-code-review.yml) | PR opened/synchronized | Reviews the diff with **Z.AI GLM** (`L-K-M/zai-code-review`, needs the `ZAI_API_KEY` repo secret; no-op without it) |
 
-Both macOS jobs run on `macos-14` with a **pinned Xcode** (`16.2`), and every
-third-party action is **pinned to a commit SHA**. There are no third-party
-Swift dependencies, so there's nothing to cache.
+Both macOS jobs run on `macos-14` with a **pinned Xcode** (`16.2`), the Linux
+job runs in a **pinned official Swift image**, and every third-party action is
+**pinned to a commit SHA**. There are no third-party Swift dependencies, so
+there's nothing to cache.
+
+> The Linux job builds the SwiftPM package (`Package.swift`), not the app: it
+> covers everything except `GitEnough/UI/`. Releases are still macOS-only.
 
 > **Signing/notarization is intentionally off.** Releases are not signed with a
 > Developer ID and not notarized — no certificates or secrets needed. Users
@@ -37,6 +41,12 @@ To redo a botched release, delete the tag and the Release on GitHub, then re-tag
 scripts/build.sh            # incremental Release build → reveal in Finder
 scripts/build.sh --clean    # reset wedged Xcode daemons, wipe build/, rebuild
 scripts/build.sh --check    # print the resolved config, build nothing
+```
+
+The core library, on macOS or Linux — the same suite CI's Ubuntu job runs:
+
+```bash
+swift build && swift test
 ```
 
 `scripts/build.sh` is a stub for the shared `lkm-build` engine

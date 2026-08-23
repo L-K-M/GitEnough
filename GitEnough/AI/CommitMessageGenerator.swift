@@ -1,4 +1,8 @@
 import Foundation
+#if canImport(FoundationNetworking)
+// URLSession lives in a separate module in swift-corelibs-foundation.
+import FoundationNetworking
+#endif
 
 /// Generates commit messages from the staged diff using an OpenAI-compatible
 /// chat-completions API (Z.AI GLM by default; see LLMConfiguration).

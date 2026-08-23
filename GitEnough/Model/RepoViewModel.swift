@@ -1,4 +1,3 @@
-import AppKit
 import Foundation
 
 /// All state and operations for one open repository.
@@ -307,7 +306,7 @@ final class RepoViewModel: ObservableObject, Identifiable {
                 let url = pullRequest?.url ?? forge.newPullRequestURL(base: base, head: branch)
                 await MainActor.run { [weak self] in
                     self?.isResolvingPullRequest = false
-                    NSWorkspace.shared.open(url)
+                    Platform.open(url)
                 }
             }
         }
@@ -512,7 +511,7 @@ final class RepoViewModel: ObservableObject, Identifiable {
             if !tracked.isEmpty { try client.discard(paths: tracked) }
             for change in changes where change.isUntracked {
                 let url = self.repo.url.appendingPathComponent(change.path)
-                try? FileManager.default.trashItem(at: url, resultingItemURL: nil)
+                try? Platform.moveToTrash(url)
             }
         }
     }

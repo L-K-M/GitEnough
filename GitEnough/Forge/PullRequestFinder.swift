@@ -1,4 +1,8 @@
 import Foundation
+#if canImport(FoundationNetworking)
+// URLSession lives in a separate module in swift-corelibs-foundation.
+import FoundationNetworking
+#endif
 
 /// An open pull request on a forge, resolved for the current branch.
 struct PullRequest: Equatable {

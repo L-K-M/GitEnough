@@ -57,7 +57,8 @@ config, hooks and credential helpers, and adds zero third-party dependencies.
 
 ## Requirements
 
-- macOS 14 (Sonoma) or newer.
+- macOS 14 (Sonoma) or newer for the app itself. A Linux port is under way —
+  see [Linux](#linux) below.
 - The **Xcode Command Line Tools** (`xcode-select --install`) — that's where
   `git` comes from. GitEnough offers to install them on first launch if missing.
 - For smart commit messages: an API key for [Z.AI](https://z.ai) (GLM), OpenAI,
@@ -81,6 +82,28 @@ scripts/build.sh --debug --run
 xcodebuild -project GitEnough.xcodeproj -scheme GitEnough test   # run the tests
 ```
 
+## Linux
+
+The port to Ubuntu is in progress. Everything below the user interface — the git
+plumbing, the history-graph layout, the forge lookups, the LLM client, the
+per-repository view models — now builds and passes its full test suite on Linux
+as a SwiftPM library, and CI runs it on every pull request:
+
+```bash
+swift build && swift test     # Swift 6.0+; CI pins 6.2.1 on Ubuntu 24.04
+```
+
+`Package.swift` builds that library out of the same directories the Xcode
+project uses; only `GitEnough/UI/` (SwiftUI, macOS-only) is left out. Where the
+core needed the desktop it now goes through `GitEnough/Platform/`, which on
+Ubuntu means `xdg-open` for links, the freedesktop.org Trash spec for discarded
+untracked files, and libsecret's `secret-tool` for the API key (`sudo apt
+install libsecret-tools`); merge-tool detection looks for Meld, KDiff3, Kompare,
+Diffuse and friends on `PATH`.
+
+**What is still missing is the front end**: SwiftUI does not exist on Linux, so
+there is no runnable Linux app yet — that GUI is the remaining piece of work.
+
 ## Releasing
 
 ```bash
@@ -96,4 +119,6 @@ publishes the GitHub Release, and byte-verifies the uploaded assets. See
 GitEnough talks to exactly two kinds of hosts: your git remotes (via `git`
 itself, with your own credentials) and — only when you press ✨ Generate — the
 configured LLM endpoint, which receives the staged diff. API keys are stored in
-the macOS Keychain. There is no telemetry, no analytics, no crash reporting.
+the macOS Keychain — or, on Linux, the system keyring via the Secret Service;
+GitEnough never writes a key to a file. There is no telemetry, no analytics, no
+crash reporting.

@@ -148,4 +148,18 @@ final class GitActivityLog {
         }
         return redacted
     }
+
+    /// How long a command took, in the compact form the status bar and the
+    /// history window both show ("0.4s", "2m 5s", "1h 1m").
+    static func formatDuration(_ seconds: TimeInterval) -> String {
+        if seconds < 60 {
+            return String(format: "%.1fs", seconds)
+        }
+        let minutes = Int(seconds) / 60
+        let rest = Int(seconds) % 60
+        if minutes >= 60 {
+            return "\(minutes / 60)h \(minutes % 60)m"
+        }
+        return "\(minutes)m \(rest)s"
+    }
 }
