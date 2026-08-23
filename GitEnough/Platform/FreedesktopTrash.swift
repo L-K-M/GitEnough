@@ -48,6 +48,15 @@ public enum FreedesktopTrash {
     /// `homeTrash` is a seam for the tests, which must not be able to fill the
     /// developer's real Trash.
     public static func trash(_ url: URL, homeTrash: URL = homeTrashDirectory()) throws {
+        try trash(url, homeTrash: homeTrash, writeRecord: writeFully)
+    }
+
+    /// The body of `trash(_:homeTrash:)`, with the record write injectable so the
+    /// tests can exercise the failure path without needing a full disk. Internal:
+    /// the public signature above stays a two-argument call.
+    static func trash(_ url: URL,
+                      homeTrash: URL,
+                      writeRecord: (Data, Int32) throws -> Void) throws {
         let item = url.standardizedFileURL
         let trashDirectory = try trashDirectory(for: item, homeTrash: homeTrash)
         let files = trashDirectory.appendingPathComponent("files")
@@ -64,7 +73,7 @@ public enum FreedesktopTrash {
         let recordedPath = originalPath(of: item, relativeTo: trashDirectory)
         let record = Data(trashInfo(originalPath: recordedPath, deletedAt: Date()).utf8)
         do {
-            try writeFully(record, to: handle)
+            try writeRecord(record, handle)
         } catch {
             // A half-written record is worse than no trashing at all: the file
             // would leave the worktree and land in the Trash with an origin
@@ -72,8 +81,7 @@ public enum FreedesktopTrash {
             // through here instead of unlink — silently stops working. Abandon
             // the reservation and let the caller report the failure while the
             // file is still where the user left it.
-            try? FileManager.default.removeItem(
-                at: info.appendingPathComponent(name + ".trashinfo"))
+            try? FileManager.default.removeItem(at: trashInfoURL(for: name, in: info))
             throw error
         }
 
@@ -82,8 +90,7 @@ public enum FreedesktopTrash {
                                              to: files.appendingPathComponent(name))
         } catch {
             // Never leave an info record pointing at nothing.
-            try? FileManager.default.removeItem(
-                at: info.appendingPathComponent(name + ".trashinfo"))
+            try? FileManager.default.removeItem(at: trashInfoURL(for: name, in: info))
             throw error
         }
     }
@@ -172,13 +179,19 @@ public enum FreedesktopTrash {
         }
     }
 
+    /// Where a reserved entry's record lives. Reservation and the cleanup that
+    /// undoes it both go through here so neither can drift onto the other's path.
+    private static func trashInfoURL(for name: String, in info: URL) -> URL {
+        info.appendingPathComponent(name + ".trashinfo")
+    }
+
     /// Reserves a free `<name>.trashinfo` in `info` and returns the open
     /// descriptor. O_EXCL makes the reservation atomic against other trashers.
     private static func reserveName(_ name: String,
                                     in info: URL) throws -> (String, Int32) {
         for attempt in 1...1000 {
             let candidate = candidateName(name, attempt: attempt)
-            let path = info.appendingPathComponent(candidate + ".trashinfo").path
+            let path = trashInfoURL(for: candidate, in: info).path
             let handle = open(path, O_CREAT | O_EXCL | O_WRONLY, 0o600)
             if handle >= 0 { return (candidate, handle) }
             if errno != EEXIST {

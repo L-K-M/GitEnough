@@ -99,24 +99,47 @@ final class FreedesktopTrashTests: XCTestCase {
         // working Restore, which is the one guarantee discard-to-Trash exists
         // to make.
         let file = try makeFile("unwritable.txt", contents: "still here")
+        struct DiskFull: Error {}
+
+        XCTAssertThrowsError(
+            try FreedesktopTrash.trash(file, homeTrash: trashRoot,
+                                       writeRecord: { _, _ in throw DiskFull() })
+        ) { XCTAssertTrue($0 is DiskFull, "the caller has to see why it failed, got \($0)") }
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.path),
+                      "a file that could not be recorded must not leave the worktree")
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "still here")
+        let info = trashRoot.appendingPathComponent("info")
+        XCTAssertEqual(
+            try FileManager.default.contentsOfDirectory(atPath: info.path), [],
+            "the abandoned reservation would show as a ghost entry in the file manager")
+    }
+
+    func testWriteFullyReportsAWriteItCannotComplete() throws {
+        let file = try makeFile("unwritable.txt")
+        // A descriptor opened read-only fails EBADF on write, standing in for
+        // the real causes (a full disk, a revoked mount) without needing one.
         let readOnly = open(file.path, O_RDONLY)
         XCTAssertGreaterThanOrEqual(readOnly, 0)
         defer { close(readOnly) }
 
-        // A descriptor opened read-only fails EBADF on write, standing in for
-        // the real causes (a full disk, a revoked mount) without needing one.
-        XCTAssertThrowsError(try FreedesktopTrash.writeFully(Data("x".utf8), to: readOnly))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: file.path))
-        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "still here")
+        XCTAssertThrowsError(try FreedesktopTrash.writeFully(Data("x".utf8), to: readOnly)) { error in
+            guard let trashError = error as? FreedesktopTrash.TrashError,
+                  case .couldNotWriteRecord = trashError else {
+                return XCTFail("expected a couldNotWriteRecord, got \(error)")
+            }
+        }
     }
 
     func testWriteFullyWritesEveryByte() throws {
         let target = root.appendingPathComponent("record")
         let handle = open(target.path, O_CREAT | O_WRONLY, 0o600)
         XCTAssertGreaterThanOrEqual(handle, 0)
+        defer { close(handle) }
+        // Larger than a pipe buffer, so a partial write is at least possible:
+        // the loop is what makes the record whole, not the size of the record.
         let payload = String(repeating: "abcdefgh", count: 4096)   // 32 KiB
         try FreedesktopTrash.writeFully(Data(payload.utf8), to: handle)
-        close(handle)
         XCTAssertEqual(try String(contentsOf: target, encoding: .utf8), payload)
     }
 
