@@ -61,13 +61,16 @@ On Linux (Swift 6.0+; CI pins 6.2.1), or on macOS to check the core in
 isolation:
 
 ```bash
-swift build
+swift build                            # on Linux this includes the GTK app
 swift test
-swift build --product gitenough-gtk    # Linux only; needs libgtk-4-dev
+GITENOUGH_NO_GTK=1 swift test          # core only; no gtk4 needed
 ```
 
 The GTK targets are declared inside `#if os(Linux)` in `Package.swift`, so a
-macOS `swift build` never asks for gtk4. The core is a **separate module** from
+macOS `swift build` never asks for gtk4. On Linux they are part of the package,
+and SwiftPM builds every target — so `swift build` and `swift test` both want
+gtk4 installed. `GITENOUGH_NO_GTK=1` drops the front end from the graph for
+anyone who only wants the headless core. The core is a **separate module** from
 the front end, which is why its declarations are `public` — on macOS that is a
 no-op (one module), on Linux it is what makes the split real.
 

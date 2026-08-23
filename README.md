@@ -112,6 +112,13 @@ There are no SwiftPM dependencies on Linux either: GTK is reached as a system
 library through `pkg-config`, the same trade the app already makes by shelling
 out to `git` instead of linking libgit2.
 
+The core on its own needs nothing but the toolchain — useful on a server or in a
+CI job that only wants the tests:
+
+```bash
+GITENOUGH_NO_GTK=1 swift test    # drops the front end from the package
+```
+
 Not yet ported from the macOS UI: Settings (configure the LLM endpoint on macOS,
 or by hand), the watch folder, drag-and-drop reordering, cherry-pick/revert/
 reset context menus, and merge-conflict resolution. The core supports all of

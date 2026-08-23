@@ -56,5 +56,8 @@ The Linux app (needs `libgtk-4-dev`):
 swift build -c release --product gitenough-gtk
 ```
 
+SwiftPM builds every target, so on Linux `swift build`/`swift test` want gtk4
+too. `GITENOUGH_NO_GTK=1` drops the front end for a core-only build.
+
 `scripts/build.sh` is a stub for the shared `lkm-build` engine
 (<https://github.com/L-K-M/release-tool>).
