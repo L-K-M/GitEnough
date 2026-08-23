@@ -83,10 +83,11 @@ nearly missed, and anything slightly slower fails outright. The request is not
 streamed, so crossing the deadline discards the whole completion and each of the
 three retries starts over from zero.
 
-Fixed upstream in L-K-M/zai-code-review#1, which makes the timeout a
-`REQUEST_TIMEOUT_MS` input (default unchanged). Filed as `ANALYSIS.md` X6, which
-carries the workflow-side follow-up — this is a `pull_request_target` workflow
-holding repository secrets, so that edit stays the maintainer's call.
+Fix proposed upstream in L-K-M/zai-code-review#1 — open, not yet released —
+which makes the timeout a `REQUEST_TIMEOUT_MS` input (default unchanged). Filed
+as `ANALYSIS.md` X6, which carries the workflow-side follow-up and stays blocked
+on that release: this is a `pull_request_target` workflow holding repository
+secrets, so the edit is the maintainer's call.
 
 This is the third claim in this document that survived review and died on
 contact with something that actually runs (see §4.4 and §4.7). The pattern is
