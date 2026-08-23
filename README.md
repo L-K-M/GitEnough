@@ -84,25 +84,38 @@ xcodebuild -project GitEnough.xcodeproj -scheme GitEnough test   # run the tests
 
 ## Linux
 
-The port to Ubuntu is in progress. Everything below the user interface — the git
-plumbing, the history-graph layout, the forge lookups, the LLM client, the
-per-repository view models — now builds and passes its full test suite on Linux
-as a SwiftPM library, and CI runs it on every pull request:
+GitEnough runs on Ubuntu with a **GTK 4** front end. Same core, same git
+plumbing, same lane graph — a second way to look at it, not a second
+implementation.
 
 ```bash
-swift build && swift test     # Swift 6.0+; CI pins 6.2.1 on Ubuntu 24.04
+sudo apt install libgtk-4-dev libsecret-tools    # build deps + the keyring tool
+swift build -c release --product gitenough-gtk   # Swift 6.0+; CI pins 6.2.1
+.build/release/gitenough-gtk ~/code/myproject    # or launch with no arguments
 ```
 
-`Package.swift` builds that library out of the same directories the Xcode
-project uses; only `GitEnough/UI/` (SwiftUI, macOS-only) is left out. Where the
-core needed the desktop it now goes through `GitEnough/Platform/`, which on
-Ubuntu means `xdg-open` for links, the freedesktop.org Trash spec for discarded
-untracked files, and libsecret's `secret-tool` for the API key (`sudo apt
-install libsecret-tools`); merge-tool detection looks for Meld, KDiff3, Kompare,
-Diffuse and friends on `PATH`.
+The window is the two-pane shell you'd expect: repositories on the left,
+History / Changes / Branches on the right, the lane graph drawn with Cairo, a
+colour-coded diff beside the file lists, and the commit box with ✨ Generate.
+Folders can be passed on the command line; GitEnough is single-instance, so
+pointing a second launch at another folder opens it in the running window.
 
-**What is still missing is the front end**: SwiftUI does not exist on Linux, so
-there is no runnable Linux app yet — that GUI is the remaining piece of work.
+`Package.swift` builds the core library out of the same directories the Xcode
+project uses — only `GitEnough/UI/` (SwiftUI, macOS-only) is left out — and the
+GTK front end lives in `Linux/`. Where the core needs the desktop it goes
+through `GitEnough/Platform/`: `xdg-open` for links, the freedesktop.org Trash
+spec for discarded untracked files, libsecret's `secret-tool` for the API key,
+and merge-tool detection that looks for Meld, KDiff3, Kompare, Diffuse and
+friends on `PATH`.
+
+There are no SwiftPM dependencies on Linux either: GTK is reached as a system
+library through `pkg-config`, the same trade the app already makes by shelling
+out to `git` instead of linking libgit2.
+
+Not yet ported from the macOS UI: Settings (configure the LLM endpoint on macOS,
+or by hand), the watch folder, drag-and-drop reordering, cherry-pick/revert/
+reset context menus, and merge-conflict resolution. The core supports all of
+them — they just have no GTK surface yet.
 
 ## Releasing
 

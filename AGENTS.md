@@ -8,8 +8,8 @@ GitEnough is a native macOS git client — the everyday 95 % of GitHub Desktop
 (fetch, pull, push, branch, merge, stash, commit) with an IntelliJ-style
 branch/merge history graph and LLM-written commit messages.
 
-Everything below the UI also builds and tests on Linux as a SwiftPM library
-(see **Two builds** below); the SwiftUI front end is still macOS-only.
+It runs on Linux too, with a GTK 4 front end over the same core (see **Two
+builds, one source tree** below). The SwiftUI front end stays macOS-only.
 
 ## Tech Stack
 
@@ -33,8 +33,8 @@ Everything below the UI also builds and tests on Linux as a SwiftPM library
 
 | | Xcode project | SwiftPM package |
 |---|---|---|
-| Builds | the whole app, macOS | `GitEnough` library — everything except `UI/` |
-| Platforms | macOS 14+ | macOS and Linux |
+| Builds | the whole app, macOS | `GitEnough` library (everything except `UI/`) + `gitenough-gtk` |
+| Platforms | macOS 14+ | library: macOS and Linux · GTK app: Linux |
 | Tests | all of `GitEnoughTests/` | all of `GitEnoughTests/`, same files |
 
 `Package.swift` points its targets at the **existing** `GitEnough/` and
@@ -63,7 +63,13 @@ isolation:
 ```bash
 swift build
 swift test
+swift build --product gitenough-gtk    # Linux only; needs libgtk-4-dev
 ```
+
+The GTK targets are declared inside `#if os(Linux)` in `Package.swift`, so a
+macOS `swift build` never asks for gtk4. The core is a **separate module** from
+the front end, which is why its declarations are `public` — on macOS that is a
+no-op (one module), on Linux it is what makes the split real.
 
 ## Layout
 
@@ -94,8 +100,17 @@ swift test
   `move(fromOffsets:toOffset:)`) which compile to nothing on macOS.
 - `GitEnough/Tools/` — MergeTool detection (git mergetool integration).
 - `GitEnough/UI/` — SwiftUI views, macOS-only and outside the SwiftPM library.
-  The graph Canvas and the commit list rows share `GraphMetrics` (in `Graph/`)
-  so their row heights stay in sync.
+- `Linux/CGtk/` — a system-library target over gtk4 via pkg-config, plus the
+  shim header that re-exposes what Swift can't import from C macros.
+- `Linux/GitEnoughGTK/` — the GTK 4 front end. `GTK/` holds the interop layer
+  (pointer casts, signal-to-closure glue, GValue property setters, and
+  `DispatchMainQueueBridge`, which drains libdispatch's main queue from GLib's
+  loop so the view models' `DispatchQueue.main` hops work unchanged). The rest
+  is one file per pane.
+
+Both front ends draw the graph from `GraphRowDrawing` in `Graph/` — lane
+positions, bezier control points, palette. Change the geometry there, not in a
+front end, or the two will drift.
 
 ## Conventions
 
@@ -110,6 +125,8 @@ swift test
 - Secrets only ever go into the system secret store — the Keychain, or the
   Secret Service on Linux. Never log or persist API keys, and never fall back
   to a plain file when the secret store is unavailable.
+- The core must not know which front end is attached. It has no GTK or SwiftUI
+  imports, and it publishes state the same way for both.
 - **Nothing outside `Platform/` imports AppKit or Security.** A core file that
   needs the desktop (open a URL, trash a file, find an application) grows a
   `Platform` call instead; `#if canImport(AppKit)` belongs in `Platform/`,

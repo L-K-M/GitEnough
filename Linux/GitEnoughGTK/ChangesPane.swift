@@ -61,17 +61,21 @@ final class ChangesPane {
         let messageScroller = UI.scroller(messageView)
         gtk_widget_set_size_request(messageScroller, -1, 90)
         UI.expand(messageScroller, vertical: false)
+        // The amend toggle gets its own line rather than sharing one with the
+        // buttons. Together they need more width than the pane is given, and a
+        // GTK child that can't fit its minimum is centred in what it does get —
+        // which quietly clips the left edge of the whole column.
         let buttons = UI.box(GTK_ORIENTATION_HORIZONTAL, spacing: 6)
-        UI.expand(amendToggle, vertical: false)
-        UI.append(buttons, amendToggle, generateButton, commitButton)
+        gtk_widget_set_halign(buttons, GTK_ALIGN_END)
+        UI.append(buttons, generateButton, commitButton)
         let commitBox = UI.box(GTK_ORIENTATION_VERTICAL, spacing: 6, margin: 6)
-        UI.append(commitBox, messageScroller, buttons)
+        UI.append(commitBox, messageScroller, amendToggle, buttons)
 
         let left = UI.box(GTK_ORIENTATION_VERTICAL)
         UI.append(left, lists, commitBox)
 
         widget = UI.paned(GTK_ORIENTATION_HORIZONTAL,
-                          start: left, end: diffView.widget, position: 340)
+                          start: left, end: diffView.widget, position: 380)
 
         connect(commitButton, "clicked") { [weak self] in self?.commit() }
         connect(generateButton, "clicked") { [weak self] in
