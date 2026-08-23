@@ -3,15 +3,15 @@ import Foundation
 /// The one decision used by every Push surface. It distinguishes a normal
 /// push from first-time publication and carries an actionable reason when the
 /// repository is not in a state Git can safely push.
-enum PushCapability: Equatable {
+public enum PushCapability: Equatable {
 
-    enum UnavailableReason: Equatable {
+    public enum UnavailableReason: Equatable {
         case detachedHead
         case unbornHead
         case noRemotes
         case noCurrentBranch
 
-        var message: String {
+        public var message: String {
             switch self {
             case .detachedHead:
                 return "Can't push: HEAD is detached. Check out or create a branch first."
@@ -32,7 +32,7 @@ enum PushCapability: Equatable {
     /// Pure resolution from a loaded repository snapshot. State checks precede
     /// upstream checks deliberately: detached and unborn HEADs have no upstream,
     /// but that does not make either one a publishable local branch.
-    static func resolve(status: RepoStatus, remotes: [Remote]) -> PushCapability {
+    public static func resolve(status: RepoStatus, remotes: [Remote]) -> PushCapability {
         if status.isUnborn { return .unavailable(.unbornHead) }
         if status.isDetached { return .unavailable(.detachedHead) }
         guard status.head != nil else { return .unavailable(.noCurrentBranch) }
@@ -43,17 +43,17 @@ enum PushCapability: Equatable {
         return .publish(remote: remote.name)
     }
 
-    var isAvailable: Bool {
+    public var isAvailable: Bool {
         if case .unavailable = self { return false }
         return true
     }
 
-    var label: String {
+    public var label: String {
         if case .publish = self { return "Publish" }
         return "Push"
     }
 
-    var help: String {
+    public var help: String {
         switch self {
         case .push:
             return "Push (⇧⌘P)"

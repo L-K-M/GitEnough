@@ -1,13 +1,22 @@
 import Foundation
+#if canImport(Security)
 import Security
+#endif
 
-/// Minimal Keychain wrapper for the LLM API key. The key is stored as a generic
-/// password scoped to this app; UserDefaults only ever holds non-secret settings.
-enum KeychainStore {
+/// The LLM API key's home in the system's secret store — the macOS Keychain, or
+/// the Secret Service (GNOME Keyring / KWallet) on Linux. UserDefaults only ever
+/// holds non-secret settings.
+///
+/// The Linux backend drives `secret-tool` (Debian/Ubuntu package
+/// `libsecret-tools`) rather than linking libsecret, keeping GitEnough's
+/// zero-dependency build. When it isn't installed the key simply isn't stored:
+/// GitEnough never falls back to writing a secret to disk in the clear.
+public enum KeychainStore {
 
-    private static let service = "com.gitenough.GitEnough"
+    public static let service = "com.gitenough.GitEnough"
 
-    static func save(secret: String, account: String) throws {
+    public static func save(secret: String, account: String) throws {
+        #if canImport(Security)
         let data = Data(secret.utf8)
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -33,9 +42,13 @@ enum KeychainStore {
         } else {
             throw KeychainError.saveFailed(status: status)
         }
+        #else
+        try SecretService.save(secret: secret, service: service, account: account)
+        #endif
     }
 
-    static func read(account: String) -> String? {
+    public static func read(account: String) -> String? {
+        #if canImport(Security)
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -47,25 +60,34 @@ enum KeychainStore {
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         guard status == errSecSuccess, let data = result as? Data else { return nil }
         return String(data: data, encoding: .utf8)
+        #else
+        return SecretService.read(service: service, account: account)
+        #endif
     }
 
-    static func delete(account: String) {
+    public static func delete(account: String) {
+        #if canImport(Security)
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
         ]
         SecItemDelete(query as CFDictionary)
+        #else
+        SecretService.delete(service: service, account: account)
+        #endif
     }
 
-    enum KeychainError: Error, LocalizedError {
+    #if canImport(Security)
+    public enum KeychainError: Error, LocalizedError {
         case saveFailed(status: OSStatus)
 
-        var errorDescription: String? {
+        public var errorDescription: String? {
             switch self {
             case .saveFailed(let status):
                 return "Could not save the API key to the Keychain (OSStatus \(status))."
             }
         }
     }
+    #endif
 }

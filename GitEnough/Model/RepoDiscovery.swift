@@ -9,7 +9,7 @@ import Foundation
 /// sidebar entries). Purely file-system based: a directory counts as a repository
 /// when it contains a `.git` entry — a directory, or a file for linked worktrees.
 /// No git invocation, so a scan is cheap enough to run every minute.
-enum RepoDiscovery {
+public enum RepoDiscovery {
 
     /// Directory names never descended into (hidden folders are skipped wholesale).
     private static let skippedDirectoryNames: Set<String> = [
@@ -23,7 +23,7 @@ enum RepoDiscovery {
     /// - Parameter maxDepth: how many directory levels below `root` to examine.
     ///   2 covers `~/code` and `~/code/org` layouts.
     /// - Parameter maxVisitedDirectories: safety cap against pathological trees.
-    static func findRepositories(in root: URL,
+    public static func findRepositories(in root: URL,
                                  maxDepth: Int = 2,
                                  maxVisitedDirectories: Int = 4000) -> [URL] {
         let fileManager = FileManager.default

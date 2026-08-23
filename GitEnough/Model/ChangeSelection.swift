@@ -2,13 +2,13 @@
 ///
 /// A partially staged path appears in both sections. Its side is part of the
 /// identity because the two rows intentionally request different patches.
-struct ChangeSelection: Equatable {
-    let file: FileChange
-    let isStaged: Bool
+public struct ChangeSelection: Equatable {
+    public let file: FileChange
+    public let isStaged: Bool
 
     /// Follows a file when staging moves it between sections, preserves the
     /// chosen side while both exist, and clears a path that disappeared.
-    func updated(for status: RepoStatus) -> ChangeSelection? {
+    public func updated(for status: RepoStatus) -> ChangeSelection? {
         let staged = status.staged.first { $0.path == file.path }
         let unstaged = status.unstaged.first { $0.path == file.path }
         switch (staged, unstaged) {

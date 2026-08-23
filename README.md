@@ -57,7 +57,8 @@ config, hooks and credential helpers, and adds zero third-party dependencies.
 
 ## Requirements
 
-- macOS 14 (Sonoma) or newer.
+- macOS 14 (Sonoma) or newer for the app itself. A Linux port is under way —
+  see [Linux](#linux) below.
 - The **Xcode Command Line Tools** (`xcode-select --install`) — that's where
   `git` comes from. GitEnough offers to install them on first launch if missing.
 - For smart commit messages: an API key for [Z.AI](https://z.ai) (GLM), OpenAI,
@@ -81,6 +82,48 @@ scripts/build.sh --debug --run
 xcodebuild -project GitEnough.xcodeproj -scheme GitEnough test   # run the tests
 ```
 
+## Linux
+
+GitEnough runs on Ubuntu with a **GTK 4** front end. Same core, same git
+plumbing, same lane graph — a second way to look at it, not a second
+implementation.
+
+```bash
+sudo apt install libgtk-4-dev libsecret-tools    # build deps + the keyring tool
+swift build -c release --product gitenough-gtk   # Swift 6.0+; CI pins 6.2.1
+.build/release/gitenough-gtk ~/code/myproject    # or launch with no arguments
+```
+
+The window is the two-pane shell you'd expect: repositories on the left,
+History / Changes / Branches on the right, the lane graph drawn with Cairo, a
+colour-coded diff beside the file lists, and the commit box with ✨ Generate.
+Folders can be passed on the command line; GitEnough is single-instance, so
+pointing a second launch at another folder opens it in the running window.
+
+`Package.swift` builds the core library out of the same directories the Xcode
+project uses — only `GitEnough/UI/` (SwiftUI, macOS-only) is left out — and the
+GTK front end lives in `Linux/`. Where the core needs the desktop it goes
+through `GitEnough/Platform/`: `xdg-open` for links, the freedesktop.org Trash
+spec for discarded untracked files, libsecret's `secret-tool` for the API key,
+and merge-tool detection that looks for Meld, KDiff3, Kompare, Diffuse and
+friends on `PATH`.
+
+There are no SwiftPM dependencies on Linux either: GTK is reached as a system
+library through `pkg-config`, the same trade the app already makes by shelling
+out to `git` instead of linking libgit2.
+
+The core on its own needs nothing but the toolchain — useful on a server or in a
+CI job that only wants the tests:
+
+```bash
+GITENOUGH_NO_GTK=1 swift test    # drops the front end from the package
+```
+
+Not yet ported from the macOS UI: Settings (configure the LLM endpoint on macOS,
+or by hand), the watch folder, drag-and-drop reordering, cherry-pick/revert/
+reset context menus, and merge-conflict resolution. The core supports all of
+them — they just have no GTK surface yet.
+
 ## Releasing
 
 ```bash
@@ -98,4 +141,6 @@ itself, with your own credentials) and the configured LLM endpoint only when
 you explicitly press ✨ Generate, Load Models, or Test Connection. Generate and
 Test Connection send diff text; Load Models requests the provider's model list.
 Simply opening Settings makes no request. API keys are stored in the macOS
-Keychain. There is no telemetry, no analytics, no crash reporting.
+Keychain — or, on Linux, the system keyring via the Secret Service; GitEnough
+never writes a key to a file. There is no telemetry, no analytics, no crash
+reporting.

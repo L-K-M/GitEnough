@@ -2,11 +2,11 @@ import Foundation
 
 /// Pure parsers for git command output. Everything here is deterministic and free of
 /// side effects so it can be exhaustively unit-tested (see GitEnoughTests).
-enum GitParsers {
+public enum GitParsers {
 
     // Field/record separators used by the custom --pretty formats in GitClient.
-    static let fieldSep = "\u{1F}"
-    static let recordSep = "\u{1E}"
+    public static let fieldSep = "\u{1F}"
+    public static let recordSep = "\u{1E}"
 
     /// Never mutated after creation: `parseDate` runs on every repo's serial
     /// queue, so with several repositories refreshing at once the old per-call
@@ -16,14 +16,14 @@ enum GitParsers {
     /// emits — so no configuration is needed.
     private static let iso = ISO8601DateFormatter()
 
-    static func parseDate(_ raw: String) -> Date? {
+    public static func parseDate(_ raw: String) -> Date? {
         iso.date(from: raw)
     }
 
     // MARK: - git log
 
     /// Parses records of `%H %P %an %ae %aI %D %s` joined by \x1F, separated by \x1E.
-    static func parseLog(_ output: String) -> [Commit] {
+    public static func parseLog(_ output: String) -> [Commit] {
         var commits: [Commit] = []
         for record in output.components(separatedBy: recordSep) {
             let trimmed = record.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -55,7 +55,7 @@ enum GitParsers {
     /// remote without naming anything the user can act on. Short-form input
     /// (no refs/ prefix) still falls back to the old heuristic, so the parser
     /// stays tolerant of hand-written or older output.
-    static func parseDecorations(_ raw: String) -> [RefDecoration] {
+    public static func parseDecorations(_ raw: String) -> [RefDecoration] {
         let trimmed = raw.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return [] }
         var decorations: [RefDecoration] = []
@@ -128,7 +128,7 @@ enum GitParsers {
 
     // MARK: - git status --porcelain=v2 --branch
 
-    static func parseStatus(_ output: String) -> RepoStatus {
+    public static func parseStatus(_ output: String) -> RepoStatus {
         var status = RepoStatus()
         for line in output.components(separatedBy: "\n") {
             if line.hasPrefix("# branch.oid ") {
@@ -214,7 +214,7 @@ enum GitParsers {
     /// Parses lines of `%(refname) \x1F %(refname:short) \x1F %(upstream) \x1F
     /// %(upstream:track) \x1F %(HEAD) [\x1F %(committerdate:iso8601-strict)]` — the
     /// optional trailing date keeps older five-field output parsing unchanged.
-    static func parseBranches(_ output: String) -> [Branch] {
+    public static func parseBranches(_ output: String) -> [Branch] {
         var branches: [Branch] = []
         for line in output.components(separatedBy: "\n") where !line.isEmpty {
             let fields = line.components(separatedBy: fieldSep)
@@ -265,7 +265,7 @@ enum GitParsers {
 
     // MARK: - git remote -v
 
-    static func parseRemotes(_ output: String) -> [Remote] {
+    public static func parseRemotes(_ output: String) -> [Remote] {
         var seen = Set<String>()
         var remotes: [Remote] = []
         for line in output.components(separatedBy: "\n") where !line.isEmpty {
@@ -285,7 +285,7 @@ enum GitParsers {
 
     // MARK: - git stash list --format=%gd%x1F%gs
 
-    static func parseStash(_ output: String) -> [StashEntry] {
+    public static func parseStash(_ output: String) -> [StashEntry] {
         var entries: [StashEntry] = []
         for line in output.components(separatedBy: "\n") where !line.isEmpty {
             let fields = line.components(separatedBy: fieldSep)
@@ -324,7 +324,7 @@ enum GitParsers {
     // MARK: - git diff-tree --name-status
 
     /// Parses `A\tpath` / `M\tpath` / `R100\told\tnew` lines.
-    static func parseNameStatus(_ output: String) -> [CommitFile] {
+    public static func parseNameStatus(_ output: String) -> [CommitFile] {
         var files: [CommitFile] = []
         for line in output.components(separatedBy: "\n") where !line.isEmpty {
             let fields = line.components(separatedBy: "\t")
@@ -349,7 +349,7 @@ enum GitParsers {
 
     /// Parses `%H %an %ae %aI %P %s %b` (fields joined by \x1F, %b last, record ended
     /// by \x1E) followed by the --name-status block.
-    static func parseCommitDetail(_ output: String) -> CommitDetail? {
+    public static func parseCommitDetail(_ output: String) -> CommitDetail? {
         guard let recordEnd = output.firstIndex(of: Character(recordSep)) else { return nil }
         let header = output[..<recordEnd]
         let rest = output[output.index(after: recordEnd)...]
@@ -374,7 +374,7 @@ enum GitParsers {
     /// `core.quotepath=true` that includes every non-ASCII path ("ä" becomes
     /// "\303\244"). Works on raw UTF-8 bytes and decodes at the end, so
     /// multi-byte sequences survive intact. Unquoted paths pass through unchanged.
-    static func unquoteGitPath(_ raw: String) -> String {
+    public static func unquoteGitPath(_ raw: String) -> String {
         guard raw.hasPrefix("\""), raw.hasSuffix("\""), raw.count >= 2 else { return raw }
         let utf8 = Array(raw.dropFirst().dropLast().utf8)
         let backslash: UInt8 = 0x5C

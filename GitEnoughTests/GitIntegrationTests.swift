@@ -620,7 +620,22 @@ final class GitIntegrationTests: XCTestCase {
         // Its wildcard-looking target must not resolve the lookalike conflict.
         try run(["config", "mergetool.pathspec-test.cmd", "cp \"$REMOTE\" \"$MERGED\""])
         try run(["config", "mergetool.pathspec-test.trustExitCode", "true"])
-        try client.runMergeTool("pathspec-test", path: "tool*.txt")
+        // git-mergetool re-expands the filename it selected with an unquoted
+        // `set -- $files`. Where /bin/sh honours SHELLOPTS=noglob (macOS, where
+        // it is Bash) the wildcard name resolves only itself; where it doesn't
+        // (dash, most Linux distributions) GitClient refuses rather than let
+        // the tool resolve every conflicted lookalike. Either way the one thing
+        // that must never happen is tool-one.txt being resolved silently.
+        if GitClient.shellGlobsDespiteNoglob {
+            XCTAssertThrowsError(try client.runMergeTool("pathspec-test", path: "tool*.txt")) {
+                XCTAssertTrue("\($0)".contains("wildcard"), "unexpected error: \($0)")
+            }
+            XCTAssertEqual(Set(try client.conflictedPaths()), Set(paths),
+                           "a refused merge tool must leave every conflict untouched")
+            try client.resolveConflict(path: "tool*.txt", ours: false)
+        } else {
+            try client.runMergeTool("pathspec-test", path: "tool*.txt")
+        }
         XCTAssertEqual(
             Set(try client.conflictedPaths()),
             Set(paths.filter { $0 != "tool*.txt" }))

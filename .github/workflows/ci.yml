@@ -56,3 +56,42 @@ jobs:
           name: TestResults
           path: TestResults.xcresult
           if-no-files-found: ignore
+
+  # The Linux half of the port: the core library has to keep building and
+  # passing the same test suite against swift-corelibs-foundation, which is
+  # where Apple's SDK papers over the differences (URLSession's module, Combine,
+  # the Trash, the Keychain), and the GTK front end has to keep compiling
+  # against it. The official Swift image is pinned to a patch release, in the
+  # same spirit as the pinned Xcode above, and it means no third-party action
+  # sits in the toolchain path.
+  linux:
+    name: Core + GTK (Ubuntu)
+    runs-on: ubuntu-24.04
+    container: swift:6.2.1-noble
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Trust the workspace
+        # The container runs as root while the checkout is owned by the runner
+        # user; without this git refuses to operate and the integration tests,
+        # which drive real repositories, fail before they start.
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Install GTK 4
+        # The core library and its tests need nothing beyond the toolchain; the
+        # GTK front end needs gtk4's headers, and building it here is what keeps
+        # the Linux UI from breaking unnoticed.
+        run: |
+          apt-get update -qq
+          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libgtk-4-dev
+
+      - name: Build
+        run: swift build --build-tests
+
+      - name: Test
+        run: swift test
+
+      - name: Build the GTK front end
+        run: swift build --product gitenough-gtk

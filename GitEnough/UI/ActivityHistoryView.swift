@@ -136,7 +136,7 @@ struct ActivityHistoryView: View {
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
         } else if let finished = entry.finishedAt {
-            Text(ActivityLogView.formatDuration(finished.timeIntervalSince(entry.startedAt)))
+            Text(GitActivityLog.formatDuration(finished.timeIntervalSince(entry.startedAt)))
                 .font(.caption)
                 .monospacedDigit()
                 .foregroundStyle(.secondary)

@@ -7,10 +7,10 @@ import Foundation
 /// as an array (never through a shell), so spaces and shell metacharacters are safe.
 /// Repo-reported paths also use literal pathspec magic: `--` ends option parsing,
 /// but does not stop git from interpreting `*`, `?`, `[` or `:(...)` in a filename.
-final class GitClient {
+public final class GitClient {
 
-    let shell: GitShell
-    let worktree: URL
+    public let shell: GitShell
+    public let worktree: URL
 
     /// When set, every git invocation this client makes is recorded (begin,
     /// finish, exit code, stderr tail) so the UI can show what is running right
@@ -18,9 +18,9 @@ final class GitClient {
     /// and one-off clients means no recording. Assign exactly once, before
     /// the first command runs — reads happen on background queues without
     /// locking.
-    var activityLog: GitActivityLog?
+    public var activityLog: GitActivityLog?
 
-    init(worktree: URL, shell: GitShell = .shared) {
+    public init(worktree: URL, shell: GitShell = .shared) {
         self.worktree = worktree
         self.shell = shell
     }
@@ -29,7 +29,7 @@ final class GitClient {
     /// is handed back to a git command. `--` only ends option parsing: without
     /// this prefix, filenames containing `*`, `?`, `[` or a `:(...)` signature
     /// can select other paths (or fail to select themselves).
-    static func literalPathspec(_ path: String) -> String {
+    public static func literalPathspec(_ path: String) -> String {
         ":(literal)" + path
     }
 
@@ -93,7 +93,7 @@ final class GitClient {
     /// activity formatting can still strip the worktree path. Centralizing the
     /// flag prevents a new query from quietly reintroducing optional index
     /// refreshes and lock contention.
-    static func readOnlyArguments(_ args: [String]) -> [String] {
+    public static func readOnlyArguments(_ args: [String]) -> [String] {
         let insertionIndex = args.count >= 2 && args[0] == "-C" ? 2 : 0
         if args.indices.contains(insertionIndex),
            args[insertionIndex] == "--no-optional-locks" {
@@ -115,7 +115,7 @@ final class GitClient {
     // MARK: - Discovery / validation
 
     /// True when `directory` is inside a git worktree.
-    static func isRepository(at directory: URL) -> Bool {
+    public static func isRepository(at directory: URL) -> Bool {
         guard let result = try? GitShell.shared.run(
             readOnlyArguments(["rev-parse", "--is-inside-work-tree"]),
             in: directory) else { return false }
@@ -125,7 +125,7 @@ final class GitClient {
 
     /// The canonical top-level path of the worktree containing `directory`
     /// (so adding `repo/Documentation/` registers the repo root).
-    static func topLevel(of directory: URL) -> URL? {
+    public static func topLevel(of directory: URL) -> URL? {
         guard let result = try? GitShell.shared.run(
             readOnlyArguments(["rev-parse", "--show-toplevel"]), in: directory),
             result.exitCode == 0 else { return nil }
@@ -135,7 +135,7 @@ final class GitClient {
     }
 
     /// The `.git` directory (a file for linked worktrees — resolved by git).
-    func gitDir() -> URL? {
+    public func gitDir() -> URL? {
         guard let result = try? runRead(
             ["-C", worktree.path, "rev-parse", "--absolute-git-dir"], in: nil),
             result.exitCode == 0 else { return nil }
@@ -144,7 +144,7 @@ final class GitClient {
         return URL(fileURLWithPath: path)
     }
 
-    static func version() -> String? {
+    public static func version() -> String? {
         guard let result = try? GitShell.shared.run(["--version"], in: nil),
               result.exitCode == 0 else { return nil }
         return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -152,7 +152,7 @@ final class GitClient {
 
     // MARK: - Status / branches / remotes
 
-    func status() throws -> RepoStatus {
+    public func status() throws -> RepoStatus {
         let result = try runReadChecked(
             ["-C", worktree.path, "status", "--porcelain=v2", "--branch",
              "--untracked-files=normal"],
@@ -160,7 +160,7 @@ final class GitClient {
         return GitParsers.parseStatus(result.stdout)
     }
 
-    func branches() throws -> [Branch] {
+    public func branches() throws -> [Branch] {
         let f = GitParsers.fieldSep
         // Derive display names from the full refs: `refname:short` becomes
         // ambiguous when, for example, a branch and tag share the same name —
@@ -176,7 +176,7 @@ final class GitClient {
         return GitParsers.parseBranches(result.stdout)
     }
 
-    func remotes() throws -> [Remote] {
+    public func remotes() throws -> [Remote] {
         let result = try runReadChecked(["-C", worktree.path, "remote", "-v"], in: nil)
         return GitParsers.parseRemotes(result.stdout)
     }
@@ -185,7 +185,7 @@ final class GitClient {
     /// "main". The symref is established by clone and maintained by recent
     /// fetches; nil when git hasn't set it yet — callers then fall back to
     /// "main"/"master" guessing. Used as the base branch of a new pull request.
-    func remoteDefaultBranch(remote: String) -> String? {
+    public func remoteDefaultBranch(remote: String) -> String? {
         guard let result = try? runRead(
             ["-C", worktree.path, "symbolic-ref", "--short",
              "refs/remotes/\(remote)/HEAD"], in: nil),
@@ -202,13 +202,13 @@ final class GitClient {
     /// traverse), filter-branch backups, bisect state, prefetched commits, notes
     /// trees, replace mappings, and post-rewrite bookkeeping. None are history
     /// the user wants to see.
-    static let hiddenRefs = ["refs/stash", "refs/original/*", "refs/bisect/*",
+    public static let hiddenRefs = ["refs/stash", "refs/original/*", "refs/bisect/*",
                              "refs/prefetch/*", "refs/notes/*", "refs/replace/*",
                              "refs/rewritten/*"]
 
     /// Newest-first, topologically ordered commits across all refs — the input to
     /// the graph layout. `skip`/`limit` drive the "Load more" pagination.
-    func log(limit: Int, skip: Int = 0) throws -> [Commit] {
+    public func log(limit: Int, skip: Int = 0) throws -> [Commit] {
         let f = GitParsers.fieldSep
         let r = GitParsers.recordSep
         let format = "%H\(f)%P\(f)%an\(f)%ae\(f)%aI\(f)%D\(f)%s\(r)"
@@ -230,7 +230,7 @@ final class GitClient {
     }
 
     /// Full header + changed-file list for the detail pane.
-    func commitDetail(_ hash: String) throws -> CommitDetail? {
+    public func commitDetail(_ hash: String) throws -> CommitDetail? {
         let f = GitParsers.fieldSep
         let r = GitParsers.recordSep
         let format = "%H\(f)%an\(f)%ae\(f)%aI\(f)%P\(f)%s\(f)%b\(r)"
@@ -246,7 +246,7 @@ final class GitClient {
     /// upstream doesn't have (`rev-list @{upstream}..HEAD`). Empty when no
     /// upstream is configured, on a detached/unborn HEAD, or on any error —
     /// the history markers built from this are best-effort decoration.
-    func unpushedCommitHashes() throws -> Set<String> {
+    public func unpushedCommitHashes() throws -> Set<String> {
         let result = try run(
             ["-C", worktree.path, "--no-optional-locks",
              "rev-list", "@{upstream}..HEAD"], in: nil)
@@ -257,7 +257,7 @@ final class GitClient {
     // MARK: - Diffs
 
     /// Unified diff for one worktree/index path.
-    func diff(path: String, staged: Bool) throws -> String {
+    public func diff(path: String, staged: Bool) throws -> String {
         var args = ["-C", worktree.path, "diff", "--no-color", "--no-ext-diff"]
         if staged { args.append("--staged") }
         args.append(contentsOf: ["--", Self.literalPathspec(path)])
@@ -270,7 +270,7 @@ final class GitClient {
     /// outright ("Could not access 'dir/null'"), so directories instead get a
     /// synthetic listing of their untracked contents — honest and useful where
     /// a patch is impossible.
-    func diffForUntracked(path: String) throws -> String {
+    public func diffForUntracked(path: String) throws -> String {
         if path.hasSuffix("/") {
             return try untrackedDirectoryListing(path: path)
         }
@@ -315,7 +315,7 @@ final class GitClient {
     private static let listingCap = 200
 
     /// Patch of one file within a commit (for the detail pane).
-    func commitFileDiff(hash: String, path: String) throws -> String {
+    public func commitFileDiff(hash: String, path: String) throws -> String {
         try runReadChecked(
             ["-C", worktree.path, "show", "-m", "--first-parent",
              "--format=", "--no-color", hash, "--", Self.literalPathspec(path)],
@@ -323,13 +323,13 @@ final class GitClient {
     }
 
     /// Full staged patch — the input for LLM commit-message generation.
-    func stagedDiff() throws -> String {
+    public func stagedDiff() throws -> String {
         try runReadChecked(
             ["-C", worktree.path, "diff", "--staged", "--no-color"], in: nil).stdout
     }
 
     /// `--stat` summary of the staged changes (always sent to the model in full).
-    func stagedDiffStat() throws -> String {
+    public func stagedDiffStat() throws -> String {
         try runReadChecked(
             ["-C", worktree.path, "diff", "--staged", "--stat", "--no-color"], in: nil).stdout
     }
@@ -337,7 +337,7 @@ final class GitClient {
     /// True when an existing gitignore rule already covers `path`
     /// (`git check-ignore`), so "Ignore" doesn't pile redundant specific
     /// entries under a broader pattern like `*.log` or `build/`.
-    func isIgnored(path: String) -> Bool {
+    public func isIgnored(path: String) -> Bool {
         guard let result = try? runRead(
             ["-C", worktree.path, "check-ignore", "-q", "--", path], in: nil) else { return false }
         return result.exitCode == 0
@@ -345,17 +345,17 @@ final class GitClient {
 
     // MARK: - Staging
 
-    func stage(paths: [String]) throws {
+    public func stage(paths: [String]) throws {
         guard !paths.isEmpty else { return }
         try runChecked(
             ["-C", worktree.path, "add", "--"] + Self.literalPathspecs(paths), in: nil)
     }
 
-    func stageAll() throws {
+    public func stageAll() throws {
         try runChecked(["-C", worktree.path, "add", "-A"], in: nil)
     }
 
-    func unstage(paths: [String]) throws {
+    public func unstage(paths: [String]) throws {
         guard !paths.isEmpty else { return }
         let literalSpecs = Self.literalPathspecs(paths)
         do {
@@ -384,7 +384,7 @@ final class GitClient {
     ///
     /// On an unborn HEAD there is nothing to restore against at all, so
     /// discarding just unstages (the files stay on disk as untracked).
-    func discard(paths: [String]) throws {
+    public func discard(paths: [String]) throws {
         guard !paths.isEmpty else { return }
         // Git pathspecs glob by default: a file literally named "a*.txt" would
         // make these commands also match unrelated tracked files (abc.txt…).
@@ -418,7 +418,7 @@ final class GitClient {
         }
     }
 
-    func commit(message: String, amend: Bool = false) throws {
+    public func commit(message: String, amend: Bool = false) throws {
         var args = ["-C", worktree.path, "commit", "-F", "-"]
         if amend { args.append("--amend") }
         try runChecked(args, in: nil, stdin: message)
@@ -426,12 +426,12 @@ final class GitClient {
 
     // MARK: - Network
 
-    func fetch() throws {
+    public func fetch() throws {
         try runChecked(
             ["-C", worktree.path, "fetch", "--all", "--prune"], in: nil)
     }
 
-    func pull(rebase: Bool) throws {
+    public func pull(rebase: Bool) throws {
         var args = ["-C", worktree.path, "pull"]
         args.append(rebase ? "--rebase" : "--no-rebase")
         try runChecked(args, in: nil)
@@ -441,7 +441,7 @@ final class GitClient {
     /// unlike a bare --force — refuses when the remote moved past what this
     /// repo last fetched, so a teammate's unpulled commits can't be clobbered
     /// silently.
-    func push(setUpstream: Bool, remote: String = "origin",
+    public func push(setUpstream: Bool, remote: String = "origin",
               forceWithLease: Bool = false) throws {
         var args = ["-C", worktree.path, "push"]
         if forceWithLease { args.append("--force-with-lease") }
@@ -453,7 +453,7 @@ final class GitClient {
 
     // MARK: - Branches
 
-    func createBranch(_ name: String, at startPoint: String? = nil, checkout: Bool) throws {
+    public func createBranch(_ name: String, at startPoint: String? = nil, checkout: Bool) throws {
         // Same option-injection guard as createTag: a leading-dash name must
         // never reach git in option position.
         guard !name.hasPrefix("-") else {
@@ -467,25 +467,25 @@ final class GitClient {
         try runChecked(args, in: nil)
     }
 
-    func checkout(branch: String) throws {
+    public func checkout(branch: String) throws {
         try runChecked(["-C", worktree.path, "checkout", branch], in: nil)
     }
 
     /// Checks out a remote branch as a new local tracking branch.
-    func checkoutTracking(remoteBranch: String, localName: String) throws {
+    public func checkoutTracking(remoteBranch: String, localName: String) throws {
         try runChecked(
             ["-C", worktree.path, "checkout", "-b", localName, "--track", remoteBranch],
             in: nil)
     }
 
-    func deleteBranch(_ name: String, force: Bool) throws {
+    public func deleteBranch(_ name: String, force: Bool) throws {
         try runChecked(
             ["-C", worktree.path, "branch", force ? "-D" : "-d", name], in: nil)
     }
 
     /// Deletes a branch on its remote (`push <remote> --delete <branch>`).
     /// `remoteBranch` is the for-each-ref short name "<remote>/<branch>".
-    func deleteRemoteBranch(_ remoteBranch: String) throws {
+    public func deleteRemoteBranch(_ remoteBranch: String) throws {
         // Remote names may themselves contain "/" ("up/stream" — git allows
         // it), so split by longest-prefix match against the configured
         // remotes, never by first slash: splitting "up/stream/feature" at the
@@ -520,7 +520,7 @@ final class GitClient {
             in: nil)
     }
 
-    func renameBranch(old: String, new: String) throws {
+    public func renameBranch(old: String, new: String) throws {
         try runChecked(["-C", worktree.path, "branch", "-m", old, new], in: nil)
     }
 
@@ -529,7 +529,7 @@ final class GitClient {
     /// Creates a tag pointing at `hash`. With a non-empty message the tag is
     /// annotated (`-a -m`), otherwise lightweight. `git tag` validates the
     /// refname itself, so invalid names surface as git errors.
-    func createTag(name: String, message: String?, at hash: String) throws {
+    public func createTag(name: String, message: String?, at hash: String) throws {
         // A name in option position could be parsed as a git flag (`-f` would
         // force-move an existing tag) — reject it before git ever sees it.
         guard !name.hasPrefix("-") else {
@@ -551,7 +551,7 @@ final class GitClient {
     /// fast-forward would do. Mutually exclusive in git; callers pass at most
     /// one. `--no-edit` only applies to the non-squash path (squash never
     /// commits, so there is no message to edit).
-    func merge(_ branch: String, squash: Bool = false, noFastForward: Bool = false) throws {
+    public func merge(_ branch: String, squash: Bool = false, noFastForward: Bool = false) throws {
         var args = ["-C", worktree.path, "merge"]
         if squash {
             args.append("--squash")
@@ -563,16 +563,16 @@ final class GitClient {
         try runChecked(args, in: nil)
     }
 
-    func mergeAbort() throws {
+    public func mergeAbort() throws {
         try runChecked(["-C", worktree.path, "merge", "--abort"], in: nil)
     }
 
     /// Commits an in-progress merge after conflicts were resolved (staged).
-    func mergeContinue() throws {
+    public func mergeContinue() throws {
         try runChecked(["-C", worktree.path, "commit", "--no-edit"], in: nil)
     }
 
-    func mergeHead() throws -> String? {
+    public func mergeHead() throws -> String? {
         let result = try runRead(
             ["-C", worktree.path, "rev-parse", "--verify", "-q", "MERGE_HEAD"], in: nil)
         guard result.exitCode == 0 else { return nil }
@@ -581,7 +581,7 @@ final class GitClient {
     }
 
     /// First line of MERGE_MSG — "Merge branch 'feature'" — for the banner label.
-    func mergeMessageLabel() -> String? {
+    public func mergeMessageLabel() -> String? {
         guard let result = try? runRead(
             ["-C", worktree.path, "rev-parse", "--verify", "-q", "MERGE_HEAD"], in: nil),
             result.exitCode == 0 else { return nil }
@@ -592,7 +592,7 @@ final class GitClient {
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    func conflictedPaths() throws -> [String] {
+    public func conflictedPaths() throws -> [String] {
         let result = try runReadChecked(
             ["-C", worktree.path, "diff", "--name-only", "--diff-filter=U", "-z"], in: nil)
         return result.stdout.components(separatedBy: "\0").filter { !$0.isEmpty }
@@ -602,17 +602,33 @@ final class GitClient {
     /// Blocks until the tool exits. Afterwards the caller refreshes: if the tool
     /// (or git's "was the merge successful?" prompt, which gets a headless EOF)
     /// didn't stage the file, the UI still offers “Mark Resolved”.
-    func runMergeTool(_ tool: String, path: String) throws {
+    public func runMergeTool(_ tool: String, path: String) throws {
         // git-mergetool is a shell script. Even after its initial git command
         // selects a literal path, it expands the returned filename with an
         // unquoted `set -- $files`; `*`, `?`, and `[` can therefore open and
         // stage lookalike conflicts. Run that script with shell globbing off,
         // and force literal semantics for every nested git command it launches.
-        // (macOS /bin/sh is Bash and imports SHELLOPTS on startup.)
         let literalEnvironment = [
             "GIT_LITERAL_PATHSPECS": "1",
             "SHELLOPTS": "noglob",
         ]
+        // SHELLOPTS is Bash's, and only Bash reads it at startup. macOS /bin/sh
+        // is Bash, so the mitigation holds there; on most Linux distributions
+        // /bin/sh is dash, which ignores it entirely. Rather than let the tool
+        // quietly resolve every conflicted lookalike, refuse the one case that
+        // is unsafe — the user still has Ours, Theirs and Mark Resolved, all of
+        // which pass literal pathspecs straight to git.
+        if path.contains(where: { $0 == "*" || $0 == "?" || $0 == "[" }),
+           Self.shellGlobsDespiteNoglob {
+            throw GitError(
+                message: """
+                    Can't open a merge tool for “\(path)”: this system's /bin/sh \
+                    expands that name as a wildcard, and git mergetool would \
+                    resolve every conflicted file matching it. Resolve this one \
+                    with Ours, Theirs, or Mark Resolved instead.
+                    """,
+                exitCode: -1)
+        }
         try runChecked(
             ["-C", worktree.path,
              "-c", "mergetool.keepBackup=false",   // don't litter .orig files
@@ -620,9 +636,37 @@ final class GitClient {
             in: nil, environmentOverrides: literalEnvironment)
     }
 
+    /// Whether `/bin/sh` still expands globs with `SHELLOPTS=noglob` set —
+    /// i.e. whether `runMergeTool`'s protection against git-mergetool's
+    /// unquoted `set -- $files` actually works here.
+    ///
+    /// Probed rather than assumed per platform: what matters is which shell is
+    /// installed as `/bin/sh`, not which OS is running. The probe asks the real
+    /// shell to expand `?` in a directory holding exactly one file — with
+    /// globbing off it stays `?`, with globbing on it becomes the filename.
+    static let shellGlobsDespiteNoglob: Bool = {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitEnoughGlobProbe-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        do {
+            try FileManager.default.createDirectory(at: directory,
+                                                    withIntermediateDirectories: true)
+            try Data().write(to: directory.appendingPathComponent("a"))
+        } catch {
+            return true   // Can't prove it's safe, so assume it isn't.
+        }
+        guard let result = try? ProcessRunner.run(
+            URL(fileURLWithPath: "/bin/sh"),
+            ["-c", "set -- ?; printf %s \"$1\""],
+            environmentOverrides: ["SHELLOPTS": "noglob"],
+            workingDirectory: directory)
+        else { return true }
+        return result.standardOutput != "?"
+    }()
+
     /// Marks a conflicted path resolved (for when the user fixed it by hand or in
     /// a tool that didn't stage it).
-    func markResolved(path: String) throws {
+    public func markResolved(path: String) throws {
         if try fileHasConflictMarkers(path) {
             throw GitError(
                 message: "\(path) still contains conflict markers. Remove them before marking the file resolved.",
@@ -638,7 +682,7 @@ final class GitClient {
     /// git's "was it resolved?" prompt (which hits a headless EOF), so GitEnough
     /// verifies the file itself. Throws when the file can't be inspected so a
     /// read/permission failure can never be mistaken for a resolved conflict.
-    func fileHasConflictMarkers(_ path: String, chunkSize: Int = 64 * 1024) throws -> Bool {
+    public func fileHasConflictMarkers(_ path: String, chunkSize: Int = 64 * 1024) throws -> Bool {
         let url = worktree.appendingPathComponent(path)
         let handle = try FileHandle(forReadingFrom: url)
         defer { try? handle.close() }
@@ -668,7 +712,7 @@ final class GitClient {
     }
 
     /// Resolves a conflicted path by checking out one side and staging it.
-    func resolveConflict(path: String, ours: Bool) throws {
+    public func resolveConflict(path: String, ours: Bool) throws {
         let literalSpec = Self.literalPathspec(path)
         try runChecked(
             ["-C", worktree.path, "checkout", ours ? "--ours" : "--theirs", "--",
@@ -685,7 +729,7 @@ final class GitClient {
     /// checked FIRST: during a conflicted rebase git writes MERGE_MSG (and other
     /// sequencer files) but *not* MERGE_HEAD, so merge-only detection misses it —
     /// exactly the gap that used to make conflicted rebases invisible in the UI.
-    func inProgressOperation() -> InProgressOperation? {
+    public func inProgressOperation() -> InProgressOperation? {
         guard let gitDir = gitDir() else { return nil }
         let fileManager = FileManager.default
         func stateExists(_ relative: String) -> Bool {
@@ -704,7 +748,7 @@ final class GitClient {
 
     /// A human label for the operation banner: MERGE_MSG's first line for merges,
     /// "Rebasing <branch>" for rebases, a plain phrase otherwise.
-    func operationLabel(for operation: InProgressOperation) -> String? {
+    public func operationLabel(for operation: InProgressOperation) -> String? {
         switch operation {
         case .merge:
             return mergeMessageLabel()
@@ -733,40 +777,40 @@ final class GitClient {
     /// Continues an in-progress rebase. Safe headless: GIT_EDITOR=true (set by
     /// GitShell) makes `--continue` accept git's prepared commit message instead
     /// of blocking on an editor.
-    func rebaseContinue() throws {
+    public func rebaseContinue() throws {
         try runChecked(["-C", worktree.path, "rebase", "--continue"], in: nil)
     }
 
-    func rebaseAbort() throws {
+    public func rebaseAbort() throws {
         try runChecked(["-C", worktree.path, "rebase", "--abort"], in: nil)
     }
 
-    func cherryPickContinue() throws {
+    public func cherryPickContinue() throws {
         try runChecked(["-C", worktree.path, "cherry-pick", "--continue"], in: nil)
     }
 
-    func cherryPickAbort() throws {
+    public func cherryPickAbort() throws {
         try runChecked(["-C", worktree.path, "cherry-pick", "--abort"], in: nil)
     }
 
-    func revertContinue() throws {
+    public func revertContinue() throws {
         try runChecked(["-C", worktree.path, "revert", "--continue"], in: nil)
     }
 
-    func revertAbort() throws {
+    public func revertAbort() throws {
         try runChecked(["-C", worktree.path, "revert", "--abort"], in: nil)
     }
 
     // MARK: - Stash
 
-    func stashList() throws -> [StashEntry] {
+    public func stashList() throws -> [StashEntry] {
         let f = GitParsers.fieldSep
         let result = try runReadChecked(
             ["-C", worktree.path, "stash", "list", "--format=%gd\(f)%gs"], in: nil)
         return GitParsers.parseStash(result.stdout)
     }
 
-    func stashPush(message: String?, includeUntracked: Bool) throws {
+    public func stashPush(message: String?, includeUntracked: Bool) throws {
         var args = ["-C", worktree.path, "stash", "push"]
         if includeUntracked { args.append("--include-untracked") }
         if let message, !message.isEmpty {
@@ -775,13 +819,13 @@ final class GitClient {
         try runChecked(args, in: nil)
     }
 
-    func stashApply(index: Int, pop: Bool) throws {
+    public func stashApply(index: Int, pop: Bool) throws {
         try runChecked(
             ["-C", worktree.path, "stash", pop ? "pop" : "apply", "stash@{\(index)}"],
             in: nil)
     }
 
-    func stashDrop(index: Int) throws {
+    public func stashDrop(index: Int) throws {
         try runChecked(
             ["-C", worktree.path, "stash", "drop", "stash@{\(index)}"], in: nil)
     }
@@ -791,7 +835,7 @@ final class GitClient {
     /// Cherry-picks one commit. For a merge commit git refuses to guess which
     /// parent's changes to replay — pass `mainline` (1-based parent index;
     /// 1 = first parent, the branch merged *into*) to pick its diff.
-    func cherryPick(_ hash: String, mainline: Int? = nil) throws {
+    public func cherryPick(_ hash: String, mainline: Int? = nil) throws {
         var args = ["-C", worktree.path, "cherry-pick"]
         if let mainline {
             precondition(mainline >= 1, "mainline is a 1-based parent index")
@@ -801,19 +845,19 @@ final class GitClient {
         try runChecked(args, in: nil)
     }
 
-    enum ResetMode: String {
+    public enum ResetMode: String {
         case soft = "--soft"
         case mixed = "--mixed"
         case hard = "--hard"
     }
 
-    func reset(to hash: String, mode: ResetMode) throws {
+    public func reset(to hash: String, mode: ResetMode) throws {
         try runChecked(["-C", worktree.path, "reset", mode.rawValue, hash], in: nil)
     }
 
     /// Reverts one commit. Same `mainline` contract as `cherryPick` — a merge
     /// commit needs the parent to revert against (1 = first parent).
-    func revert(_ hash: String, mainline: Int? = nil) throws {
+    public func revert(_ hash: String, mainline: Int? = nil) throws {
         var args = ["-C", worktree.path, "revert", "--no-edit"]
         if let mainline {
             precondition(mainline >= 1, "mainline is a 1-based parent index")
@@ -826,7 +870,7 @@ final class GitClient {
     // MARK: - Clone
 
     /// Clones `url` into `destination`. Progress goes to stderr (which we surface).
-    static func clone(_ url: String, into destination: URL) throws {
+    public static func clone(_ url: String, into destination: URL) throws {
         try GitShell.shared.runChecked(["clone", "--", url, destination.path], in: nil)
     }
 }

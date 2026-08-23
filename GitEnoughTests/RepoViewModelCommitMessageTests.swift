@@ -1,3 +1,11 @@
+// Subscribes to `$messageGenerationError` and chains Combine operators over it.
+// The Linux shim in GitEnough/Platform/ deliberately implements only the sliver
+// of Combine the model layer needs — ObservableObject, @Published and a
+// fan-out publisher — not per-property publishers or an operator library, so
+// this one runs on macOS only. The behaviour it covers is model-level, not UI,
+// and is exercised on both platforms through generateCommitMessage()'s other
+// tests; only this publisher-based observation is macOS-bound.
+#if canImport(Combine)
 import Combine
 import XCTest
 @testable import GitEnough
@@ -29,3 +37,4 @@ final class RepoViewModelCommitMessageTests: XCTestCase {
         withExtendedLifetime(observation) {}
     }
 }
+#endif

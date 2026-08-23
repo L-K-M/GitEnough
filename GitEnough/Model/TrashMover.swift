@@ -5,16 +5,16 @@ import Foundation
 /// Each item is attempted even when an earlier move fails. Any failures are
 /// reported together after the final attempt so callers can refresh from disk
 /// and display the repository's actual resulting state.
-enum TrashMover {
-    struct Failure: Equatable {
-        let path: String
-        let reason: String
+public enum TrashMover {
+    public struct Failure: Equatable {
+        public let path: String
+        public let reason: String
     }
 
-    struct MoveError: Error, LocalizedError, Equatable {
-        let failures: [Failure]
+    public struct MoveError: Error, LocalizedError, Equatable {
+        public let failures: [Failure]
 
-        var errorDescription: String? {
+        public var errorDescription: String? {
             if failures.count == 1, let failure = failures.first {
                 return "Couldn’t move \(quoted(failure.path)) to the Trash: \(failure.reason)"
             }
@@ -32,15 +32,15 @@ enum TrashMover {
         }
     }
 
-    static func move(paths: [String], from root: URL) throws {
+    public static func move(paths: [String], from root: URL) throws {
         try move(paths: paths, from: root) { url in
-            try FileManager.default.trashItem(at: url, resultingItemURL: nil)
+            try Platform.moveToTrash(url)
         }
     }
 
     /// Injectable overload used by unit tests without invoking the platform
     /// Trash service.
-    static func move(paths: [String],
+    public static func move(paths: [String],
                      from root: URL,
                      moveItem: (URL) throws -> Void) throws {
         var failures: [Failure] = []

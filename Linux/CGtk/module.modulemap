@@ -1,0 +1,6 @@
+// GTK 4 as a system library. `pkgConfig: "gtk4"` in Package.swift supplies the
+// include and link flags, so nothing here hardcodes a distribution's paths.
+module CGtk [system] {
+    umbrella header "shim.h"
+    export *
+}

@@ -1,5 +1,9 @@
 import Foundation
 import XCTest
+#if canImport(FoundationNetworking)
+// URLSession lives in a separate module in swift-corelibs-foundation.
+import FoundationNetworking
+#endif
 @testable import GitEnough
 
 /// PullRequestFinder: endpoint building, response parsing, and (via a stubbed

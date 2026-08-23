@@ -1,3 +1,7 @@
+// CommonViews is SwiftUI, so it lives outside the SwiftPM library and there
+// is nothing here for a Linux build to exercise. Compiled by the Xcode
+// project, where the views it tests actually exist.
+#if canImport(AppKit)
 import AppKit
 import XCTest
 @testable import GitEnough
@@ -23,3 +27,4 @@ final class CommonViewsTests: XCTestCase {
         XCTAssertNil(pasteboard.data(forType: .pdf), "clearContents must drop prior types")
     }
 }
+#endif

@@ -1,3 +1,6 @@
+// NSPasteboard is AppKit: this exercises the macOS copy primitive, which the
+// SwiftPM library doesn't contain. Compiled by the Xcode project only.
+#if canImport(AppKit)
 import AppKit
 import XCTest
 @testable import GitEnough
@@ -20,3 +23,4 @@ final class NSPasteboardCopyStringTests: XCTestCase {
         XCTAssertEqual(board.pasteboardItems?.count, 1)
     }
 }
+#endif
