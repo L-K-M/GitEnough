@@ -136,8 +136,11 @@ final class FreedesktopTrashTests: XCTestCase {
         let handle = open(target.path, O_CREAT | O_WRONLY, 0o600)
         XCTAssertGreaterThanOrEqual(handle, 0)
         defer { close(handle) }
-        // Larger than a pipe buffer, so a partial write is at least possible:
-        // the loop is what makes the record whole, not the size of the record.
+        // This checks completeness only. A regular-file write does not come
+        // back short, and neither does a blocking pipe — it returns once all
+        // the data is in, so nothing a test can hand `writeFully` forces the
+        // loop around a second time. The loop is there because POSIX permits
+        // the short write, not because a test can produce one.
         let payload = String(repeating: "abcdefgh", count: 4096)   // 32 KiB
         try FreedesktopTrash.writeFully(Data(payload.utf8), to: handle)
         XCTAssertEqual(try String(contentsOf: target, encoding: .utf8), payload)

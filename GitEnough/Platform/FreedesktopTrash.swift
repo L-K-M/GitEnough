@@ -74,6 +74,7 @@ public enum FreedesktopTrash {
         let record = Data(trashInfo(originalPath: recordedPath, deletedAt: Date()).utf8)
         do {
             try writeRecord(record, handle)
+            try syncRecord(handle)
         } catch {
             // A half-written record is worse than no trashing at all: the file
             // would leave the worktree and land in the Trash with an origin
@@ -176,6 +177,22 @@ public enum FreedesktopTrash {
                 pointer += Int(written)
                 remaining -= Int(written)
             }
+        }
+    }
+
+    /// Forces the record out of the page cache before the caller renames the
+    /// file into the Trash. `write(2)` only promises the bytes reached the
+    /// kernel, so without this a power cut that lands after the rename can
+    /// persist the move and lose the record — the file arrives in the Trash
+    /// with an origin that reads back empty, which is the stranded-with-no-
+    /// Restore outcome the ordering exists to prevent. One `fsync` of ~100
+    /// bytes per discarded item is a fair price for a guarantee `trash(_:)`
+    /// states three times. (macOS would need `F_FULLFSYNC` to reach the
+    /// platter; this file's platform is Linux, where `fsync` is the real thing.)
+    static func syncRecord(_ handle: Int32) throws {
+        while fsync(handle) != 0 {
+            if errno == EINTR { continue }
+            throw TrashError.couldNotWriteRecord(String(cString: strerror(errno)))
         }
     }
 
