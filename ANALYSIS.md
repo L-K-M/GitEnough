@@ -131,25 +131,40 @@ guard, the #71×#83 duplicate invalidation mechanisms and push surface, the
 #73×#89 slash-remote regression, the #48×#79 error message, and the #54×#81
 single `didSet`.
 
-### X6 · The GLM review workflow silently reviews almost nothing — S
+### X6 · The GLM review check times out on anything but a small diff — S
 
-`Review PR with GLM 5.2` fails on roughly 40 of the 55 open PRs, and the cause
-is not flakiness: the Z.ai request times out. The job log shows the whole diff
-sent as one chunk and retried three times, each attempt cut off at ~300 s —
-`API call failed for chunk 1/1, 2 file(s), 26369 patch chars … Request timed
-out` ×3, then `All review chunks failed. No review could be generated.`
+`Review PR with GLM 5.2` fails on roughly 40 of the 55 PRs open before the
+wave-2/3 integration, and the cause is not flakiness: the Z.ai request times
+out. The job log shows the diff sent as one chunk and retried three times, each
+attempt cut off at ~300 s — `API call failed for chunk 1/1, 2 file(s), 26369
+patch chars … Request timed out` ×3, then `All review chunks failed.`
 
-`.github/workflows/zai-code-review.yml` never sets `MAX_DIFF_CHARS`, so it takes
-the action's `0` default and no size-based splitting happens. The PRs where the
-check passes are the small ones. The result is that automated review quietly
-does not run on exactly the PRs big enough to need it — while the red X on those
-PRs trains everyone to ignore the check entirely.
+**Correction.** An earlier version of this entry blamed an unset
+`MAX_DIFF_CHARS` and prescribed setting it so large diffs "split into several
+requests". Reading `L-K-M/zai-code-review` disproves both halves:
 
-Fix: set a non-zero `MAX_DIFF_CHARS` so a large diff splits into several
-requests that can finish inside the timeout, and confirm against a known-large
-PR that the review actually posts. This is a `pull_request_target` workflow
-holding repository secrets, so treat the edit as privileged: keep the existing
-same-repo `if:` gate and the pinned action SHA untouched.
+- `MAX_DIFF_CHARS` does not split anything. `limitFilesByDiffChars` *drops whole
+  files* once a total budget is exceeded, so setting it would have bought a
+  green check by silently reviewing less — the opposite of the goal.
+- Chunking is governed by a hardcoded `MAX_CHUNK_SIZE = 50000`. The failing diff
+  was 26 369 patch chars, so it was correctly a single chunk. Nothing about the
+  splitting was wrong.
+
+The real cause is the hardcoded `REQUEST_TIMEOUT_MS = 300_000`, which is too
+tight for this API even on small work. Successful reviews cluster right against
+the ceiling rather than comfortably under it — 3m13s, 4m09s, 4m11s, 4m46s,
+4m53s — so a run that "passes" at 4m53s is one that nearly missed. The request
+is not streamed, so a crossed deadline discards the entire completion and the
+retry restarts from zero.
+
+Fix: L-K-M/zai-code-review#1 adds a `REQUEST_TIMEOUT_MS` input (default
+unchanged at 300000). Once that is released, set it in
+`.github/workflows/zai-code-review.yml` — around `600000` gives ~2× headroom
+over the observed worst case — and raise that job's `timeout-minutes` above
+`3 × timeout` so the retry budget still fits. This is a `pull_request_target`
+workflow holding repository secrets, so treat the edit as privileged: keep the
+existing same-repo `if:` gate, and re-pin the action SHA deliberately rather
+than tracking a tag.
 
 ### C1 · Make sidebar summaries generation-safe — S/M
 

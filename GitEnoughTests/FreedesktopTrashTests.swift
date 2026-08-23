@@ -92,6 +92,34 @@ final class FreedesktopTrashTests: XCTestCase {
                        "an info record without a file would show as a ghost entry in the file manager")
     }
 
+    func testAFailedRecordWriteLeavesNothingBehind() throws {
+        // The move is only safe once the record is on disk. If the write fails
+        // the file must stay exactly where the user left it — trashing an item
+        // whose origin can't be read back would strand it in the Trash with no
+        // working Restore, which is the one guarantee discard-to-Trash exists
+        // to make.
+        let file = try makeFile("unwritable.txt", contents: "still here")
+        let readOnly = open(file.path, O_RDONLY)
+        XCTAssertGreaterThanOrEqual(readOnly, 0)
+        defer { close(readOnly) }
+
+        // A descriptor opened read-only fails EBADF on write, standing in for
+        // the real causes (a full disk, a revoked mount) without needing one.
+        XCTAssertThrowsError(try FreedesktopTrash.writeFully(Data("x".utf8), to: readOnly))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.path))
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "still here")
+    }
+
+    func testWriteFullyWritesEveryByte() throws {
+        let target = root.appendingPathComponent("record")
+        let handle = open(target.path, O_CREAT | O_WRONLY, 0o600)
+        XCTAssertGreaterThanOrEqual(handle, 0)
+        let payload = String(repeating: "abcdefgh", count: 4096)   // 32 KiB
+        try FreedesktopTrash.writeFully(Data(payload.utf8), to: handle)
+        close(handle)
+        XCTAssertEqual(try String(contentsOf: target, encoding: .utf8), payload)
+    }
+
     // MARK: - Record contents
 
     func testPathIsPercentEncodedButKeepsSeparators() {

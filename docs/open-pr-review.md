@@ -68,17 +68,30 @@ API call failed for chunk 1/1, 2 file(s), 26369 patch chars, 27969 prompt chars
 All review chunks failed. No review could be generated.
 ```
 
-`.github/workflows/zai-code-review.yml` does not set `MAX_DIFF_CHARS`, so it
-takes the action's default of `0` and no size-based splitting happens — the
-observed run put 2 files and 26 k patch chars into one chunk. The PRs where the
-check passes are the small ones; the ~40 failures are long runs that end in the
-same timeout. The effect is that automated review silently does not happen on
-exactly the PRs large enough to want it.
+**Correction — the first diagnosis here was wrong.** This section originally
+blamed an unset `MAX_DIFF_CHARS` and proposed setting it so large diffs "split
+into several smaller requests". Reading the action's source disproves both
+halves: `limitFilesByDiffChars` *drops whole files* past a total budget rather
+than splitting them, so that change would have bought a green check by reviewing
+less; and chunking is governed by a hardcoded `MAX_CHUNK_SIZE = 50000`, against
+which a 26 k-char diff is correctly one chunk.
 
-Setting a non-zero `MAX_DIFF_CHARS` so large diffs split into several smaller
-requests is the obvious lever, but this is a `pull_request_target` workflow
-holding repository secrets, so the change is the maintainer's call, not a
-drive-by edit. Filed as `ANALYSIS.md` X6.
+The actual cause is the hardcoded `REQUEST_TIMEOUT_MS = 300_000`. Successful
+reviews cluster right against that ceiling instead of comfortably under it —
+3m13s, 4m09s, 4m11s, 4m46s, 4m53s — so a run that passes at 4m53s is one that
+nearly missed, and anything slightly slower fails outright. The request is not
+streamed, so crossing the deadline discards the whole completion and each of the
+three retries starts over from zero.
+
+Fixed upstream in L-K-M/zai-code-review#1, which makes the timeout a
+`REQUEST_TIMEOUT_MS` input (default unchanged). Filed as `ANALYSIS.md` X6, which
+carries the workflow-side follow-up — this is a `pull_request_target` workflow
+holding repository secrets, so that edit stays the maintainer's call.
+
+This is the third claim in this document that survived review and died on
+contact with something that actually runs (see §4.4 and §4.7). The pattern is
+consistent enough to be worth naming: reading a diff tells you what a change
+says it does; only executing the surrounding system tells you what it does.
 
 ---
 

@@ -28,6 +28,7 @@ public enum FreedesktopTrash {
     public enum TrashError: Error, LocalizedError {
         case noTrashDirectory(String)
         case couldNotReserveName(String)
+        case couldNotWriteRecord(String)
 
         public var errorDescription: String? {
             switch self {
@@ -35,6 +36,8 @@ public enum FreedesktopTrash {
                 return "No usable Trash directory for \(path)."
             case .couldNotReserveName(let name):
                 return "Could not reserve a Trash entry for \(name)."
+            case .couldNotWriteRecord(let reason):
+                return "Could not write the Trash record: \(reason)."
             }
         }
     }
@@ -60,8 +63,18 @@ public enum FreedesktopTrash {
 
         let recordedPath = originalPath(of: item, relativeTo: trashDirectory)
         let record = Data(trashInfo(originalPath: recordedPath, deletedAt: Date()).utf8)
-        record.withUnsafeBytes { buffer in
-            _ = write(handle, buffer.baseAddress, buffer.count)
+        do {
+            try writeFully(record, to: handle)
+        } catch {
+            // A half-written record is worse than no trashing at all: the file
+            // would leave the worktree and land in the Trash with an origin
+            // nothing can parse, so "Restore" — the entire reason discard goes
+            // through here instead of unlink — silently stops working. Abandon
+            // the reservation and let the caller report the failure while the
+            // file is still where the user left it.
+            try? FileManager.default.removeItem(
+                at: info.appendingPathComponent(name + ".trashinfo"))
+            throw error
         }
 
         do {
@@ -135,6 +148,29 @@ public enum FreedesktopTrash {
     }()
 
     // MARK: - Filesystem
+
+    /// Writes every byte of `data` to `handle`, or throws. A bare `write(2)` is
+    /// permitted to write less than it was asked for, and returns -1 on error —
+    /// both of which produce a `.trashinfo` that parses wrong or not at all, so
+    /// neither may pass silently. EINTR is retried; it is not a failure.
+    static func writeFully(_ data: Data, to handle: Int32) throws {
+        try data.withUnsafeBytes { buffer in
+            guard var pointer = buffer.baseAddress else { return }
+            var remaining = buffer.count
+            while remaining > 0 {
+                let written = write(handle, pointer, remaining)
+                if written < 0 {
+                    if errno == EINTR { continue }
+                    throw TrashError.couldNotWriteRecord(String(cString: strerror(errno)))
+                }
+                if written == 0 {
+                    throw TrashError.couldNotWriteRecord("write reported no progress")
+                }
+                pointer += Int(written)
+                remaining -= Int(written)
+            }
+        }
+    }
 
     /// Reserves a free `<name>.trashinfo` in `info` and returns the open
     /// descriptor. O_EXCL makes the reservation atomic against other trashers.
