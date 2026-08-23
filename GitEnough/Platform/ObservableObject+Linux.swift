@@ -14,20 +14,20 @@ import Foundation
 /// Combine: there are no operators, no back-pressure, no `Publisher` protocol.
 ///
 /// On macOS this file compiles to nothing and the real Combine types are used.
-protocol ObservableObject: AnyObject {
+public protocol ObservableObject: AnyObject {
     var objectWillChange: ObservableObjectPublisher { get }
 }
 
 /// Fan-out for "this object is about to change". Thread-safe; observers run
 /// outside the lock so an observer may itself observe or cancel.
-final class ObservableObjectPublisher {
+public final class ObservableObjectPublisher {
 
     private let lock = NSLock()
     private var observers: [UUID: () -> Void] = [:]
 
-    init() {}
+    public init() {}
 
-    func send() {
+    public func send() {
         lock.lock()
         let current = Array(observers.values)
         lock.unlock()
@@ -36,7 +36,7 @@ final class ObservableObjectPublisher {
 
     /// Registers `body`, called on every change until the returned token is
     /// cancelled or released.
-    func sink(_ body: @escaping () -> Void) -> AnyCancellable {
+    public func sink(_ body: @escaping () -> Void) -> AnyCancellable {
         let id = UUID()
         lock.lock()
         observers[id] = body
@@ -51,16 +51,16 @@ final class ObservableObjectPublisher {
 }
 
 /// A subscription token. Cancels on release, like Combine's.
-final class AnyCancellable {
+public final class AnyCancellable {
 
     private var cancelHandler: (() -> Void)?
     private let lock = NSLock()
 
-    init(_ cancelHandler: @escaping () -> Void) {
+    public init(_ cancelHandler: @escaping () -> Void) {
         self.cancelHandler = cancelHandler
     }
 
-    func cancel() {
+    public func cancel() {
         lock.lock()
         let handler = cancelHandler
         cancelHandler = nil
@@ -69,20 +69,20 @@ final class AnyCancellable {
     }
 
     /// Keeps the token alive for as long as `set` lives.
-    func store(in set: inout Set<AnyCancellable>) { set.insert(self) }
+    public func store(in set: inout Set<AnyCancellable>) { set.insert(self) }
 
     deinit { cancel() }
 }
 
 extension AnyCancellable: Hashable {
-    static func == (lhs: AnyCancellable, rhs: AnyCancellable) -> Bool { lhs === rhs }
-    func hash(into hasher: inout Hasher) { hasher.combine(ObjectIdentifier(self)) }
+    public static func == (lhs: AnyCancellable, rhs: AnyCancellable) -> Bool { lhs === rhs }
+    public func hash(into hasher: inout Hasher) { hasher.combine(ObjectIdentifier(self)) }
 }
 
 extension ObservableObject {
     /// The default publisher, created on first use and kept in a weak-keyed
     /// side table — the same synthesis Combine does for free.
-    var objectWillChange: ObservableObjectPublisher {
+    public var objectWillChange: ObservableObjectPublisher {
         PublisherRegistry.shared.publisher(for: self)
     }
 }
@@ -94,11 +94,11 @@ extension ObservableObject {
 /// been recycled by a later allocation.
 private final class PublisherRegistry {
 
-    static let shared = PublisherRegistry()
+    public static let shared = PublisherRegistry()
 
     private struct Entry {
-        weak var owner: AnyObject?
-        let publisher: ObservableObjectPublisher
+        public weak var owner: AnyObject?
+        public let publisher: ObservableObjectPublisher
     }
 
     private let lock = NSLock()
@@ -106,7 +106,7 @@ private final class PublisherRegistry {
     private var sweepCountdown = sweepInterval
     private static let sweepInterval = 64
 
-    func publisher(for object: AnyObject) -> ObservableObjectPublisher {
+    public func publisher(for object: AnyObject) -> ObservableObjectPublisher {
         let key = ObjectIdentifier(object)
         lock.lock()
         defer { lock.unlock() }
@@ -132,26 +132,26 @@ private final class PublisherRegistry {
 /// reach the owning object; `wrappedValue` exists only to satisfy the property
 /// wrapper contract and is never callable.
 @propertyWrapper
-struct Published<Value> {
+public struct Published<Value> {
 
     private var storedValue: Value
 
-    init(wrappedValue: Value) {
+    public init(wrappedValue: Value) {
         self.storedValue = wrappedValue
     }
 
-    init(initialValue: Value) {
+    public init(initialValue: Value) {
         self.storedValue = initialValue
     }
 
     @available(*, unavailable,
                message: "@Published is only available on properties of classes")
-    var wrappedValue: Value {
+    public var wrappedValue: Value {
         get { fatalError("@Published requires a class instance") }
         set { fatalError("@Published requires a class instance") }
     }
 
-    static subscript<EnclosingSelf: ObservableObject>(
+    public static subscript<EnclosingSelf: ObservableObject>(
         _enclosingInstance instance: EnclosingSelf,
         wrapped wrappedKeyPath: ReferenceWritableKeyPath<EnclosingSelf, Value>,
         storage storageKeyPath: ReferenceWritableKeyPath<EnclosingSelf, Published<Value>>

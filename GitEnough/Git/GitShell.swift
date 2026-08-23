@@ -1,20 +1,20 @@
 import Foundation
 
 /// A single invocation of the `git` CLI.
-struct GitResult {
-    let stdout: String
-    let stderr: String
-    let exitCode: Int32
+public struct GitResult {
+    public let stdout: String
+    public let stderr: String
+    public let exitCode: Int32
 }
 
 /// An error running git: either the binary is missing, or git itself exited
 /// non-zero (in which case `message` is git's stderr, which is usually the
 /// message a user needs to see — "not a git repository", merge conflicts, …).
-struct GitError: Error, LocalizedError {
-    let message: String
-    let exitCode: Int32
+public struct GitError: Error, LocalizedError {
+    public let message: String
+    public let exitCode: Int32
 
-    var errorDescription: String? { message }
+    public var errorDescription: String? { message }
 }
 
 /// Thin synchronous wrapper around the `git` binary.
@@ -28,10 +28,10 @@ struct GitError: Error, LocalizedError {
 /// queue (each `RepoViewModel` owns a serial queue for exactly this). Process
 /// stdout/stderr are drained on helper threads so large output can't deadlock the
 /// pipe.
-final class GitShell {
+public final class GitShell {
 
     /// Shared instance; the shell is stateless (every call takes the working dir).
-    static let shared = GitShell()
+    public static let shared = GitShell()
 
     /// Resolved path to a working git binary, or nil when Xcode CLT is missing.
     private(set) var gitURL: URL?
@@ -41,10 +41,10 @@ final class GitShell {
     }
 
     /// True when a runnable git was found at launch.
-    var isAvailable: Bool { gitURL != nil }
+    public var isAvailable: Bool { gitURL != nil }
 
     /// Re-probe for git (used after the user installs the Command Line Tools).
-    func reprobe() {
+    public func reprobe() {
         gitURL = Self.findGit()
     }
 
@@ -95,7 +95,7 @@ final class GitShell {
     /// `base` PATH plus every well-known tool location that exists on disk, so
     /// git hooks can find node/npm/npx even under launchd's minimal PATH.
     /// Pure: filesystem access arrives through the closures so tests stub it.
-    static func augmentedPATH(base: String,
+    public static func augmentedPATH(base: String,
                               home: String,
                               directoryExists: (String) -> Bool,
                               nvmVersionDirs: () -> [String],
@@ -178,7 +178,7 @@ final class GitShell {
     }
 
     /// What to tell the user when no git could be found.
-    static var installHint: String {
+    public static var installHint: String {
         #if os(Linux)
         return "git is not installed. Install it (`sudo apt install git`) and relaunch GitEnough."
         #else
@@ -191,7 +191,7 @@ final class GitShell {
     /// Runs git with `args` in `directory` and returns the raw result without
     /// throwing on non-zero exit. Throws only when git can't be executed at all.
     @discardableResult
-    func run(_ args: [String], in directory: URL?) throws -> GitResult {
+    public func run(_ args: [String], in directory: URL?) throws -> GitResult {
         guard let gitURL else {
             throw GitError(message: GitShell.installHint, exitCode: -1)
         }
@@ -243,7 +243,7 @@ final class GitShell {
 
     /// Runs git with `args`, piping `stdin` to the process (used by `git commit -F -`).
     /// Throws `GitError` carrying stderr when the exit code is non-zero.
-    func runChecked(_ args: [String],
+    public func runChecked(_ args: [String],
                     in directory: URL?,
                     stdin: String? = nil) throws -> GitResult {
         let result: GitResult

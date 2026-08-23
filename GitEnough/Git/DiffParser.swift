@@ -3,8 +3,8 @@ import Foundation
 /// One display line of a unified diff, classified for coloring. For paired
 /// deletion/addition lines, `emphasizedRanges` marks the changed words within the
 /// line (GitHub-style intraline highlighting); empty when nothing is emphasized.
-struct DiffLine: Equatable {
-    enum Kind: Equatable {
+public struct DiffLine: Equatable {
+    public enum Kind: Equatable {
         case fileHeader   // diff --git, index, ---/+++ paths
         case hunk         // @@ … @@
         case addition
@@ -13,16 +13,16 @@ struct DiffLine: Equatable {
         case meta         // new file mode, Binary files …, \ No newline
     }
 
-    let kind: Kind
-    let text: String
-    var emphasizedRanges: [Range<String.Index>] = []
+    public let kind: Kind
+    public let text: String
+    public var emphasizedRanges: [Range<String.Index>] = []
 }
 
-enum DiffParser {
+public enum DiffParser {
 
     /// Classifies unified-diff output into display lines. Very large diffs are
     /// capped to keep the UI responsive; a synthetic note line marks the cutoff.
-    static func parse(_ diff: String, maxLines: Int = 4000) -> [DiffLine] {
+    public static func parse(_ diff: String, maxLines: Int = 4000) -> [DiffLine] {
         var lines: [DiffLine] = []
         lines.reserveCapacity(min(diff.count / 40, maxLines + 1))
         var count = 0

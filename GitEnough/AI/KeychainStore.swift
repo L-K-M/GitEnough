@@ -11,11 +11,11 @@ import Security
 /// `libsecret-tools`) rather than linking libsecret, keeping GitEnough's
 /// zero-dependency build. When it isn't installed the key simply isn't stored:
 /// GitEnough never falls back to writing a secret to disk in the clear.
-enum KeychainStore {
+public enum KeychainStore {
 
-    static let service = "com.gitenough.GitEnough"
+    public static let service = "com.gitenough.GitEnough"
 
-    static func save(secret: String, account: String) throws {
+    public static func save(secret: String, account: String) throws {
         #if canImport(Security)
         let data = Data(secret.utf8)
         let query: [String: Any] = [
@@ -47,7 +47,7 @@ enum KeychainStore {
         #endif
     }
 
-    static func read(account: String) -> String? {
+    public static func read(account: String) -> String? {
         #if canImport(Security)
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -65,7 +65,7 @@ enum KeychainStore {
         #endif
     }
 
-    static func delete(account: String) {
+    public static func delete(account: String) {
         #if canImport(Security)
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -79,10 +79,10 @@ enum KeychainStore {
     }
 
     #if canImport(Security)
-    enum KeychainError: Error, LocalizedError {
+    public enum KeychainError: Error, LocalizedError {
         case saveFailed(status: OSStatus)
 
-        var errorDescription: String? {
+        public var errorDescription: String? {
             switch self {
             case .saveFailed(let status):
                 return "Could not save the API key to the Keychain (OSStatus \(status))."

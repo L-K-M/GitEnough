@@ -9,14 +9,14 @@ import AppKit
 /// plus `/Applications` bundles on macOS. Invocation always goes through
 /// `git mergetool --tool=<gitName>`, which knows each tool's CLI contract, so
 /// GitEnough never has to construct tool-specific argument lists itself.
-struct MergeTool: Identifiable, Hashable {
-    let name: String              // display name
-    let gitName: String           // `git mergetool --tool=` identifier
-    let executablePaths: [String] // absolute paths, probed directly
-    let executableNames: [String] // command names, resolved against PATH
-    let bundleIdentifiers: [String]
+public struct MergeTool: Identifiable, Hashable {
+    public let name: String              // display name
+    public let gitName: String           // `git mergetool --tool=` identifier
+    public let executablePaths: [String] // absolute paths, probed directly
+    public let executableNames: [String] // command names, resolved against PATH
+    public let bundleIdentifiers: [String]
 
-    init(name: String,
+    public init(name: String,
          gitName: String,
          executablePaths: [String] = [],
          executableNames: [String] = [],
@@ -28,12 +28,12 @@ struct MergeTool: Identifiable, Hashable {
         self.bundleIdentifiers = bundleIdentifiers
     }
 
-    var id: String { gitName }
+    public var id: String { gitName }
 
     #if canImport(AppKit)
     /// All tools git ships mergetool configs for that are common on macOS.
     /// FileMerge (opendiff) ships with Xcode, so there's always at least one.
-    static let known: [MergeTool] = [
+    public static let known: [MergeTool] = [
         MergeTool(name: "FileMerge", gitName: "opendiff",
                   executablePaths: ["/usr/bin/opendiff"],
                   bundleIdentifiers: ["com.apple.FileMerge"]),
@@ -71,7 +71,7 @@ struct MergeTool: Identifiable, Hashable {
     /// Unlike macOS, nothing here is guaranteed to be present — a fresh Ubuntu
     /// install has no merge tool at all, and the conflict UI has to say so
     /// rather than assume a fallback.
-    static let known: [MergeTool] = [
+    public static let known: [MergeTool] = [
         MergeTool(name: "Meld", gitName: "meld", executableNames: ["meld"]),
         MergeTool(name: "KDiff3", gitName: "kdiff3", executableNames: ["kdiff3"]),
         MergeTool(name: "Kompare", gitName: "kompare", executableNames: ["kompare"]),
@@ -87,7 +87,7 @@ struct MergeTool: Identifiable, Hashable {
     #endif
 
     /// The subset of `known` currently installed on this machine.
-    static func detectInstalled() -> [MergeTool] {
+    public static func detectInstalled() -> [MergeTool] {
         known.filter { $0.isInstalled }
     }
 
@@ -102,15 +102,15 @@ struct MergeTool: Identifiable, Hashable {
 
     /// Posted on the main thread whenever `installed` changes, so open
     /// conflict rows refresh instead of showing stale tool availability.
-    static let didChangeNotification = Notification.Name("MergeToolInstalledDidChange")
+    public static let didChangeNotification = Notification.Name("MergeToolInstalledDidChange")
 
-    static func rescan() {
+    public static func rescan() {
         dispatchPrecondition(condition: .onQueue(.main))
         installed = detectInstalled()
         NotificationCenter.default.post(name: didChangeNotification, object: nil)
     }
 
-    var isInstalled: Bool {
+    public var isInstalled: Bool {
         let fm = FileManager.default
         if executablePaths.contains(where: { fm.isExecutableFile(atPath: $0) }) {
             return true

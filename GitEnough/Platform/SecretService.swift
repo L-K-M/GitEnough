@@ -13,13 +13,13 @@ import Foundation
 /// missing the save fails loudly with an install hint, because a config file
 /// with an API key in the clear is exactly what the Keychain rule exists to
 /// prevent.
-enum SecretService {
+public enum SecretService {
 
-    enum SecretServiceError: Error, LocalizedError {
+    public enum SecretServiceError: Error, LocalizedError {
         case toolMissing
         case storeFailed(String)
 
-        var errorDescription: String? {
+        public var errorDescription: String? {
             switch self {
             case .toolMissing:
                 return """
@@ -36,7 +36,7 @@ enum SecretService {
 
     /// Attribute pairs identifying one secret. `secret-tool` matches on the full
     /// set, so these are effectively the primary key.
-    static func attributes(service: String, account: String) -> [String] {
+    public static func attributes(service: String, account: String) -> [String] {
         ["service", service, "account", account]
     }
 
@@ -45,7 +45,7 @@ enum SecretService {
     ///
     /// The secret goes in over stdin — never as an argument, which would put it
     /// in every process listing on the machine.
-    static func save(secret: String, service: String, account: String) throws {
+    public static func save(secret: String, service: String, account: String) throws {
         guard let tool = secretTool else { throw SecretServiceError.toolMissing }
         let label = "GitEnough (\(account))"
         let result = try ProcessRunner.run(
@@ -58,7 +58,7 @@ enum SecretService {
 
     /// The stored secret, or nil when there is none (or no keyring at all).
     /// Blocking; call it off the main thread.
-    static func read(service: String, account: String) -> String? {
+    public static func read(service: String, account: String) -> String? {
         guard let tool = secretTool,
               let result = try? ProcessRunner.run(
                   tool, ["lookup"] + attributes(service: service, account: account)),
@@ -72,7 +72,7 @@ enum SecretService {
 
     /// Removes the stored secret. Best effort: a missing tool or a missing item
     /// both mean "there is nothing stored", which is the caller's goal anyway.
-    static func delete(service: String, account: String) {
+    public static func delete(service: String, account: String) {
         guard let tool = secretTool else { return }
         _ = try? ProcessRunner.run(
             tool, ["clear"] + attributes(service: service, account: account))
@@ -80,7 +80,7 @@ enum SecretService {
 
     /// True when this machine can store secrets at all — Settings uses it to
     /// explain why the API key field is refusing to stick.
-    static var isAvailable: Bool { secretTool != nil }
+    public static var isAvailable: Bool { secretTool != nil }
 
     /// Resolved per call rather than cached: `toolMissing` tells the user to
     /// install libsecret-tools, and they must not then have to relaunch the app

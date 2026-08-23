@@ -9,7 +9,7 @@ import AppKit
 ///
 /// Everything else in `GitEnoughCore` is plain Foundation, so this file plus
 /// `SecretStore` is the whole macOS/Linux seam below the UI.
-enum Platform {
+public enum Platform {
 
     /// Hands `url` to the desktop environment — the browser for http(s), the
     /// file manager for file URLs. Returns false when nothing could take it.
@@ -17,7 +17,7 @@ enum Platform {
     /// Non-blocking on both platforms: the helper is launched and forgotten, so
     /// a cold-starting browser can't stall a caller on the main thread.
     @discardableResult
-    static func open(_ url: URL) -> Bool {
+    public static func open(_ url: URL) -> Bool {
         #if canImport(AppKit)
         return NSWorkspace.shared.open(url)
         #else
@@ -34,7 +34,7 @@ enum Platform {
 
     /// Moves `url` to the Trash, so a discarded untracked file stays
     /// recoverable. Blocking; call it off the main thread.
-    static func moveToTrash(_ url: URL) throws {
+    public static func moveToTrash(_ url: URL) throws {
         #if canImport(AppKit)
         try FileManager.default.trashItem(at: url, resultingItemURL: nil)
         #else
@@ -48,7 +48,7 @@ enum Platform {
     /// Foundation's `.applicationSupportDirectory` lookup returns an empty list
     /// on Linux, so the XDG path is resolved by hand rather than subscripted
     /// into a crash.
-    static var applicationSupportDirectory: URL {
+    public static var applicationSupportDirectory: URL {
         #if canImport(AppKit)
         if let url = FileManager.default.urls(for: .applicationSupportDirectory,
                                               in: .userDomainMask).first {
@@ -59,12 +59,12 @@ enum Platform {
     }
 
     /// Per-user configuration: `$XDG_CONFIG_HOME` (default `~/.config`).
-    static var configurationDirectory: URL {
+    public static var configurationDirectory: URL {
         xdgDirectory(variable: "XDG_CONFIG_HOME", fallback: "/.config")
     }
 
     /// An XDG base directory. Relative values are ignored, as the spec requires.
-    static func xdgDirectory(variable: String,
+    public static func xdgDirectory(variable: String,
                              fallback: String,
                              environment: [String: String] = ProcessInfo.processInfo.environment,
                              home: String = NSHomeDirectory()) -> URL {

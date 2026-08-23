@@ -6,16 +6,16 @@ import FoundationNetworking
 
 /// Generates commit messages from the staged diff using an OpenAI-compatible
 /// chat-completions API (Z.AI GLM by default; see LLMConfiguration).
-final class CommitMessageGenerator {
+public final class CommitMessageGenerator {
 
-    enum GenerationError: Error, LocalizedError {
+    public enum GenerationError: Error, LocalizedError {
         case noAPIKey
         case invalidEndpoint
         case httpError(status: Int, body: String)
         case malformedResponse
         case emptyMessage
 
-        var errorDescription: String? {
+        public var errorDescription: String? {
             switch self {
             case .noAPIKey:
                 return "No API key configured. Add one in Settings → AI."
@@ -36,7 +36,7 @@ final class CommitMessageGenerator {
     private let apiKeyProvider: () -> String?
     private let session: URLSession
 
-    init(configuration: LLMConfiguration,
+    public init(configuration: LLMConfiguration,
          apiKeyProvider: @escaping () -> String? = { LLMConfiguration.apiKey },
          session: URLSession = .shared) {
         self.configuration = configuration
@@ -49,9 +49,9 @@ final class CommitMessageGenerator {
     /// The diff is capped so a huge refactor can't blow the context window or the
     /// request size; the stat summary always goes in full so the model sees every
     /// touched file even when the patch body is truncated.
-    static let maxDiffCharacters = 12_000
+    public static let maxDiffCharacters = 12_000
 
-    static func prompt(diffStat: String, diff: String, branch: String?) -> String {
+    public static func prompt(diffStat: String, diff: String, branch: String?) -> String {
         var text = "Write a commit message for the following staged changes"
         if let branch, !branch.isEmpty {
             text += " (on branch \(branch))"
@@ -67,7 +67,7 @@ final class CommitMessageGenerator {
         return text
     }
 
-    static let systemPrompt = """
+    public static let systemPrompt = """
         You write excellent git commit messages. Rules:
         - First line: a concise subject in the imperative mood, at most 72 characters, \
         no trailing period. Use a Conventional-Commits prefix (feat:, fix:, refactor:, \
@@ -79,7 +79,7 @@ final class CommitMessageGenerator {
 
     // MARK: - Generation
 
-    func generateCommitMessage(diffStat: String, diff: String, branch: String?) async throws -> String {
+    public func generateCommitMessage(diffStat: String, diff: String, branch: String?) async throws -> String {
         guard let apiKey = apiKeyProvider(), !apiKey.isEmpty else {
             throw GenerationError.noAPIKey
         }
@@ -134,7 +134,7 @@ final class CommitMessageGenerator {
     /// Parses an OpenAI-compatible `GET /models` response (`{"data":[{"id":…}]}`),
     /// tolerating any extra fields providers add. Returns sorted model ids, or an
     /// empty array for payloads in an unexpected shape.
-    static func parseModelsResponse(_ data: Data) -> [String] {
+    public static func parseModelsResponse(_ data: Data) -> [String] {
         guard let response = try? JSONDecoder().decode(ModelsResponse.self, from: data) else {
             return []
         }
@@ -144,7 +144,7 @@ final class CommitMessageGenerator {
     /// Fetches the provider's available models (`GET {base}/models`). Settings
     /// uses this to offer a picker instead of a free-text model field; on any
     /// failure the UI falls back to the text field.
-    func fetchModels() async throws -> [String] {
+    public func fetchModels() async throws -> [String] {
         guard let apiKey = apiKeyProvider(), !apiKey.isEmpty else {
             throw GenerationError.noAPIKey
         }
@@ -169,7 +169,7 @@ final class CommitMessageGenerator {
 
     /// Strips the decorations models love to add despite instructions: surrounding
     /// quotes, code fences, leading "Commit message:" labels.
-    static func cleanGeneratedMessage(_ raw: String) -> String {
+    public static func cleanGeneratedMessage(_ raw: String) -> String {
         var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if text.hasPrefix("```") {
             // Drop the opening fence line and a trailing fence.

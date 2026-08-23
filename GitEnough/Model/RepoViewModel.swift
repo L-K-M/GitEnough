@@ -7,79 +7,79 @@ import Foundation
 /// one pattern (`perform`): run the command, take a fresh snapshot of status /
 /// branches / history on the same queue, then apply everything to the @Published
 /// properties in one hop to the main thread.
-final class RepoViewModel: ObservableObject, Identifiable {
+public final class RepoViewModel: ObservableObject, Identifiable {
 
-    let repo: Repository
-    var id: String { repo.id }
+    public let repo: Repository
+    public var id: String { repo.id }
 
-    let client: GitClient
-    let queue: DispatchQueue
+    public let client: GitClient
+    public let queue: DispatchQueue
     private var watcher: RepoWatcher?
     private var historyLimit: Int
 
     /// Called on the main thread after each applied snapshot, so the sidebar
     /// summary (branch, dirty dot, ahead/behind) tracks repo operations live
     /// instead of only updating on app activation. Set by AppState.
-    var onStatusChange: ((RepoSummary) -> Void)?
+    public var onStatusChange: ((RepoSummary) -> Void)?
 
     private let queueKey = DispatchSpecificKey<UInt8>()
 
-    static let historyPageSize = 300
+    public static let historyPageSize = 300
 
     // MARK: - Published state
 
-    @Published private(set) var status: RepoStatus = .empty
-    @Published private(set) var branches: [Branch] = []
-    @Published private(set) var remotes: [Remote] = []
-    @Published private(set) var commits: [Commit] = []
-    @Published private(set) var layout: GraphLayout = .empty
-    @Published private(set) var stash: [StashEntry] = []
-    @Published private(set) var mergeState = MergeState(operation: nil, operationLabel: nil,
+    @Published public private(set) var status: RepoStatus = .empty
+    @Published public private(set) var branches: [Branch] = []
+    @Published public private(set) var remotes: [Remote] = []
+    @Published public private(set) var commits: [Commit] = []
+    @Published public private(set) var layout: GraphLayout = .empty
+    @Published public private(set) var stash: [StashEntry] = []
+    @Published public private(set) var mergeState = MergeState(operation: nil, operationLabel: nil,
                                                         conflictedFiles: [])
-    @Published private(set) var canLoadMoreHistory = false
+    @Published public private(set) var canLoadMoreHistory = false
 
-    @Published private(set) var isBusy = false
-    @Published private(set) var activity: String?
-    @Published var errorMessage: String?
+    @Published public private(set) var isBusy = false
+    @Published public private(set) var activity: String?
+    @Published public var errorMessage: String?
 
     /// Rolling log of the git commands this repo has run (newest last). Powers
     /// the status-bar "what is it doing" readout and the activity popover.
-    let activityLog = GitActivityLog()
-    @Published private(set) var activityEntries: [GitActivityLog.Entry] = []
+    public let activityLog = GitActivityLog()
+    @Published public private(set) var activityEntries: [GitActivityLog.Entry] = []
 
     /// The git commands running right now — usually zero or one (the queue is
     /// serial), but a merge tool runs off-queue and can overlap with repo ops.
-    var runningActivityEntries: [GitActivityLog.Entry] {
+    public var runningActivityEntries: [GitActivityLog.Entry] {
         activityEntries.filter { $0.isRunning }
     }
 
     /// Non-blocking indicator while an external merge tool is open. Unlike
     /// `isBusy` this never occupies the serial repo queue: the tool can stay open
     /// as long as the user needs, and Ours/Theirs/Mark Resolved keep working.
-    @Published private(set) var mergeToolActivity: String?
+    @Published public private(set) var mergeToolActivity: String?
 
     /// Commit detail pane.
-    @Published private(set) var selectedCommitDetail: CommitDetail?
-    @Published private(set) var selectedCommitFileDiff: String = ""
+    @Published public private(set) var selectedCommitDetail: CommitDetail?
+    @Published public private(set) var selectedCommitFileDiff: String = ""
 
     /// Changes pane: the diff of the currently selected worktree file.
-    @Published private(set) var selectedFileDiff: String = ""
-    @Published private(set) var isLoadingDiff = false
+    @Published public private(set) var selectedFileDiff: String = ""
+    @Published public private(set) var isLoadingDiff = false
 
     /// Commit box.
-    @Published var draftCommitMessage: String = ""
-    @Published var amendLastCommit = false
-    @Published private(set) var isGeneratingMessage = false
-    @Published var messageGenerationError: String?
+    @Published public var draftCommitMessage: String = ""
+    @Published public var amendLastCommit = false
+    @Published public private(set) var isGeneratingMessage = false
+    @Published public var messageGenerationError: String?
 
     /// True when amending would rewrite a commit the upstream already has
     /// (upstream set, nothing ahead → HEAD is reachable from upstream) —
     /// i.e. when the UI should warn and confirm before committing.
-    var amendWouldRewritePushedCommit: Bool {
+    public var amendWouldRewritePushedCommit: Bool {
         amendLastCommit && status.upstream != nil && status.ahead == 0
     }
 
-    init(repo: Repository, historyLimit: Int = RepoViewModel.historyPageSize) {
+    public init(repo: Repository, historyLimit: Int = RepoViewModel.historyPageSize) {
         self.repo = repo
         self.client = GitClient(worktree: repo.url)
         self.queue = DispatchQueue(label: "gitenough.repo.\(repo.name)", qos: .userInitiated)
@@ -98,7 +98,7 @@ final class RepoViewModel: ObservableObject, Identifiable {
     // MARK: - Lifecycle
 
     /// Starts watching the repo and performs the initial load. Idempotent.
-    func start() {
+    public func start() {
         guard watcher == nil else { return }
         refresh(includeHistory: true)
         queue.async { [weak self] in
@@ -115,14 +115,14 @@ final class RepoViewModel: ObservableObject, Identifiable {
     // MARK: - Snapshot loading
 
     private struct Snapshot {
-        let status: RepoStatus
-        let branches: [Branch]
-        let remotes: [Remote]
-        let stash: [StashEntry]
-        let mergeState: MergeState
-        let commits: [Commit]?
-        let layout: GraphLayout?
-        let canLoadMore: Bool
+        public let status: RepoStatus
+        public let branches: [Branch]
+        public let remotes: [Remote]
+        public let stash: [StashEntry]
+        public let mergeState: MergeState
+        public let commits: [Commit]?
+        public let layout: GraphLayout?
+        public let canLoadMore: Bool
     }
 
     /// Must be called on `queue`.
@@ -183,11 +183,11 @@ final class RepoViewModel: ObservableObject, Identifiable {
     }
 
     /// Manual / external-trigger refresh (⌘R, window activation, watcher).
-    func refresh(includeHistory: Bool = true) {
+    public func refresh(includeHistory: Bool = true) {
         collectAndApply(includeHistory: includeHistory)
     }
 
-    func loadMoreHistory() {
+    public func loadMoreHistory() {
         historyLimit += Self.historyPageSize
         collectAndApply(includeHistory: true)
     }
@@ -227,18 +227,18 @@ final class RepoViewModel: ObservableObject, Identifiable {
 
     // MARK: Network
 
-    func fetch() { perform("Fetching…") { try $0.fetch() } }
+    public func fetch() { perform("Fetching…") { try $0.fetch() } }
 
-    func pull(rebase: Bool) {
+    public func pull(rebase: Bool) {
         perform(rebase ? "Pulling (rebase)…" : "Pulling…") { try $0.pull(rebase: rebase) }
     }
 
-    func push() { perform("Pushing…") { try $0.push(setUpstream: false) } }
+    public func push() { perform("Pushing…") { try $0.push(setUpstream: false) } }
 
     /// The remote a branch without an upstream should be published to — "origin"
     /// when it exists (it's the natural target even alongside other remotes),
     /// otherwise the first configured remote.
-    var publishRemoteName: String {
+    public var publishRemoteName: String {
         remotes.first { $0.name == "origin" }?.name ?? remotes.first?.name ?? "origin"
     }
 
@@ -246,7 +246,7 @@ final class RepoViewModel: ObservableObject, Identifiable {
     /// is not necessarily a remote named "origin". Guarded: with no remotes at
     /// all there is nothing to publish to (the Publish button hides, but no call
     /// path should be able to push to a fabricated "origin").
-    func publishBranch() {
+    public func publishBranch() {
         guard !remotes.isEmpty else { return }
         let remote = publishRemoteName
         perform("Publishing branch…") { try $0.push(setUpstream: true, remote: remote) }
@@ -256,7 +256,7 @@ final class RepoViewModel: ObservableObject, Identifiable {
 
     /// True while the forge is being asked whether the current branch has an
     /// open pull request (drives the toolbar button's busy state).
-    @Published private(set) var isResolvingPullRequest = false
+    @Published public private(set) var isResolvingPullRequest = false
 
     /// Opens the current branch's pull request on the forge website (GitHub,
     /// GitLab, Forgejo/Gitea): the PR itself when one is open for the branch,
@@ -264,7 +264,7 @@ final class RepoViewModel: ObservableObject, Identifiable {
     /// unauthenticated best-effort API call; when it can't tell — private repo,
     /// offline, unknown forge — the create page is opened, which shows an
     /// "already has a pull request" banner once the browser is signed in.
-    func openPullRequest() {
+    public func openPullRequest() {
         guard !isResolvingPullRequest else { return }
         if status.isUnborn {
             errorMessage = "Can't open a pull request: this repository has no commits yet."
@@ -325,7 +325,7 @@ final class RepoViewModel: ObservableObject, Identifiable {
 
     // MARK: Branches
 
-    func checkout(branch: Branch) {
+    public func checkout(branch: Branch) {
         if branch.isRemote {
             guard let local = branch.localNameForRemote else { return }
             perform("Checking out \(local)…") { try $0.checkoutTracking(remoteBranch: branch.name, localName: local) }
@@ -335,19 +335,19 @@ final class RepoViewModel: ObservableObject, Identifiable {
         }
     }
 
-    func createBranch(named name: String, at startPoint: String? = nil, checkout: Bool) {
+    public func createBranch(named name: String, at startPoint: String? = nil, checkout: Bool) {
         perform("Creating branch \(name)…") { try $0.createBranch(name, at: startPoint, checkout: checkout) }
     }
 
-    func deleteBranch(_ branch: Branch, force: Bool) {
+    public func deleteBranch(_ branch: Branch, force: Bool) {
         perform("Deleting \(branch.name)…") { try $0.deleteBranch(branch.name, force: force) }
     }
 
-    func merge(branch: Branch) {
+    public func merge(branch: Branch) {
         perform("Merging \(branch.name)…") { try $0.merge(branch.name) }
     }
 
-    func renameBranch(_ branch: Branch, to newName: String) {
+    public func renameBranch(_ branch: Branch, to newName: String) {
         perform("Renaming branch…") { try $0.renameBranch(old: branch.name, new: newName) }
     }
 
@@ -355,7 +355,7 @@ final class RepoViewModel: ObservableObject, Identifiable {
 
     /// Continues whichever sequencer operation is in progress (merge commit,
     /// rebase, cherry-pick, or revert) — the banner's primary action.
-    func continueOperation() {
+    public func continueOperation() {
         switch mergeState.operation {
         case nil:
             break
@@ -371,7 +371,7 @@ final class RepoViewModel: ObservableObject, Identifiable {
     }
 
     /// Aborts whichever sequencer operation is in progress.
-    func abortOperation() {
+    public func abortOperation() {
         switch mergeState.operation {
         case nil:
             break
@@ -395,7 +395,7 @@ final class RepoViewModel: ObservableObject, Identifiable {
     /// When the tool exits we verify the file ourselves (its exit code / git's
     /// "was it resolved?" prompt are unreliable headless): no conflict markers
     /// left → stage it; markers left → tell the user.
-    func openMergeTool(_ tool: MergeTool, path: String) {
+    public func openMergeTool(_ tool: MergeTool, path: String) {
         guard mergeToolActivity == nil else {
             errorMessage = "A merge tool is already open — close it before opening another."
             return
@@ -440,7 +440,7 @@ final class RepoViewModel: ObservableObject, Identifiable {
         }
     }
 
-    func resolveConflict(path: String, ours: Bool) {
+    public func resolveConflict(path: String, ours: Bool) {
         perform("Resolving conflict…", includeHistory: false) {
             try $0.resolveConflict(path: path, ours: ours)
         }
@@ -448,7 +448,7 @@ final class RepoViewModel: ObservableObject, Identifiable {
 
     /// `git add` a conflicted path the user resolved by hand or in a tool that
     /// didn't stage it.
-    func markResolved(path: String) {
+    public func markResolved(path: String) {
         perform("Marking resolved…", includeHistory: false) {
             try $0.markResolved(path: path)
         }
@@ -456,22 +456,22 @@ final class RepoViewModel: ObservableObject, Identifiable {
 
     // MARK: Staging / commit
 
-    func stage(_ changes: [FileChange]) {
+    public func stage(_ changes: [FileChange]) {
         perform("Staging…", includeHistory: false) { try $0.stage(paths: changes.map(\.path)) }
     }
 
-    func stageAll() {
+    public func stageAll() {
         perform("Staging all…", includeHistory: false) { try $0.stageAll() }
     }
 
-    func unstage(_ changes: [FileChange]) {
+    public func unstage(_ changes: [FileChange]) {
         perform("Unstaging…", includeHistory: false) { try $0.unstage(paths: changes.map(\.path)) }
     }
 
     /// Adds an untracked file's path to the repo's root `.gitignore` (creating
     /// the file if needed). A plain file append, not a git command — the
     /// post-op snapshot picks up the change and the row disappears.
-    func ignore(_ change: FileChange) {
+    public func ignore(_ change: FileChange) {
         // gitignore doesn't affect tracked files — ignoring one would be a
         // silent no-op, so refuse it here like the UI does.
         guard change.isUntracked else { return }
@@ -505,7 +505,7 @@ final class RepoViewModel: ObservableObject, Identifiable {
 
     /// Tracked paths are restored via git; untracked paths are moved to the Trash
     /// (recoverable, unlike a hard delete).
-    func discard(_ changes: [FileChange]) {
+    public func discard(_ changes: [FileChange]) {
         perform("Discarding changes…", includeHistory: false) { client in
             let tracked = changes.filter { !$0.isUntracked }.map(\.path)
             if !tracked.isEmpty { try client.discard(paths: tracked) }
@@ -516,7 +516,7 @@ final class RepoViewModel: ObservableObject, Identifiable {
         }
     }
 
-    func commit() {
+    public func commit() {
         let message = draftCommitMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !message.isEmpty else { return }
         let amend = amendLastCommit
@@ -529,47 +529,47 @@ final class RepoViewModel: ObservableObject, Identifiable {
 
     // MARK: Stash
 
-    func stashPush(message: String?, includeUntracked: Bool) {
+    public func stashPush(message: String?, includeUntracked: Bool) {
         perform("Stashing…") { try $0.stashPush(message: message, includeUntracked: includeUntracked) }
     }
 
-    func stashApply(_ entry: StashEntry, pop: Bool) {
+    public func stashApply(_ entry: StashEntry, pop: Bool) {
         perform(pop ? "Popping stash…" : "Applying stash…") { try $0.stashApply(index: entry.index, pop: pop) }
     }
 
-    func stashDrop(_ entry: StashEntry) {
+    public func stashDrop(_ entry: StashEntry) {
         perform("Dropping stash…") { try $0.stashDrop(index: entry.index) }
     }
 
     // MARK: Commit-targeted
 
-    func createBranchAtCommit(named name: String, hash: String) {
+    public func createBranchAtCommit(named name: String, hash: String) {
         perform("Creating branch…") { try $0.createBranch(name, at: hash, checkout: false) }
     }
 
-    func createTag(named name: String, message: String?, at hash: String) {
+    public func createTag(named name: String, message: String?, at hash: String) {
         perform("Creating tag…") { try $0.createTag(name: name, message: message, at: hash) }
     }
 
-    func checkoutCommit(_ hash: String) {
+    public func checkoutCommit(_ hash: String) {
         perform("Checking out commit…") { try $0.checkout(branch: hash) }
     }
 
-    func cherryPick(_ hash: String) {
+    public func cherryPick(_ hash: String) {
         perform("Cherry-picking…") { try $0.cherryPick(hash) }
     }
 
-    func revert(_ hash: String) {
+    public func revert(_ hash: String) {
         perform("Reverting…") { try $0.revert(hash) }
     }
 
-    func reset(to hash: String, mode: GitClient.ResetMode) {
+    public func reset(to hash: String, mode: GitClient.ResetMode) {
         perform("Resetting…") { try $0.reset(to: hash, mode: mode) }
     }
 
     // MARK: - Selections / detail loading
 
-    func selectCommit(_ hash: String?) {
+    public func selectCommit(_ hash: String?) {
         guard let hash else {
             selectedCommitDetail = nil
             selectedCommitFileDiff = ""
@@ -584,7 +584,7 @@ final class RepoViewModel: ObservableObject, Identifiable {
         }
     }
 
-    func selectCommitFile(hash: String, path: String?) {
+    public func selectCommitFile(hash: String, path: String?) {
         guard let path else {
             selectedCommitFileDiff = ""
             return
@@ -596,7 +596,7 @@ final class RepoViewModel: ObservableObject, Identifiable {
     }
 
     /// Loads the worktree/index diff for the file selected in the Changes pane.
-    func selectFile(_ change: FileChange?, staged: Bool) {
+    public func selectFile(_ change: FileChange?, staged: Bool) {
         guard let change else {
             selectedFileDiff = ""
             return
@@ -618,7 +618,7 @@ final class RepoViewModel: ObservableObject, Identifiable {
 
     // MARK: - Smart commit message
 
-    func generateCommitMessage() {
+    public func generateCommitMessage() {
         guard !isGeneratingMessage else { return }
         isGeneratingMessage = true
         messageGenerationError = nil

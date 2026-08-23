@@ -4,7 +4,7 @@ import Foundation
 /// `.git` files that change whenever HEAD, the index, refs, or the merge state
 /// move. When the signature changes, it fires `onChange` so the view model can
 /// refresh — no FSEvents, no full `git status` on every tick.
-final class RepoWatcher {
+public final class RepoWatcher {
 
     private let gitDir: URL
     private let worktree: URL
@@ -13,7 +13,7 @@ final class RepoWatcher {
     private var lastSignature: String = ""
 
     /// - Parameter interval: poll interval in seconds.
-    init(gitDir: URL, worktree: URL, queue: DispatchQueue, interval: TimeInterval = 2.5,
+    public init(gitDir: URL, worktree: URL, queue: DispatchQueue, interval: TimeInterval = 2.5,
          onEvent: @escaping () -> Void) {
         self.gitDir = gitDir
         self.worktree = worktree

@@ -12,7 +12,29 @@ import PackageDescription
 // both builds and the test suite is shared verbatim.
 //
 // Everything under GitEnough/UI/ (SwiftUI) and the two app-lifecycle files stay
-// out of the package: that is the part a Linux front end has to replace.
+// out of the package: that is the part the Linux front end replaces.
+//
+// That front end lives in Linux/ rather than under GitEnough/, so the Xcode
+// project's file-system-synchronized groups never see GTK sources. Its two
+// targets exist only when the manifest is evaluated on Linux — a macOS
+// `swift build` gets the library and its tests, and nothing that needs gtk4.
+#if os(Linux)
+let linuxTargets: [Target] = [
+    .systemLibrary(
+        name: "CGtk",
+        path: "Linux/CGtk",
+        pkgConfig: "gtk4",
+        providers: [.apt(["libgtk-4-dev"]), .yum(["gtk4-devel"])]),
+    .executableTarget(
+        name: "gitenough-gtk",
+        dependencies: ["GitEnough", "CGtk"],
+        path: "Linux/GitEnoughGTK",
+        swiftSettings: [.swiftLanguageMode(.v5)]),
+]
+#else
+let linuxTargets: [Target] = []
+#endif
+
 let package = Package(
     name: "GitEnough",
     platforms: [.macOS(.v14)],
@@ -31,5 +53,5 @@ let package = Package(
             dependencies: ["GitEnough"],
             path: "GitEnoughTests",
             swiftSettings: [.swiftLanguageMode(.v5)]),
-    ]
+    ] + linuxTargets
 )

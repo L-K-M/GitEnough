@@ -3,14 +3,14 @@ import Foundation
 /// Pure helpers for appending literal paths to a `.gitignore` file (used by
 /// `RepoViewModel.ignore`). Kept side-effect free so the unit tests can cover
 /// the pattern/dedup rules exhaustively; callers own the file I/O.
-enum GitIgnore {
+public enum GitIgnore {
 
     /// gitignore entries are glob patterns — escape everything that would
     /// keep the line from matching the literal path:
     /// - `* ? [ ] \` are glob metacharacters;
     /// - a leading `#` would read as a comment, a leading `!` as a negation;
     /// - trailing spaces are stripped by git unless escaped.
-    static func escape(_ path: String) -> String {
+    public static func escape(_ path: String) -> String {
         var escaped = path.map { "\\*?[]".contains($0) ? "\\\($0)" : String($0) }.joined()
         if escaped.hasPrefix("#") || escaped.hasPrefix("!") {
             escaped = "\\" + escaped
@@ -24,7 +24,7 @@ enum GitIgnore {
     /// The .gitignore content after ignoring `path` (the entry is anchored to
     /// the repo root with a leading slash). Returns the input unchanged when
     /// an equivalent entry already exists.
-    static func appending(_ path: String, to existing: String) -> String {
+    public static func appending(_ path: String, to existing: String) -> String {
         let escaped = escape(path)
         let candidates = [path, "/" + path, escaped, "/" + escaped]
         let duplicates = existing.components(separatedBy: .newlines)

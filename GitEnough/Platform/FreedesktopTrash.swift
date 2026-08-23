@@ -23,13 +23,13 @@ import Darwin
 ///
 /// The naming and encoding halves are pure so the tests can cover them on any
 /// platform; only `trash(_:)` touches the filesystem.
-enum FreedesktopTrash {
+public enum FreedesktopTrash {
 
-    enum TrashError: Error, LocalizedError {
+    public enum TrashError: Error, LocalizedError {
         case noTrashDirectory(String)
         case couldNotReserveName(String)
 
-        var errorDescription: String? {
+        public var errorDescription: String? {
             switch self {
             case .noTrashDirectory(let path):
                 return "No usable Trash directory for \(path)."
@@ -44,7 +44,7 @@ enum FreedesktopTrash {
     ///
     /// `homeTrash` is a seam for the tests, which must not be able to fill the
     /// developer's real Trash.
-    static func trash(_ url: URL, homeTrash: URL = homeTrashDirectory()) throws {
+    public static func trash(_ url: URL, homeTrash: URL = homeTrashDirectory()) throws {
         let item = url.standardizedFileURL
         let trashDirectory = try trashDirectory(for: item, homeTrash: homeTrash)
         let files = trashDirectory.appendingPathComponent("files")
@@ -80,7 +80,7 @@ enum FreedesktopTrash {
     /// The body of a `.trashinfo` file. `Path` is percent-encoded exactly like a
     /// URL path (separators kept, everything else escaped), and `DeletionDate`
     /// is local wall-clock time with no zone marker — both per the spec.
-    static func trashInfo(originalPath: String, deletedAt: Date) -> String {
+    public static func trashInfo(originalPath: String, deletedAt: Date) -> String {
         let encoded = originalPath
             .addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? originalPath
         return """
@@ -93,7 +93,7 @@ enum FreedesktopTrash {
 
     /// The `Path` value for an item: absolute for the home trash, relative to
     /// the volume root for a volume trash, so the volume stays relocatable.
-    static func originalPath(of item: URL, relativeTo trashDirectory: URL) -> String {
+    public static func originalPath(of item: URL, relativeTo trashDirectory: URL) -> String {
         guard let topDirectory = volumeRoot(ofTrash: trashDirectory) else {
             return item.path
         }
@@ -104,7 +104,7 @@ enum FreedesktopTrash {
 
     /// The volume root a volume trash belongs to, or nil for the home trash.
     /// `/data/.Trash-1000` → `/data`; `/data/.Trash/1000` → `/data`.
-    static func volumeRoot(ofTrash trashDirectory: URL) -> String? {
+    public static func volumeRoot(ofTrash trashDirectory: URL) -> String? {
         let name = trashDirectory.lastPathComponent
         if name.hasPrefix(".Trash-") {
             return trashDirectory.deletingLastPathComponent().path
@@ -118,7 +118,7 @@ enum FreedesktopTrash {
 
     /// `name`, or `name.2`, `name.3`, … — the disambiguation Nautilus uses,
     /// inserted before the extension so "notes.txt" becomes "notes.2.txt".
-    static func candidateName(_ name: String, attempt: Int) -> String {
+    public static func candidateName(_ name: String, attempt: Int) -> String {
         guard attempt > 1 else { return name }
         let base = (name as NSString).deletingPathExtension
         let ext = (name as NSString).pathExtension
@@ -154,7 +154,7 @@ enum FreedesktopTrash {
 
     /// Home trash when `item` lives on the same device, else the volume trash
     /// for the device it does live on.
-    static func trashDirectory(for item: URL, homeTrash home: URL) throws -> URL {
+    public static func trashDirectory(for item: URL, homeTrash home: URL) throws -> URL {
         try createDirectory(home)
         let itemDevice = deviceID(of: item.deletingLastPathComponent().path)
         if let itemDevice, itemDevice == deviceID(of: home.path) {
@@ -169,7 +169,7 @@ enum FreedesktopTrash {
     }
 
     /// `$XDG_DATA_HOME/Trash`, defaulting to `~/.local/share/Trash`.
-    static func homeTrashDirectory(
+    public static func homeTrashDirectory(
         environment: [String: String] = ProcessInfo.processInfo.environment,
         home: String = NSHomeDirectory()
     ) -> URL {

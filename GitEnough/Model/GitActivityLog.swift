@@ -10,31 +10,31 @@ import Foundation
 /// All mutations funnel through a lock because reads (e.g. the merge-tool
 /// runner) can happen off the repo's serial queue. `onChange` fires after
 /// every mutation with a consistent snapshot; observers typically hop to main.
-final class GitActivityLog {
+public final class GitActivityLog {
 
     /// One git invocation. Stdin content (commit messages via `commit -F -`)
     /// is deliberately NOT captured — only argv and a stderr tail. Note that
     /// free text passed as an argument (e.g. `stash push -m <message>`) IS
     /// part of argv and therefore appears in `command`.
     /// Codable so the global history store can persist finished entries.
-    struct Entry: Identifiable, Equatable, Codable {
-        let id: UUID
+    public struct Entry: Identifiable, Equatable, Codable {
+        public let id: UUID
         /// The command as displayed, e.g. `commit -F -` or `fetch --prune --all`
         /// (the leading `-C <worktree>` is stripped; the repo is implied).
-        let command: String
-        let startedAt: Date
+        public let command: String
+        public let startedAt: Date
         private(set) var finishedAt: Date?
         private(set) var exitCode: Int32?
         /// Last chunk of stderr — hook diagnostics and git's error messages.
         private(set) var stderrTail: String?
 
-        var isRunning: Bool { finishedAt == nil }
+        public var isRunning: Bool { finishedAt == nil }
         /// False while the entry is still running — check `isRunning` first.
-        var succeeded: Bool { exitCode == 0 }
+        public var succeeded: Bool { exitCode == 0 }
 
         /// Setters are private to Entry, so the log transitions entries through
         /// this instead of poking properties directly.
-        mutating func markFinished(at date: Date, exitCode: Int32?, stderrTail: String?) {
+        public mutating func markFinished(at date: Date, exitCode: Int32?, stderrTail: String?) {
             finishedAt = date
             self.exitCode = exitCode
             self.stderrTail = stderrTail
@@ -44,35 +44,35 @@ final class GitActivityLog {
     /// Lifecycle events for observers that maintain their own derived state
     /// (the global activity-history store). Fired after `onChange`, on the
     /// mutating thread, outside the lock.
-    enum Event {
+    public enum Event {
         case began(Entry)
         case finished(Entry)
     }
 
     /// Called after every begin/finish, on the mutating thread, OUTSIDE the
     /// lock (so observers can safely re-enter, e.g. read `entries`).
-    var onChange: (([Entry]) -> Void)?
+    public var onChange: (([Entry]) -> Void)?
 
     /// Called once per lifecycle transition, same threading as `onChange`.
-    var onEvent: ((Event) -> Void)?
+    public var onEvent: ((Event) -> Void)?
 
     private let capacity: Int
     private let lock = NSLock()
     private var storage: [Entry] = []
 
-    init(capacity: Int = 100) {
+    public init(capacity: Int = 100) {
         self.capacity = capacity
     }
 
     /// Current entries in chronological order (oldest first).
-    var entries: [Entry] {
+    public var entries: [Entry] {
         lock.lock()
         defer { lock.unlock() }
         return storage
     }
 
     @discardableResult
-    func begin(command: String, at now: Date = Date()) -> UUID {
+    public func begin(command: String, at now: Date = Date()) -> UUID {
         let entry = Entry(id: UUID(), command: command, startedAt: now,
                           finishedAt: nil, exitCode: nil, stderrTail: nil)
         lock.lock()
@@ -85,7 +85,7 @@ final class GitActivityLog {
         return entry.id
     }
 
-    func finish(_ id: UUID, exitCode: Int32?, stderr: String?, at now: Date = Date()) {
+    public func finish(_ id: UUID, exitCode: Int32?, stderr: String?, at now: Date = Date()) {
         lock.lock()
         guard let index = storage.lastIndex(where: { $0.id == id }) else {
             lock.unlock()
@@ -122,7 +122,7 @@ final class GitActivityLog {
     /// Renders an argv array for display: strips the leading `-C <worktree>`
     /// every GitClient call starts with, redacts credentials embedded in URLs,
     /// and quotes arguments containing whitespace.
-    static func displayCommand(for args: [String]) -> String {
+    public static func displayCommand(for args: [String]) -> String {
         var argv = args
         if argv.count >= 2, argv[0] == "-C" {
             argv.removeFirst(2)
@@ -135,7 +135,7 @@ final class GitActivityLog {
 
     /// https://token@host/… or https://user:pass@host/… → https://***@host/…
     /// Both argv and stderr (network errors echo remote URLs) go through this.
-    static func redactCredentials(_ string: String) -> String {
+    public static func redactCredentials(_ string: String) -> String {
         string.replacingOccurrences(of: #"://[^/\s@]+@"#,
                                     with: "://***@",
                                     options: .regularExpression)
@@ -151,7 +151,7 @@ final class GitActivityLog {
 
     /// How long a command took, in the compact form the status bar and the
     /// history window both show ("0.4s", "2m 5s", "1h 1m").
-    static func formatDuration(_ seconds: TimeInterval) -> String {
+    public static func formatDuration(_ seconds: TimeInterval) -> String {
         if seconds < 60 {
             return String(format: "%.1fs", seconds)
         }

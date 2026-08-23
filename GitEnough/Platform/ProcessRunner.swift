@@ -12,22 +12,22 @@ import Darwin
 /// the per-repo serial queue. This is the much smaller sibling for everything
 /// else, and it never blocks on a process that outlives the call
 /// (`launchDetached`).
-enum ProcessRunner {
+public enum ProcessRunner {
 
-    struct Result {
-        let stdout: Data
-        let stderr: String
-        let exitCode: Int32
+    public struct Result {
+        public let stdout: Data
+        public let stderr: String
+        public let exitCode: Int32
 
-        var standardOutput: String { String(decoding: stdout, as: UTF8.self) }
-        var succeeded: Bool { exitCode == 0 }
+        public var standardOutput: String { String(decoding: stdout, as: UTF8.self) }
+        public var succeeded: Bool { exitCode == 0 }
     }
 
-    enum RunError: Error, LocalizedError {
+    public enum RunError: Error, LocalizedError {
         case notFound(String)
         case launchFailed(String, underlying: String)
 
-        var errorDescription: String? {
+        public var errorDescription: String? {
             switch self {
             case .notFound(let name):
                 return "\(name) is not installed."
@@ -47,7 +47,7 @@ enum ProcessRunner {
     /// It is also the strictly safer default for a GUI app — nothing here wants
     /// a closed pipe to be fatal — and it is installed lazily on first use
     /// rather than from an app delegate the Linux build doesn't have.
-    static let brokenPipesAreErrors: Void = {
+    public static let brokenPipesAreErrors: Void = {
         signal(SIGPIPE, SIG_IGN)
     }()
 
@@ -56,7 +56,7 @@ enum ProcessRunner {
     /// **Blocking** — call it off the main thread. stdout is drained on a helper
     /// thread and stdin is written on another so a child that talks on both
     /// pipes can't deadlock against a full buffer.
-    static func run(_ executable: URL,
+    public static func run(_ executable: URL,
                     _ arguments: [String],
                     input: Data? = nil) throws -> Result {
         _ = brokenPipesAreErrors
@@ -117,7 +117,7 @@ enum ProcessRunner {
     /// only after `wait()` — so the unchecked conformance is carrying a fact the
     /// compiler can't see rather than papering over a race.
     private final class DataBox: @unchecked Sendable {
-        var value = Data()
+        public var value = Data()
     }
 
     /// Starts `executable` and returns without waiting.
@@ -125,7 +125,7 @@ enum ProcessRunner {
     /// Used for handing a URL or a file to the desktop environment: those
     /// helpers can outlive the call by minutes (a browser cold start), and
     /// waiting for them on any of GitEnough's queues would jam it.
-    static func launchDetached(_ executable: URL, _ arguments: [String]) throws {
+    public static func launchDetached(_ executable: URL, _ arguments: [String]) throws {
         let process = Process()
         process.executableURL = executable
         process.arguments = arguments
@@ -143,7 +143,7 @@ enum ProcessRunner {
     /// The first executable called `name` on `searchPath` (defaults to the
     /// inherited PATH plus the handful of directories a desktop session tends
     /// to have but a launchd/systemd-started process does not).
-    static func which(_ name: String, searchPath: String? = nil) -> URL? {
+    public static func which(_ name: String, searchPath: String? = nil) -> URL? {
         // An absolute or relative path is a path, not something to look up.
         guard !name.contains("/") else {
             return FileManager.default.isExecutableFile(atPath: name)
@@ -161,7 +161,7 @@ enum ProcessRunner {
 
     /// PATH as inherited, with the usual desktop tool directories appended.
     /// Additive only: an inherited entry always wins on ordering.
-    static var defaultSearchPath: String {
+    public static var defaultSearchPath: String {
         let inherited = ProcessInfo.processInfo.environment["PATH"] ?? ""
         var extras = ["/usr/local/bin", "/usr/bin", "/bin"]
         #if os(Linux)
