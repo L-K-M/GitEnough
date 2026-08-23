@@ -93,7 +93,7 @@ final class FreedesktopTrashTests: XCTestCase {
     }
 
     func testAFailedRecordWriteLeavesNothingBehind() throws {
-        // The move is only safe once the record is on disk. If the write fails
+        // The move is only safe once the record is written. If the write fails
         // the file must stay exactly where the user left it — trashing an item
         // whose origin can't be read back would strand it in the Trash with no
         // working Restore, which is the one guarantee discard-to-Trash exists

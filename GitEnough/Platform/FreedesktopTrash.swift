@@ -180,15 +180,22 @@ public enum FreedesktopTrash {
         }
     }
 
-    /// Forces the record out of the page cache before the caller renames the
-    /// file into the Trash. `write(2)` only promises the bytes reached the
-    /// kernel, so without this a power cut that lands after the rename can
-    /// persist the move and lose the record — the file arrives in the Trash
-    /// with an origin that reads back empty, which is the stranded-with-no-
-    /// Restore outcome the ordering exists to prevent. One `fsync` of ~100
-    /// bytes per discarded item is a fair price for a guarantee `trash(_:)`
-    /// states three times. (macOS would need `F_FULLFSYNC` to reach the
-    /// platter; this file's platform is Linux, where `fsync` is the real thing.)
+    /// Forces the record's bytes out of the page cache before the caller renames
+    /// the file into the Trash. `write(2)` promises only that they reached the
+    /// kernel, and the crash that follows delayed allocation leaves a
+    /// `.trashinfo` of the right length that reads back as zeros — an entry the
+    /// file manager shows with an origin it cannot parse.
+    ///
+    /// This buys one flush, not crash consistency, and the distinction is worth
+    /// stating rather than implying: the record's *name* is durable only once
+    /// `info/` is fsynced too, and the rename that follows is no more durable
+    /// than the name is. Guaranteeing the pair takes four fsyncs per discarded
+    /// item and still has to choose which way to fail — a stranded file or a
+    /// record pointing at nothing. Nothing in this space goes that far; glib's
+    /// `g_file_trash` does none of it. So this stops at the failure that
+    /// actually shows up, and the rest is a decision for whoever wants it.
+    /// (macOS would need `F_FULLFSYNC` to reach the platter; this file's
+    /// platform is Linux, where `fsync` is the real thing.)
     static func syncRecord(_ handle: Int32) throws {
         while fsync(handle) != 0 {
             if errno == EINTR { continue }
