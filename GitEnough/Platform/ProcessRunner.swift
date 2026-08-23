@@ -1,4 +1,9 @@
 import Foundation
+#if canImport(Glibc)
+import Glibc
+#elseif canImport(Darwin)
+import Darwin
+#endif
 
 /// Runs the short-lived helper processes the platform layer needs — `xdg-open`,
 /// `secret-tool`, and PATH lookups for merge tools.
@@ -32,6 +37,20 @@ enum ProcessRunner {
         }
     }
 
+    /// Writing to a child that has already exited raises SIGPIPE, and its
+    /// default action is to kill *us* — the write is never allowed to fail, so
+    /// there is no error for the call site to swallow. Ignoring the signal
+    /// process-wide turns a broken pipe back into an ordinary EPIPE error.
+    ///
+    /// Process-wide is the only option that works: Darwin can suppress it
+    /// per-descriptor with `F_SETNOSIGPIPE`, Linux has no equivalent for pipes.
+    /// It is also the strictly safer default for a GUI app — nothing here wants
+    /// a closed pipe to be fatal — and it is installed lazily on first use
+    /// rather than from an app delegate the Linux build doesn't have.
+    static let brokenPipesAreErrors: Void = {
+        signal(SIGPIPE, SIG_IGN)
+    }()
+
     /// Runs `executable`, optionally feeding `input` to its stdin, and waits.
     ///
     /// **Blocking** — call it off the main thread. stdout is drained on a helper
@@ -40,6 +59,7 @@ enum ProcessRunner {
     static func run(_ executable: URL,
                     _ arguments: [String],
                     input: Data? = nil) throws -> Result {
+        _ = brokenPipesAreErrors
         let process = Process()
         process.executableURL = executable
         process.arguments = arguments
@@ -74,9 +94,10 @@ enum ProcessRunner {
         if let inPipe, let input {
             group.enter()
             DispatchQueue.global(qos: .userInitiated).async {
-                // A child that exits before reading turns the write into SIGPIPE;
-                // Foundation's FileHandle raises it as an ObjC exception on Darwin
-                // and an error on Linux, so guard both with `try?`.
+                // With SIGPIPE ignored (above), a child that exited before
+                // draining its stdin makes this throw EPIPE instead of killing
+                // the process. Nothing to report: the child is already gone and
+                // its exit code is the outcome the caller wants.
                 try? inPipe.fileHandleForWriting.write(contentsOf: input)
                 try? inPipe.fileHandleForWriting.close()
                 group.leave()
@@ -150,10 +171,13 @@ enum ProcessRunner {
         #else
         extras += ["/opt/homebrew/bin"]
         #endif
-        let existing = Set(inherited.split(separator: ":").map(String.init))
-        let additions = extras.filter { !existing.contains($0) }
-        if inherited.isEmpty { return additions.joined(separator: ":") }
-        return additions.isEmpty ? inherited
-            : inherited + ":" + additions.joined(separator: ":")
+        // Dedupe across the whole list, not just the additions: an inherited
+        // PATH that already repeats a directory (shell rc files and CI images
+        // both do it) would otherwise carry the duplicate through. First
+        // occurrence wins, so inherited entries keep their precedence.
+        var seen = Set<String>()
+        return (inherited.split(separator: ":").map(String.init) + extras)
+            .filter { seen.insert($0).inserted }
+            .joined(separator: ":")
     }
 }

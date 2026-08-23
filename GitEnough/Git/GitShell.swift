@@ -264,6 +264,10 @@ final class GitShell {
 
     /// Separate entry point because `standardInput` must be assigned before `run()`.
     private func runWithStdin(_ args: [String], in directory: URL?, stdin: String) throws -> GitResult {
+        // Same hazard as ProcessRunner's stdin path: a git that rejects its
+        // input and exits early would otherwise kill the app with SIGPIPE
+        // instead of letting us report its exit code.
+        _ = ProcessRunner.brokenPipesAreErrors
         guard let gitURL else {
             throw GitError(message: GitShell.installHint, exitCode: -1)
         }

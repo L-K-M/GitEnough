@@ -39,6 +39,17 @@ final class ProcessRunnerTests: XCTestCase {
         XCTAssertEqual(result.stderr, "boom")
     }
 
+    func testAChildThatExitsWithoutReadingStdinDoesNotKillUs() throws {
+        // Writing past the pipe buffer to a child that is already gone raises
+        // SIGPIPE, whose default action kills the whole test process (exit 141)
+        // rather than failing the write. Without the ignore ProcessRunner
+        // installs, this case takes the app down with it.
+        let payload = Data(repeating: 0x41, count: 1 << 20)
+        let result = try ProcessRunner.run(URL(fileURLWithPath: "/bin/sh"),
+                                           ["-c", "exit 0"], input: payload)
+        XCTAssertEqual(result.exitCode, 0)
+    }
+
     func testMissingExecutableThrowsRatherThanTrapping() {
         XCTAssertThrowsError(
             try ProcessRunner.run(URL(fileURLWithPath: "/nonexistent/tool"), []))
@@ -71,6 +82,13 @@ final class ProcessRunnerTests: XCTestCase {
     func testDefaultSearchPathHasNoDuplicateEntries() {
         let entries = ProcessRunner.defaultSearchPath.split(separator: ":").map(String.init)
         XCTAssertEqual(entries.count, Set(entries).count, ProcessRunner.defaultSearchPath)
+    }
+
+    func testARepeatedDirectoryIsLookedUpOnceAndKeepsItsPlace() {
+        // A PATH that repeats an entry is ordinary (shell rc files, CI images);
+        // the search must not inherit the duplicate.
+        XCTAssertEqual(ProcessRunner.which("sh", searchPath: "/bin:/usr/bin:/bin")?.path,
+                       "/bin/sh")
     }
 }
 

@@ -82,5 +82,9 @@ enum SecretService {
     /// explain why the API key field is refusing to stick.
     static var isAvailable: Bool { secretTool != nil }
 
-    private static let secretTool: URL? = ProcessRunner.which("secret-tool")
+    /// Resolved per call rather than cached: `toolMissing` tells the user to
+    /// install libsecret-tools, and they must not then have to relaunch the app
+    /// for it to be noticed. A PATH probe is a handful of `stat`s, and these
+    /// operations are all user-initiated.
+    private static var secretTool: URL? { ProcessRunner.which("secret-tool") }
 }
