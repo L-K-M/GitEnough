@@ -33,8 +33,17 @@ public final class GitShell {
     /// Shared instance; the shell is stateless (every call takes the working dir).
     public static let shared = GitShell()
 
+    /// Process-wide and idempotent: a child that exits before draining stdin
+    /// must not let a broken-pipe write kill the process driving it (see
+    /// runWithStdin). Installed here — not only in AppDelegate — so tests and
+    /// any future entry point that drives GitShell get it too. (signal()
+    /// returns the previous disposition, hence the closure to discard it.)
+    private static let ignoreSIGPIPE: Void = {
+        _ = signal(SIGPIPE, SIG_IGN)
+    }()
+
     /// Resolved path to a working git binary, or nil when Xcode CLT is missing.
-    public private(set) var gitURL: URL?
+    private(set) var gitURL: URL?
 
     private init() {
         gitURL = Self.findGit()
@@ -54,7 +63,7 @@ public final class GitShell {
     /// session stay invisible to hooks until the app relaunches. `static let`
     /// gives us thread-safe lazy initialization.
     private static let childEnvironment: [String: String] = {
-        var env = ProcessInfo.processInfo.environment
+        var env = sanitizedEnvironment(ProcessInfo.processInfo.environment)
         // A GUI-launched app inherits a bare PATH — launchd's
         // (/usr/bin:/bin:/usr/sbin:/sbin) on macOS, systemd's or the display
         // manager's on Linux — so git hooks that call node/npm/npx (husky,
@@ -91,6 +100,49 @@ public final class GitShell {
         env["GIT_EDITOR"] = "/usr/bin/true"
         return env
     }()
+
+    /// Removes environment inherited from a launching terminal that can make
+    /// `git -C <repo>` address a different repository, worktree, object store,
+    /// or index. Keep user-wide configuration and authentication variables
+    /// (`GIT_CONFIG_GLOBAL`, credential helpers, `GIT_SSH*`, and so on): those
+    /// are part of the command-line Git behavior GitEnough promises to honour.
+    ///
+    /// Most fixed names mirror `git rev-parse --local-env-vars`. Discovery and
+    /// pathspec-mode variables are included because they can also change the
+    /// meaning of a repository or file selected in the UI.
+    public static func sanitizedEnvironment(_ environment: [String: String]) -> [String: String] {
+        let repositoryLocalVariables: Set<String> = [
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+            "GIT_CEILING_DIRECTORIES",
+            "GIT_COMMON_DIR",
+            "GIT_CONFIG",
+            "GIT_CONFIG_COUNT",
+            "GIT_CONFIG_PARAMETERS",
+            "GIT_DIR",
+            "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+            "GIT_GRAFT_FILE",
+            "GIT_ICASE_PATHSPECS",
+            "GIT_IMPLICIT_WORK_TREE",
+            "GIT_INDEX_FILE",
+            "GIT_INTERNAL_SUPER_PREFIX",
+            "GIT_LITERAL_PATHSPECS",
+            "GIT_NAMESPACE",
+            "GIT_NOGLOB_PATHSPECS",
+            "GIT_NO_REPLACE_OBJECTS",
+            "GIT_OBJECT_DIRECTORY",
+            "GIT_PREFIX",
+            "GIT_QUARANTINE_PATH",
+            "GIT_REPLACE_REF_BASE",
+            "GIT_SHALLOW_FILE",
+            "GIT_WORK_TREE",
+            "GIT_GLOB_PATHSPECS",
+        ]
+        return environment.filter { key, _ in
+            !repositoryLocalVariables.contains(key)
+                && !key.hasPrefix("GIT_CONFIG_KEY_")
+                && !key.hasPrefix("GIT_CONFIG_VALUE_")
+        }
+    }
 
     /// `base` PATH plus every well-known tool location that exists on disk, so
     /// git hooks can find node/npm/npx even under launchd's minimal PATH.
@@ -191,7 +243,9 @@ public final class GitShell {
     /// Runs git with `args` in `directory` and returns the raw result without
     /// throwing on non-zero exit. Throws only when git can't be executed at all.
     @discardableResult
-    public func run(_ args: [String], in directory: URL?) throws -> GitResult {
+    public func run(_ args: [String], in directory: URL?,
+             environmentOverrides: [String: String] = [:]) throws -> GitResult {
+        _ = Self.ignoreSIGPIPE
         guard let gitURL else {
             throw GitError(message: GitShell.installHint, exitCode: -1)
         }
@@ -201,7 +255,9 @@ public final class GitShell {
         if let directory {
             process.currentDirectoryURL = directory
         }
-        process.environment = GitShell.childEnvironment
+        process.environment = GitShell.childEnvironment.merging(environmentOverrides) {
+            _, override in override
+        }
         process.arguments = args
 
         let outPipe = Pipe()
@@ -245,29 +301,54 @@ public final class GitShell {
     /// Throws `GitError` carrying stderr when the exit code is non-zero.
     public func runChecked(_ args: [String],
                     in directory: URL?,
-                    stdin: String? = nil) throws -> GitResult {
+                    stdin: String? = nil,
+                    environmentOverrides: [String: String] = [:]) throws -> GitResult {
         let result: GitResult
         if let stdin {
-            result = try runWithStdin(args, in: directory, stdin: stdin)
+            result = try runWithStdin(
+                args, in: directory, stdin: stdin,
+                environmentOverrides: environmentOverrides)
         } else {
-            result = try run(args, in: directory)
+            result = try run(
+                args, in: directory, environmentOverrides: environmentOverrides)
         }
         guard result.exitCode == 0 else {
             let message = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
             throw GitError(message: message.isEmpty
-                           ? "git \(args.first ?? "") failed with exit code \(result.exitCode)."
+                           ? "git \(Self.displayCommand(args)) failed with exit code \(result.exitCode)."
                            : message,
                            exitCode: result.exitCode)
         }
         return result
     }
 
+    /// The command name for the synthesized failure message, with the leading
+    /// `-C <worktree>` pair every GitClient call starts with stripped — without
+    /// it the message read "git -C failed with exit code 128", which names no
+    /// command at all. Only the subcommand itself is returned ("pull", not the
+    /// full "pull --tags"): the message is the rare empty-stderr fallback, and
+    /// the argument list adds noise to an error that already has little signal.
+    private static func displayCommand(_ args: [String]) -> String {
+        var argv = args
+        // `while`, not `if`: git accepts repeated -C pairs, and the loop
+        // handles them uniformly if one ever reaches this path.
+        while argv.count >= 2, argv[0] == "-C" {
+            argv.removeFirst(2)
+        }
+        // Read-only queries carry global flags between the -C pair and the
+        // subcommand (GitClient.readOnlyArguments inserts --no-optional-locks
+        // there). Skipping them is what keeps this message naming a command
+        // rather than a flag — the whole point of not saying "git -C failed".
+        while let first = argv.first, first.hasPrefix("-") {
+            argv.removeFirst()
+        }
+        return argv.first ?? ""
+    }
+
     /// Separate entry point because `standardInput` must be assigned before `run()`.
-    private func runWithStdin(_ args: [String], in directory: URL?, stdin: String) throws -> GitResult {
-        // Same hazard as ProcessRunner's stdin path: a git that rejects its
-        // input and exits early would otherwise kill the app with SIGPIPE
-        // instead of letting us report its exit code.
-        _ = ProcessRunner.brokenPipesAreErrors
+    private func runWithStdin(_ args: [String], in directory: URL?, stdin: String,
+                              environmentOverrides: [String: String]) throws -> GitResult {
+        _ = Self.ignoreSIGPIPE
         guard let gitURL else {
             throw GitError(message: GitShell.installHint, exitCode: -1)
         }
@@ -276,7 +357,9 @@ public final class GitShell {
         if let directory {
             process.currentDirectoryURL = directory
         }
-        process.environment = GitShell.childEnvironment
+        process.environment = GitShell.childEnvironment.merging(environmentOverrides) {
+            _, override in override
+        }
         process.arguments = args
 
         let outPipe = Pipe()
@@ -294,6 +377,11 @@ public final class GitShell {
 
         var outData = Data()
         var errData = Data()
+        /// Set by the writer thread on a NON-EPIPE write failure (EPIPE means
+        /// the child exited, so its own exit status tells the story).
+        /// Written before group.leave(), read after group.wait() — the
+        /// DispatchGroup provides the happens-before edge.
+        var writeError: NSError?
         let group = DispatchGroup()
         group.enter()
         DispatchQueue.global(qos: .userInitiated).async {
@@ -306,16 +394,45 @@ public final class GitShell {
             group.leave()
         }
         // Write stdin on its own thread too: a message larger than the pipe buffer
-        // must not block while the child is also writing to stderr.
+        // must not block while the child is also writing to stderr. The throwing
+        // write API matters: the legacy FileHandle.write(_:) raises an
+        // uncatchable NSFileHandleOperationException on EPIPE (a child that
+        // exited before draining stdin), while write(contentsOf:) just fails —
+        // and the child's own exit status carries the real error.
         group.enter()
         DispatchQueue.global(qos: .userInitiated).async {
-            inPipe.fileHandleForWriting.write(Data(stdin.utf8))
+            do {
+                try inPipe.fileHandleForWriting.write(contentsOf: Data(stdin.utf8))
+            } catch {
+                // EPIPE is expected when the child exits before draining
+                // stdin; its exit status carries the real error. Log the full
+                // error (domain/code/underlying POSIX errno), tagging the
+                // expected case so genuinely unexpected write failures
+                // (EIO, EBADF, ENOSPC) stand out in the log.
+                let nsError = error as NSError
+                let isExpectedEPIPE = nsError.domain == NSPOSIXErrorDomain
+                    && nsError.code == Int(EPIPE)
+                NSLog("[GitShell] stdin write to git failed (%@): %@",
+                      isExpectedEPIPE ? "expected EPIPE" : "unexpected",
+                      String(describing: error))
+                if !isExpectedEPIPE { writeError = nsError }
+            }
             try? inPipe.fileHandleForWriting.close()
             group.leave()
         }
 
         process.waitUntilExit()
         group.wait()
+
+        // A failed stdin write with a still-living child means git read a
+        // truncated message and may happily commit it — a success the user
+        // must not see unqualified. (EPIPE is excluded: the child is gone,
+        // so no truncated commit can exist.)
+        if let writeError, process.terminationStatus == 0 {
+            throw GitError(
+                message: "Writing the commit message to git failed (\(writeError.localizedDescription)). git may have committed a truncated message — check the last commit and amend if needed.",
+                exitCode: -1)
+        }
 
         let stdout = String(data: outData, encoding: .utf8)
             ?? String(decoding: outData, as: UTF8.self)

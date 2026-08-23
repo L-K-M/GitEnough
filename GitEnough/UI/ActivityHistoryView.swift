@@ -157,7 +157,10 @@ struct ActivityHistoryView: View {
     // MARK: - Detail
 
     private func detail(for item: GitActivityStore.Item) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        let copyCommand = item.entry.arguments.map {
+            GitActivityLog.shellCommand(arguments: $0, worktree: item.repoPath)
+        }
+        return VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
                 Text("git \(item.entry.command)")
                     .font(.system(.callout, design: .monospaced))
@@ -165,17 +168,17 @@ struct ActivityHistoryView: View {
                     .lineLimit(2)
                 Spacer()
                 Button {
+                    guard let copyCommand else { return }
                     NSPasteboard.general.clearContents()
-                    // Scoped to its repo so the pasted command runs from any cwd;
-                    // shell-escaped ('\'' style) so paths with quotes survive.
-                    let escapedPath = item.repoPath.replacingOccurrences(of: "'", with: "'\\''")
-                    NSPasteboard.general.setString("git -C '\(escapedPath)' \(item.entry.command)",
-                                                   forType: .string)
+                    NSPasteboard.general.setString(copyCommand, forType: .string)
                 } label: {
                     Label("Copy", systemImage: "doc.on.doc")
                 }
                 .controlSize(.small)
-                .help("Copy the command (scoped to its repository) to the clipboard")
+                .disabled(copyCommand == nil)
+                .help(copyCommand == nil
+                      ? "Copy is unavailable for activity recorded by an earlier GitEnough version"
+                      : "Copy a paste-safe command scoped to its repository")
             }
             Text(detailSubtitle(for: item))
                 .font(.caption)

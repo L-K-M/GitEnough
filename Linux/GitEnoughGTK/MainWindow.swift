@@ -137,7 +137,11 @@ final class MainWindow {
         let actions: [(String, String, (RepoViewModel) -> Void)] = [
             ("Fetch", "Fetch from the remote", { $0.fetch() }),
             ("Pull", "Pull and merge", { $0.pull(rebase: false) }),
-            ("Push", "Push the current branch", { $0.push() }),
+            // One entry point for both: it re-resolves the capability at click
+            // time, so a branch with no upstream publishes instead of failing,
+            // and detached/unborn HEAD reports why rather than doing nothing.
+            ("Push", "Push the current branch, or publish it if it has no upstream",
+             { $0.pushOrPublish() }),
         ]
         for (title, tooltip, action) in actions {
             let button = UI.button(title, tooltip: tooltip) { [weak self] in

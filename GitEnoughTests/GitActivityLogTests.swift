@@ -105,6 +105,41 @@ final class GitActivityLogTests: XCTestCase {
             "status --porcelain=v2")
     }
 
+    func testReadOnlyArgumentsKeepWorktreeSwitchFirst() {
+        XCTAssertEqual(
+            GitClient.readOnlyArguments(["-C", "/r", "log", "--all"]),
+            ["-C", "/r", "--no-optional-locks", "log", "--all"])
+        XCTAssertEqual(
+            GitActivityLog.displayCommand(for:
+                GitClient.readOnlyArguments(["-C", "/r", "log", "--all"])),
+            "log --all")
+    }
+
+    func testReadOnlyArgumentsWithoutWorktreeArePrefixedAndIdempotent() {
+        XCTAssertEqual(
+            GitClient.readOnlyArguments(["rev-parse", "--show-toplevel"]),
+            ["--no-optional-locks", "rev-parse", "--show-toplevel"])
+        XCTAssertEqual(
+            GitActivityLog.displayCommand(for:
+                GitClient.readOnlyArguments(["rev-parse", "--show-toplevel"])),
+            "rev-parse --show-toplevel")
+        let guarded = ["-C", "/r", "--no-optional-locks", "status"]
+        XCTAssertEqual(GitClient.readOnlyArguments(guarded), guarded)
+    }
+
+    func testReadOnlyArgumentsDoNotMistakeAPathspecForTheGlobalFlag() {
+        XCTAssertEqual(
+            GitClient.readOnlyArguments(
+                ["-C", "/r", "diff", "--", "--no-optional-locks"]),
+            ["-C", "/r", "--no-optional-locks", "diff", "--",
+             "--no-optional-locks"])
+        XCTAssertEqual(
+            GitClient.readOnlyArguments(
+                ["check-ignore", "--", "--no-optional-locks"]),
+            ["--no-optional-locks", "check-ignore", "--",
+             "--no-optional-locks"])
+    }
+
     func testStderrTailHasCredentialsRedacted() {
         let log = GitActivityLog()
         let id = log.begin(command: "fetch")
@@ -133,6 +168,76 @@ final class GitActivityLogTests: XCTestCase {
         XCTAssertEqual(
             GitActivityLog.displayCommand(for: ["checkout", "main"]),
             "checkout main")
+    }
+
+    // MARK: - paste-safe shell commands
+
+    func testShellCommandLeavesSimpleArgumentsBare() {
+        XCTAssertEqual(
+            GitActivityLog.shellCommand(arguments: ["status", "--short"], worktree: "/repo"),
+            "git -C /repo status --short")
+    }
+
+    func testShellCommandQuotesSpaces() {
+        XCTAssertEqual(
+            GitActivityLog.shellCommand(
+                arguments: ["stash", "push", "-m", "wip: fix it"],
+                worktree: "/Users/Ada/My Repo"),
+            "git -C '/Users/Ada/My Repo' stash push -m 'wip: fix it'")
+    }
+
+    func testShellCommandEscapesApostrophes() {
+        XCTAssertEqual(
+            GitActivityLog.shellCommand(
+                arguments: ["checkout", "feature/it's-ready"],
+                worktree: "/Users/O'Brien/repo"),
+            "git -C '/Users/O'\\''Brien/repo' checkout 'feature/it'\\''s-ready'")
+    }
+
+    func testShellCommandQuotesDollarExpansions() {
+        XCTAssertEqual(
+            GitActivityLog.shellCommand(
+                arguments: ["stash", "push", "-m", "$HOME/${USER}"], worktree: "/repo"),
+            "git -C /repo stash push -m '$HOME/${USER}'")
+    }
+
+    func testShellCommandQuotesBacktickSubstitution() {
+        XCTAssertEqual(
+            GitActivityLog.shellCommand(
+                arguments: ["stash", "push", "-m", "`uname -a`"], worktree: "/repo"),
+            "git -C /repo stash push -m '`uname -a`'")
+    }
+
+    func testShellCommandPreservesEmbeddedNewlinesInsideQuotes() {
+        XCTAssertEqual(
+            GitActivityLog.shellCommand(
+                arguments: ["stash", "push", "-m", "line one\nline two"], worktree: "/repo"),
+            "git -C /repo stash push -m 'line one\nline two'")
+    }
+
+    func testShellCommandPreservesEmptyArguments() {
+        XCTAssertEqual(
+            GitActivityLog.shellCommand(
+                arguments: ["config", "user.name", ""], worktree: "/repo"),
+            "git -C /repo config user.name ''")
+    }
+
+    func testShellCommandRedactsAndQuotesURLCredentials() {
+        XCTAssertEqual(
+            GitActivityLog.shellCommand(
+                arguments: ["clone", "https://token123@github.com/a/b.git"], worktree: "/repo"),
+            "git -C /repo clone 'https://***@github.com/a/b.git'")
+    }
+
+    func testBeginWithArgumentsKeepsDisplayAndRedactedArgvSeparate() {
+        let log = GitActivityLog()
+        log.begin(arguments: ["-C", "/repo", "clone",
+                              "https://token123@github.com/a/b.git", "folder name"])
+
+        XCTAssertEqual(log.entries.first?.command,
+                       "clone https://***@github.com/a/b.git \"folder name\"")
+        XCTAssertEqual(log.entries.first?.arguments,
+                       ["clone", "https://***@github.com/a/b.git", "folder name"])
     }
 
     // MARK: - Duration formatting

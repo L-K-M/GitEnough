@@ -58,11 +58,21 @@ public enum ProcessRunner {
     /// pipes can't deadlock against a full buffer.
     public static func run(_ executable: URL,
                     _ arguments: [String],
-                    input: Data? = nil) throws -> Result {
+                    input: Data? = nil,
+                    environmentOverrides: [String: String] = [:],
+                    workingDirectory: URL? = nil) throws -> Result {
         _ = brokenPipesAreErrors
         let process = Process()
         process.executableURL = executable
         process.arguments = arguments
+        if !environmentOverrides.isEmpty {
+            var environment = ProcessInfo.processInfo.environment
+            environment.merge(environmentOverrides) { _, override in override }
+            process.environment = environment
+        }
+        if let workingDirectory {
+            process.currentDirectoryURL = workingDirectory
+        }
 
         let outPipe = Pipe()
         let errPipe = Pipe()

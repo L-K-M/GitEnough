@@ -70,4 +70,37 @@ final class GitShellEnvironmentTests: XCTestCase {
                              nvmVersions: [".cache", "v20.1.0"])
         XCTAssertTrue(path.hasSuffix(":" + home + "/.nvm/versions/node/v20.1.0/bin"))
     }
+
+    func testRepositoryRoutingEnvironmentIsRemoved() {
+        let unsafe = [
+            "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE",
+            "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+            "GIT_GRAFT_FILE", "GIT_SHALLOW_FILE", "GIT_REPLACE_REF_BASE",
+            "GIT_NAMESPACE", "GIT_CEILING_DIRECTORIES",
+            "GIT_DISCOVERY_ACROSS_FILESYSTEM", "GIT_CONFIG",
+            "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT",
+            "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0",
+            "GIT_LITERAL_PATHSPECS", "GIT_GLOB_PATHSPECS",
+            "GIT_NOGLOB_PATHSPECS", "GIT_ICASE_PATHSPECS",
+        ]
+        let input = Dictionary(uniqueKeysWithValues: unsafe.map { ($0, "hostile") })
+
+        let result = GitShell.sanitizedEnvironment(input)
+
+        XCTAssertTrue(result.isEmpty)
+    }
+
+    func testUserWideConfigurationAndAuthenticationEnvironmentIsPreserved() {
+        let input = [
+            "PATH": "/custom/bin:/usr/bin",
+            "HOME": home,
+            "GIT_CONFIG_GLOBAL": home + "/.gitconfig-work",
+            "GIT_CONFIG_SYSTEM": "/etc/gitconfig",
+            "GIT_SSH_COMMAND": "ssh -F ~/.ssh/work-config",
+            "SSH_AUTH_SOCK": "/tmp/agent.sock",
+            "HTTPS_PROXY": "http://localhost:8080",
+        ]
+
+        XCTAssertEqual(GitShell.sanitizedEnvironment(input), input)
+    }
 }

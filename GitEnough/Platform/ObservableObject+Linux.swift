@@ -48,6 +48,38 @@ public final class ObservableObjectPublisher {
             self.lock.unlock()
         }
     }
+
+    /// Combine's publisher hands each subscriber the published value, and this
+    /// one's value is `Void` — so call sites written against Combine spell the
+    /// closure `{ _ in … }`. Accepting that shape keeps them identical on both
+    /// platforms.
+    public func sink(_ body: @escaping (Void) -> Void) -> AnyCancellable {
+        sink { body(()) }
+    }
+
+    /// Combine's `receive(on:)`. Observers otherwise run on whichever thread
+    /// performed the write, and a subscriber that touches the UI needs the main
+    /// queue whether or not the publisher happened to be on it.
+    public func receive(on queue: DispatchQueue) -> ReceiveOn {
+        ReceiveOn(upstream: self, queue: queue)
+    }
+
+    /// The result of `receive(on:)`: not a publisher in its own right, just
+    /// enough of one to be subscribed to. It holds no subscription itself, so
+    /// the token `sink` returns is the upstream's and there is no extra
+    /// lifetime to manage.
+    public struct ReceiveOn {
+        fileprivate let upstream: ObservableObjectPublisher
+        fileprivate let queue: DispatchQueue
+
+        public func sink(_ body: @escaping () -> Void) -> AnyCancellable {
+            upstream.sink { queue.async(execute: body) }
+        }
+
+        public func sink(_ body: @escaping (Void) -> Void) -> AnyCancellable {
+            sink { body(()) }
+        }
+    }
 }
 
 /// A subscription token. Cancels on release, like Combine's.

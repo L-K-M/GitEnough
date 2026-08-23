@@ -95,7 +95,9 @@ final class HistoryPane {
         gtk_widget_set_size_request(box, -1, Int32(GraphMetrics.rowHeight))
 
         UI.append(box, GraphStrip.make(layout: viewModel.layout, row: row,
-                                       isHeadRow: commit.isHead, isDark: isDark))
+                                       isHeadRow: commit.isHead,
+                                       isUnpushed: viewModel.unpushedHashes.contains(commit.hash),
+                                       isDark: isDark))
 
         for decoration in commit.decorations {
             let chip = UI.label(decoration.name, dim: true)

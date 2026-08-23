@@ -1,25 +1,6 @@
 import SwiftUI
 import AppKit
 
-/// One row of the branch/merge graph: a row-height canvas sitting inside the
-/// commit row it belongs to, drawing the segments that start at that row.
-///
-/// This used to be a single Canvas sized to the whole history
-/// (`commitCount × rowHeight` tall). That layer overflows Core Animation's size
-/// limit on long histories and renders at wrong offsets (the "graph flows under
-/// the sidebar" glitch), and every selection change re-rasterized the whole
-/// thing. Per-row strips are realized lazily with the rows themselves, so only
-/// visible slices of the graph ever exist as layers.
-///
-/// Segments run from a row's center line to the next row's center line, so a
-/// strip's strokes spill half a row BELOW its frame — deliberately not clipped:
-/// the next row's strip picks up exactly where the spill ends, which tiles
-/// seamlessly, and later rows paint later, so nodes always sit on top of the
-/// tails flowing into them. One deliberate consequence of per-row painting: a
-/// passing lane's vertical now paints over the spilled tail of an unrelated
-/// curve from the row above (the old single canvas painted all curves over all
-/// verticals globally) — a sub-pixel crossing difference, and lanes read as
-/// continuous "in front" of joins passing under them.
 struct GraphStripView: View {
 
     let layout: GraphLayout
@@ -27,6 +8,9 @@ struct GraphStripView: View {
     let row: Int
     let isHeadRow: Bool
     let isSelected: Bool
+    /// True when this row's commit hasn't reached the upstream yet (what
+    /// `git push` would send) — its dot renders hollow instead of filled.
+    let isUnpushedRow: Bool
     /// True for the last row: its tail spill is clipped exactly at the row's
     /// bottom edge (what the old single canvas did at its bottom), so the
     /// "history continues below" stub stops at the list end instead of
@@ -53,7 +37,8 @@ struct GraphStripView: View {
 
     private var strip: some View {
         Canvas { context, _ in
-            let drawing = layout.drawing(row: row, isHeadRow: isHeadRow)
+            let drawing = layout.drawing(row: row, isHeadRow: isHeadRow,
+                                         isUnpushed: isUnpushedRow)
             if isSelected {
                 let rect = CGRect(x: 0, y: 0, width: drawing.width, height: drawing.height)
                 context.fill(Path(rect), with: .color(.accentColor.opacity(0.20)))
@@ -106,12 +91,23 @@ struct GraphStripView: View {
         let rect = CGRect(x: center.x - node.radius, y: center.y - node.radius,
                           width: node.radius * 2, height: node.radius * 2)
         let color = laneColor(node.colorIndex)
-        context.fill(Path(ellipseIn: rect), with: .color(color))
-        // Thin halo so the dot reads against overlapping lines.
-        context.stroke(Path(ellipseIn: rect.insetBy(dx: -1, dy: -1)),
-                       with: .color(Color(nsColor: .textBackgroundColor).opacity(0.6)),
-                       lineWidth: 1)
+        if node.isUnpushed {
+            // Unpushed commits render hollow — "not on the remote yet" at a
+            // glance. The interior is filled with the list background so lane
+            // lines passing into the dot don't show through the ring.
+            context.fill(Path(ellipseIn: rect),
+                         with: .color(Color(nsColor: .textBackgroundColor)))
+            context.stroke(Path(ellipseIn: rect.insetBy(dx: 0.75, dy: 0.75)),
+                           with: .color(color), lineWidth: 1.5)
+        } else {
+            context.fill(Path(ellipseIn: rect), with: .color(color))
+            // Thin halo so the dot reads against overlapping lines.
+            context.stroke(Path(ellipseIn: rect.insetBy(dx: -1, dy: -1)),
+                           with: .color(Color(nsColor: .textBackgroundColor).opacity(0.6)),
+                           lineWidth: 1)
+        }
         if node.isHead {
+            // HEAD gets the IntelliJ-style double ring.
             context.stroke(Path(ellipseIn: rect.insetBy(dx: -3.5, dy: -3.5)),
                            with: .color(color), lineWidth: 2)
         }

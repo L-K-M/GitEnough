@@ -36,6 +36,11 @@ public struct GraphRowDrawing: Equatable {
         public let colorIndex: Int
         /// HEAD gets the IntelliJ-style double ring.
         public let isHead: Bool
+        /// The commit hasn't reached the upstream yet (what `git push` would
+        /// send). Renders hollow — "not on the remote" at a glance — with the
+        /// interior filled in the list's own background so lane lines passing
+        /// behind it don't show through the ring.
+        public let isUnpushed: Bool
     }
 
     public let width: Double
@@ -53,7 +58,8 @@ extension GraphLayout {
     /// The drawing for one row. Out-of-range rows come back empty rather than
     /// trapping — the list and the layout are refreshed independently, so a
     /// stale row index is a normal transient, not a bug.
-    public func drawing(row: Int, isHeadRow: Bool) -> GraphRowDrawing {
+    public func drawing(row: Int, isHeadRow: Bool,
+                        isUnpushed: Bool = false) -> GraphRowDrawing {
         let laneWidth = GraphMetrics.laneWidth(for: columnCount)
         let width = GraphMetrics.graphWidth(for: columnCount)
         let rowHeight = Double(GraphMetrics.rowHeight)
@@ -82,7 +88,8 @@ extension GraphLayout {
                 center: point(absoluteRow: layoutNode.row, column: layoutNode.column),
                 radius: Double(GraphMetrics.nodeRadius(forLaneWidth: laneWidth)),
                 colorIndex: layoutNode.colorIndex,
-                isHead: isHeadRow)
+                isHead: isHeadRow,
+                isUnpushed: isUnpushed)
         }
 
         return GraphRowDrawing(width: Double(width), height: rowHeight,

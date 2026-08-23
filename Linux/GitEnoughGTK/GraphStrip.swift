@@ -40,8 +40,10 @@ enum GraphStrip {
     static func make(layout: GraphLayout,
                      row: Int,
                      isHeadRow: Bool,
+                     isUnpushed: Bool,
                      isDark: Bool) -> UnsafeMutablePointer<GtkWidget> {
-        let drawing = layout.drawing(row: row, isHeadRow: isHeadRow)
+        let drawing = layout.drawing(row: row, isHeadRow: isHeadRow,
+                                     isUnpushed: isUnpushed)
         // Row -1 comes back empty, which is exactly right for the first row:
         // nothing flows into it from above.
         let incoming = layout.drawing(row: row - 1, isHeadRow: false)
@@ -80,19 +82,29 @@ private func paintGraphStrip(_ context: GraphStripContext, into cairo: OpaquePoi
                  isDark: context.isDark, into: cairo)
 
     guard let node = context.drawing.node else { return }
-    setColor(cairo, node.colorIndex, isDark: context.isDark)
-    circle(cairo, node.center, node.radius)
-    cairo_fill(cairo)
-    // A thin halo in the row's own background colour, so the dot reads
-    // against any line passing behind it.
-    cairo_set_line_width(cairo, 1)
-    if context.isDark {
-        cairo_set_source_rgba(cairo, 0.12, 0.12, 0.12, 0.6)
+    let background: (r: Double, g: Double, b: Double) =
+        context.isDark ? (0.12, 0.12, 0.12) : (1, 1, 1)
+    if node.isUnpushed {
+        // Hollow: the commit hasn't reached the upstream yet. The interior is
+        // the list background so lane lines passing behind don't show through.
+        cairo_set_source_rgb(cairo, background.r, background.g, background.b)
+        circle(cairo, node.center, node.radius)
+        cairo_fill(cairo)
+        setColor(cairo, node.colorIndex, isDark: context.isDark)
+        cairo_set_line_width(cairo, 1.5)
+        circle(cairo, node.center, node.radius - 0.75)
+        cairo_stroke(cairo)
     } else {
-        cairo_set_source_rgba(cairo, 1, 1, 1, 0.6)
+        setColor(cairo, node.colorIndex, isDark: context.isDark)
+        circle(cairo, node.center, node.radius)
+        cairo_fill(cairo)
+        // A thin halo in the row's own background colour, so the dot reads
+        // against any line passing behind it.
+        cairo_set_line_width(cairo, 1)
+        cairo_set_source_rgba(cairo, background.r, background.g, background.b, 0.6)
+        circle(cairo, node.center, node.radius + 1)
+        cairo_stroke(cairo)
     }
-    circle(cairo, node.center, node.radius + 1)
-    cairo_stroke(cairo)
     if node.isHead {
         // HEAD gets the IntelliJ-style double ring.
         setColor(cairo, node.colorIndex, isDark: context.isDark)
