@@ -1,6 +1,3 @@
-import CGtk
-import GitEnough
+import Foundation
 
-// Placeholder entry point; replaced once the window exists.
-let status = GitEnoughApplication().run()
-exit(status)
+exit(GitEnoughApplication().run())

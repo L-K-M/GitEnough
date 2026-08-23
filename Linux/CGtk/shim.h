@@ -4,6 +4,13 @@
 #include <gtk/gtk.h>
 #include <glib-unix.h>
 
+// GLib's fundamental type IDs are macros (G_TYPE_MAKE_FUNDAMENTAL(...)), which
+// Swift can't import. Re-exposing them as inline functions keeps the magic
+// numbers in GLib's headers where they belong.
+static inline GType gitenough_type_string(void)  { return G_TYPE_STRING; }
+static inline GType gitenough_type_boolean(void) { return G_TYPE_BOOLEAN; }
+static inline GType gitenough_type_int(void)     { return G_TYPE_INT; }
+
 // libdispatch declares these only in its private headers, but exports them from
 // the shared library: they are how CoreFoundation drains the main queue from a
 // foreign run loop, and how GitEnough's GTK front end drains it from GLib's.

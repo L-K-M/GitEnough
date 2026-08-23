@@ -34,8 +34,8 @@ public struct GraphLayout: Equatable {
         public let kind: Kind
     }
 
-    private(set) var nodes: [Node] = []
-    private(set) var segments: [Segment] = []
+    public private(set) var nodes: [Node] = []
+    public private(set) var segments: [Segment] = []
     /// Segments bucketed by start row (every segment spans exactly one row:
     /// `toRow == fromRow + 1`, which reaches `commitCount` for folds on the
     /// last row of a truncated history). The UI draws the graph as per-row
@@ -45,8 +45,8 @@ public struct GraphLayout: Equatable {
     /// 500-commit graph is 13,500 pt tall, 27,000 px at 2×) and misrenders:
     /// content at wrong offsets, e.g. the graph appearing under the sidebar
     /// instead of beside the commit list.
-    private(set) var segmentsByRow: [[Segment]] = []
-    private(set) var columnCount: Int = 0
+    public private(set) var segmentsByRow: [[Segment]] = []
+    public private(set) var columnCount: Int = 0
 
     public static let empty = GraphLayout()
 

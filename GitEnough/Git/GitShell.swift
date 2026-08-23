@@ -34,7 +34,7 @@ public final class GitShell {
     public static let shared = GitShell()
 
     /// Resolved path to a working git binary, or nil when Xcode CLT is missing.
-    private(set) var gitURL: URL?
+    public private(set) var gitURL: URL?
 
     private init() {
         gitURL = Self.findGit()

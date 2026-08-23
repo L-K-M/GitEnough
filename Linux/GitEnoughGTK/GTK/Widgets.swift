@@ -63,6 +63,10 @@ enum UI {
         if ellipsize {
             gtk_label_set_ellipsize(label, PANGO_ELLIPSIZE_END)
             gtk_label_set_single_line_mode(label, 1)
+            // An ellipsizing label still asks for its full natural width unless
+            // it is told it may shrink, which pushes the whole pane wider than
+            // its allocation and clips whatever sits at the edges.
+            gtk_label_set_max_width_chars(label, 1)
         }
         if selectable { gtk_label_set_selectable(label, 1) }
         if dim { gtk_widget_add_css_class(widget, "dim-label") }

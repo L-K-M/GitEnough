@@ -23,10 +23,10 @@ public final class GitActivityLog {
         /// (the leading `-C <worktree>` is stripped; the repo is implied).
         public let command: String
         public let startedAt: Date
-        private(set) var finishedAt: Date?
-        private(set) var exitCode: Int32?
+        public private(set) var finishedAt: Date?
+        public private(set) var exitCode: Int32?
         /// Last chunk of stderr — hook diagnostics and git's error messages.
-        private(set) var stderrTail: String?
+        public private(set) var stderrTail: String?
 
         public var isRunning: Bool { finishedAt == nil }
         /// False while the entry is still running — check `isRunning` first.

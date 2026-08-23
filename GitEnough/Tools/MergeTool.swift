@@ -98,7 +98,7 @@ public struct MergeTool: Identifiable, Hashable {
     ///
     /// Main-thread only: on macOS detection touches NSWorkspace, and both
     /// writers (lazy init, rescan) and readers (views) live on the main thread.
-    private(set) static var installed: [MergeTool] = detectInstalled()
+    public private(set) static var installed: [MergeTool] = detectInstalled()
 
     /// Posted on the main thread whenever `installed` changes, so open
     /// conflict rows refresh instead of showing stale tool availability.
