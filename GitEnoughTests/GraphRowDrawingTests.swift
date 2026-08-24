@@ -248,9 +248,9 @@ final class GraphLanePlacementTests: XCTestCase {
         XCTAssertGreaterThan(layout.columnCount, GraphMetrics.maxUncompressedLanes,
                              "fixture never reaches the crowded regime")
 
-        // Every row places its node on its column's one true centre, and every
-        // segment endpoint lands there too — including endpoints that belong to
-        // the row below, where a row-dependent width would show up first.
+        // Every row places its node on its column's one true centre — a
+        // row-dependent width would slide it sideways as the density of the
+        // graph around it changed. Endpoints are the loop after this one.
         for (row, node) in layout.nodes.enumerated() {
             let drawing = layout.drawing(row: row, isHeadRow: false)
             let expected = Double(GraphMetrics.laneCenter(node.column,
