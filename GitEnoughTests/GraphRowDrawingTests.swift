@@ -185,7 +185,15 @@ final class GraphLanePlacementTests: XCTestCase {
         // a quiet graph, no matter what the busiest row does.
         for count in [20, 54, 200] {
             let full = GraphMetrics.uncompressedLanes(for: count)
-            XCTAssertGreaterThanOrEqual(full, 3, "\(count) lanes left almost nothing at full width")
+            // The prefix falls as the graph gets busier but never past
+            // `(1 - crowdedShare) · maxUncompressedLanes` — that is its limit
+            // as the lane count grows, approached from above. Derived rather
+            // than written out so tuning the two constants moves the bound
+            // with them instead of failing this test.
+            let floor = Int((1 - GraphMetrics.crowdedShare)
+                * CGFloat(GraphMetrics.maxUncompressedLanes))
+            XCTAssertGreaterThanOrEqual(full, floor,
+                                        "\(count) lanes left almost nothing at full width")
             for column in 0..<full {
                 XCTAssertEqual(GraphMetrics.laneCenter(column, columnCount: count),
                                (CGFloat(column) + 0.5) * GraphMetrics.laneWidth)
@@ -204,6 +212,24 @@ final class GraphLanePlacementTests: XCTestCase {
             XCTAssertGreaterThanOrEqual(GraphMetrics.crowdedSpacing(for: count),
                                         even * GraphMetrics.crowdedShare - 0.001,
                                         "\(count) lanes squeezed the crowd too hard")
+        }
+    }
+
+    func testADotGrowsIntoWhateverItsOwnLaneHas() {
+        // `spacing(around:)` is what sizes the dots, so it has to agree with
+        // the placement either side of the prefix: full width in the front,
+        // the crowd's share behind it. Nothing else would notice it being
+        // inverted — the lanes would still be drawn in the right places, just
+        // with the wrong dots on them.
+        for count in [1, 12, 13, 20, 54, 200] {
+            XCTAssertEqual(GraphMetrics.spacing(around: 0, columnCount: count),
+                           GraphMetrics.laneWidth,
+                           "\(count) lanes pinched the first dot")
+            let prefix = GraphMetrics.uncompressedLanes(for: count)
+            guard prefix < count else { continue }
+            XCTAssertEqual(GraphMetrics.spacing(around: count - 1, columnCount: count),
+                           GraphMetrics.crowdedSpacing(for: count),
+                           "\(count) lanes mis-sized the last dot")
         }
     }
 
