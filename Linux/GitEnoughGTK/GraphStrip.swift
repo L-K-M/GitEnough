@@ -14,22 +14,17 @@ import GitEnough
 /// its allocation, which would leave the top half of every row blank and the
 /// lanes visibly broken above each dot.
 ///
-/// So each strip paints two rows' worth of geometry: the previous row's
-/// segments shifted up by one row height (the incoming half), then its own.
-/// The result is identical to what macOS draws — the seam just moves from
-/// between the widgets to inside them.
+/// `GraphRowDrawing` already includes the half flowing in from the row above,
+/// so a strip is self-contained and it does not matter that GTK clips a widget
+/// to its allocation.
 /// What one strip needs at paint time, boxed for the C draw callback. At file
 /// scope because a C function pointer can't be formed from a closure that
 /// carries enclosing type context.
 private final class GraphStripContext {
     let drawing: GraphRowDrawing
-    /// The row above, painted shifted up by one row height so its lower half
-    /// lands in this row.
-    let incoming: GraphRowDrawing
     let isDark: Bool
-    init(drawing: GraphRowDrawing, incoming: GraphRowDrawing, isDark: Bool) {
+    init(drawing: GraphRowDrawing, isDark: Bool) {
         self.drawing = drawing
-        self.incoming = incoming
         self.isDark = isDark
     }
 }
@@ -44,9 +39,6 @@ enum GraphStrip {
                      isDark: Bool) -> UnsafeMutablePointer<GtkWidget> {
         let drawing = layout.drawing(row: row, isHeadRow: isHeadRow,
                                      isUnpushed: isUnpushed)
-        // Row -1 comes back empty, which is exactly right for the first row:
-        // nothing flows into it from above.
-        let incoming = layout.drawing(row: row - 1, isHeadRow: false)
         let area = require(gtk_drawing_area_new(), "drawing area")
         gtk_drawing_area_set_content_width(cast(area, to: GtkDrawingArea.self),
                                            Int32(drawing.width.rounded()))
@@ -56,7 +48,7 @@ enum GraphStrip {
         // through GraphMetrics.
         gtk_widget_set_valign(area, GTK_ALIGN_START)
 
-        let context = GraphStripContext(drawing: drawing, incoming: incoming, isDark: isDark)
+        let context = GraphStripContext(drawing: drawing, isDark: isDark)
         gtk_drawing_area_set_draw_func(cast(area, to: GtkDrawingArea.self), { _, cairo, _, _, data in
             guard let cairo, let data else { return }
             paintGraphStrip(Unmanaged<GraphStripContext>.fromOpaque(data).takeUnretainedValue(), into: cairo)
@@ -73,13 +65,8 @@ private func paintGraphStrip(_ context: GraphStripContext, into cairo: OpaquePoi
     cairo_set_line_width(cairo, GraphRowDrawing.lineWidth)
     cairo_set_line_cap(cairo, CAIRO_LINE_CAP_ROUND)
 
-    // The half that flows in from the row above, then this row's own — same
-    // order macOS paints them in, so a join curve still lands on top of the
-    // lane it merges into rather than under it.
-    paintStrokes(context.incoming.strokes, offsetY: -context.drawing.height,
-                 isDark: context.isDark, into: cairo)
-    paintStrokes(context.drawing.strokes, offsetY: 0,
-                 isDark: context.isDark, into: cairo)
+    // Already includes the half flowing in from the row above, in paint order.
+    paintStrokes(context.drawing.strokes, isDark: context.isDark, into: cairo)
 
     guard let node = context.drawing.node else { return }
     let background: (r: Double, g: Double, b: Double) =
@@ -115,17 +102,17 @@ private func paintGraphStrip(_ context: GraphStripContext, into cairo: OpaquePoi
 }
 
 private func paintStrokes(_ strokes: [GraphRowDrawing.Stroke],
-                          offsetY: Double, isDark: Bool, into cairo: OpaquePointer) {
+                          isDark: Bool, into cairo: OpaquePointer) {
     for stroke in strokes {
         setColor(cairo, stroke.colorIndex, isDark: isDark)
         switch stroke.shape {
         case .line(let from, let to):
-            cairo_move_to(cairo, from.x, from.y + offsetY)
-            cairo_line_to(cairo, to.x, to.y + offsetY)
+            cairo_move_to(cairo, from.x, from.y)
+            cairo_line_to(cairo, to.x, to.y)
         case .curve(let from, let to, let control1, let control2):
-            cairo_move_to(cairo, from.x, from.y + offsetY)
-            cairo_curve_to(cairo, control1.x, control1.y + offsetY,
-                           control2.x, control2.y + offsetY, to.x, to.y + offsetY)
+            cairo_move_to(cairo, from.x, from.y)
+            cairo_curve_to(cairo, control1.x, control1.y,
+                           control2.x, control2.y, to.x, to.y)
         }
         cairo_stroke(cairo)
     }

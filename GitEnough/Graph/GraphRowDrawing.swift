@@ -70,9 +70,23 @@ extension GraphLayout {
                 y: Double(absoluteRow - row) * rowHeight + rowHeight / 2)
         }
 
+        // Each segment runs from one row's centre line to the next one's, so
+        // half of every segment belongs to the row *below* the one that owns
+        // it. A strip therefore paints two rows' worth: the row above's
+        // segments — which `point` places in this row's top half, because it
+        // measures from `row` — and then its own.
+        //
+        // The alternative is to let a strip draw outside its own frame and
+        // rely on the two tiling together. That worked until a host that clips
+        // to the frame got between them, and the lanes broke into dashes with
+        // no code near the graph having changed. Painting the incoming half
+        // makes a strip self-contained, so clipping is no longer load-bearing.
         var strokes: [GraphRowDrawing.Stroke] = []
-        if row >= 0, row < segmentsByRow.count {
-            let segments = segmentsByRow[row]
+        for source in [row - 1, row] where source >= 0 && source < segmentsByRow.count {
+            let segments = segmentsByRow[source]
+            // Verticals before curves: a join curve must land *on* the lane it
+            // merges into, and painting the lane afterwards would overpaint the
+            // endpoint and make the connection look severed.
             for segment in segments where segment.kind == .vertical {
                 strokes.append(stroke(for: segment, rowHeight: rowHeight, point: point))
             }

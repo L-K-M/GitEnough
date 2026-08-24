@@ -50,9 +50,12 @@ final class GraphRowDrawingTests: XCTestCase {
 
     // MARK: - Paint order
 
-    func testVerticalsArePaintedBeforeCurves() {
+    func testVerticalsArePaintedBeforeCurvesWithinEachHalf() {
         // A join curve has to land *on* the lane it merges into; painting the
-        // lane afterwards would overpaint the endpoint and sever the join.
+        // lane afterwards would overpaint the endpoint and sever the join. A
+        // strip paints two groups — the half flowing in from the row above,
+        // then its own — and each is ordered verticals-first, so a curve may be
+        // followed by a vertical exactly once: at the boundary between them.
         let layout = GraphLayout.layout(commits: [
             commit("M", parents: ["a", "b"]),
             commit("a", parents: ["base"]),
@@ -60,13 +63,49 @@ final class GraphRowDrawingTests: XCTestCase {
             commit("base"),
         ])
         for row in 0..<4 {
-            let kinds = layout.drawing(row: row, isHeadRow: false).strokes.map { stroke -> Bool in
+            let isLine = layout.drawing(row: row, isHeadRow: false).strokes.map { stroke -> Bool in
                 if case .line = stroke.shape { return true } else { return false }
             }
-            let lastLine = kinds.lastIndex(of: true) ?? -1
-            let firstCurve = kinds.firstIndex(of: false) ?? kinds.count
-            XCTAssertLessThan(lastLine, firstCurve,
-                              "row \(row) paints a curve before a vertical")
+            let curveThenVertical = zip(isLine, isLine.dropFirst())
+                .filter { !$0.0 && $0.1 }
+                .count
+            XCTAssertLessThanOrEqual(curveThenVertical, 1,
+                                     "row \(row) reorders strokes within a half")
+        }
+    }
+
+    /// The regression this guards: a strip used to draw only its own segments
+    /// and let them spill below its frame, relying on the next strip tiling
+    /// underneath. Put a host that clips to the frame between them — which is
+    /// what both a SwiftUI row and a GTK widget do — and every lane loses its
+    /// top half, turning continuous lines into dashes.
+    func testALaneIsCoveredTopToBottomSoRowsNeedNoSpill() throws {
+        let rowHeight = Double(GraphMetrics.rowHeight)
+        // Row 1 of a linear history: a lane passes straight through it.
+        let drawing = linear.drawing(row: 1, isHeadRow: false)
+
+        func covers(_ y: Double) -> Bool {
+            drawing.strokes.contains { stroke in
+                guard case .line(let from, let to) = stroke.shape else { return false }
+                return min(from.y, to.y) <= y && y <= max(from.y, to.y)
+            }
+        }
+        XCTAssertTrue(covers(0.5), "nothing drawn at the row's top edge — the gap is back")
+        XCTAssertTrue(covers(rowHeight / 2), "nothing drawn at the row's centre")
+        XCTAssertTrue(covers(rowHeight - 0.5), "nothing drawn at the row's bottom edge")
+    }
+
+    func testTheFirstRowHasNothingFlowingIntoIt() {
+        // Row 0 has no row above, so its strokes start at its own centre line
+        // and no stub pokes above the topmost dot.
+        let drawing = linear.drawing(row: 0, isHeadRow: false)
+        for stroke in drawing.strokes {
+            switch stroke.shape {
+            case .line(let from, let to):
+                XCTAssertGreaterThanOrEqual(min(from.y, to.y), Double(GraphMetrics.rowHeight) / 2)
+            case .curve(let from, let to, _, _):
+                XCTAssertGreaterThanOrEqual(min(from.y, to.y), Double(GraphMetrics.rowHeight) / 2)
+            }
         }
     }
 
