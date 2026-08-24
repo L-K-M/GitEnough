@@ -56,11 +56,18 @@ public enum GraphMetrics {
         let floorSpacing = crowdedShare * even
         // K · laneWidth + (n − K) · floorSpacing = maxGraphWidth
         let headroom = laneWidth - floorSpacing
-        // Unreachable while the constants hold — `count > maxUncompressedLanes`
-        // already forces a floor below `laneWidth`. If they ever drift, no
-        // headroom means every lane fits at full width, so every lane gets it;
-        // returning nothing here would spread them past the column instead.
-        guard headroom > 0 else { return count }
+        // Unreachable unless `crowdedShare` exceeds 1, which would mean
+        // guaranteeing the crowd more than an even squeeze gives everyone: no
+        // headroom says `count · laneWidth ≤ crowdedShare · maxGraphWidth`, and
+        // `maxGraphWidth` is `maxUncompressedLanes · laneWidth`, so a share of
+        // 1 or less puts `count` at or below `maxUncompressedLanes` — which the
+        // guard above already ruled out. It stays because the division wants a
+        // positive divisor, and no prefix is the answer that degrades safely:
+        // it spends the whole budget on an even squeeze, the behaviour this
+        // function widens the front of. A full-width prefix would be the wrong
+        // answer there, since that regime is exactly the one where `count`
+        // lanes no longer fit at full width.
+        guard headroom > 0 else { return 0 }
         let prefix = (maxGraphWidth - CGFloat(count) * floorSpacing) / headroom
         return min(count, max(0, Int(prefix)))
     }
