@@ -86,6 +86,14 @@ public enum GraphMetrics {
     /// Depends only on the column, never on the row, so a lane never moves
     /// sideways between rows however the graph's density changes around it.
     public static func laneCenter(_ column: Int, columnCount: Int) -> CGFloat {
+        // `GraphLayout` counts its columns as `lanes.count` and draws columns
+        // that index into that same array, so this holds by construction. It's
+        // worth pinning anyway: placement used to overshoot in proportion to
+        // the column, and now it overshoots by whatever the crowd's spacing
+        // happens to be, which is a stranger artifact to work back from than
+        // an assertion at the point the bad column was handed over.
+        assert(column >= 0 && column < max(1, columnCount),
+               "column \(column) is outside a graph of \(columnCount) lanes")
         let prefix = uncompressedLanes(for: columnCount)
         if column < prefix {
             return (CGFloat(column) + 0.5) * laneWidth
