@@ -30,6 +30,10 @@ public enum GraphMetrics {
         CGFloat(max(1, columnCount)) * laneWidth(for: columnCount)
     }
 
+    /// The share of an even squeeze the crowded lanes are guaranteed to keep —
+    /// the dial for the trade between a readable front and a readable back.
+    static let crowdedShare: CGFloat = 0.7
+
     /// How many lanes keep their full spacing before the rest are squeezed.
     ///
     /// Squeezing every lane equally means one crowded stretch sets the spacing
@@ -45,10 +49,6 @@ public enum GraphMetrics {
     /// `K` is the largest prefix that still leaves the remaining lanes at least
     /// `crowdedShare` of the spacing they would have had under an even squeeze,
     /// so widening the front never collapses the back.
-    /// The share of an even squeeze the crowded lanes are guaranteed to keep.
-    /// The dial for the trade between a readable front and a readable back.
-    static let crowdedShare: CGFloat = 0.7
-
     static func uncompressedLanes(for columnCount: Int) -> Int {
         let count = max(1, columnCount)
         guard count > maxUncompressedLanes else { return count }
