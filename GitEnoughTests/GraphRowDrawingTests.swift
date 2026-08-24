@@ -161,3 +161,75 @@ final class GraphRowDrawingTests: XCTestCase {
         XCTAssertEqual(rgb(1, 1, 1), [1, 0, 0], "hue wraps at 1")
     }
 }
+
+/// Lane placement across the graph's width. A crowded stretch must not set the
+/// spacing for rows that only draw a lane or two — those are the rows people
+/// read most, and they were being squeezed to match the busiest merge in the
+/// history.
+final class GraphLanePlacementTests: XCTestCase {
+
+    func testGraphsWithinTheWidthBudgetAreEvenlySpaced() {
+        // Nothing changes until lanes outgrow the column.
+        for count in 1...GraphMetrics.maxUncompressedLanes {
+            for column in 0..<count {
+                XCTAssertEqual(GraphMetrics.laneCentre(column, columnCount: count),
+                               (CGFloat(column) + 0.5) * GraphMetrics.laneWidth,
+                               "column \(column) of \(count)")
+            }
+        }
+    }
+
+    func testTheFirstLanesKeepFullSpacingHoweverCrowdedTheGraphGets() {
+        // The complaint this fixes: a 54-lane history drew its trunk-only rows
+        // at 3.6pt. The low lanes now keep the same spacing they would have in
+        // a quiet graph, no matter what the busiest row does.
+        for count in [20, 54, 200] {
+            let full = GraphMetrics.uncompressedLanes(for: count)
+            XCTAssertGreaterThanOrEqual(full, 3, "\(count) lanes left almost nothing at full width")
+            for column in 0..<full {
+                XCTAssertEqual(GraphMetrics.laneCentre(column, columnCount: count),
+                               (CGFloat(column) + 0.5) * GraphMetrics.laneWidth)
+            }
+        }
+    }
+
+    func testTheCrowdKeepsMostOfTheSpacingAnEvenSqueezeWouldGiveIt() {
+        // Widening the front is paid for out of the back, so the back has a
+        // floor — otherwise a busy graph would trade one unreadable region for
+        // another.
+        for count in [13, 20, 54, 200] {
+            let even = GraphMetrics.laneWidth(for: count)
+            XCTAssertGreaterThanOrEqual(GraphMetrics.crowdedSpacing(for: count), even * 0.6,
+                                        "\(count) lanes squeezed the crowd too hard")
+        }
+    }
+
+    func testLanesStayInsideTheColumnAndInOrder() {
+        for count in [1, 3, 12, 13, 20, 54, 200] {
+            var previous = -CGFloat.greatestFiniteMagnitude
+            for column in 0..<count {
+                let centre = GraphMetrics.laneCentre(column, columnCount: count)
+                XCTAssertGreaterThan(centre, previous, "column \(column) of \(count) went backwards")
+                XCTAssertLessThanOrEqual(centre, GraphMetrics.maxGraphWidth,
+                                         "column \(column) of \(count) escaped the column")
+                previous = centre
+            }
+        }
+    }
+
+    func testALanesPositionNeverDependsOnTheRow() {
+        // The reason placement is a function of the column alone: anything
+        // row-dependent slides a lane sideways in proportion to its column as
+        // the graph's density changes around it.
+        let layout = GraphLayout.layout(commits: (0..<40).map { index in
+            Commit(hash: "c\(index)",
+                   parents: index == 39 ? [] : ["c\(index + 1)"],
+                   author: "A", email: "a@example.com", date: nil,
+                   subject: "c\(index)", decorations: [])
+        })
+        let centres = (0..<layout.nodes.count).compactMap {
+            layout.drawing(row: $0, isHeadRow: false).node?.center.x
+        }
+        XCTAssertEqual(Set(centres).count, 1, "the trunk drifted between rows")
+    }
+}
