@@ -28,6 +28,12 @@ final class HistoryPane {
         self.viewModel = viewModel
 
         listBox = UI.listBox()
+        // A commit row has to be exactly GraphMetrics.rowHeight tall: the lane
+        // segments are computed against that height, and a themed row's padding
+        // pushes consecutive strips apart, breaking every lane into dashes with
+        // a blank band between rows. Adwaita adds 2px top and bottom.
+        UI.addClass(listBox, "commit-list")
+        UI.applyStyle(".commit-list > row { padding: 0; min-height: 0; }")
         // Two labels rather than one with a newline: an ellipsizing label is in
         // single-line mode, which renders the newline as a visible glyph.
         detailSubject = UI.label("", bold: true, ellipsize: true, selectable: true)

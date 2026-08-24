@@ -147,4 +147,18 @@ enum UI {
     static func addClass(_ widget: UnsafeMutablePointer<GtkWidget>, _ name: String) {
         gtk_widget_add_css_class(widget, name)
     }
+
+    /// Installs a stylesheet for the whole display, at application priority so
+    /// it overrides the theme's own rules but still loses to the user's.
+    /// Reserved for the few places a theme's metrics would break a layout the
+    /// app has to control exactly — see the history list's row padding.
+    static func applyStyle(_ css: String) {
+        let provider = require(gtk_css_provider_new(), "css provider")
+        gtk_css_provider_load_from_string(provider, css)
+        if let display = gdk_display_get_default() {
+            gtk_style_context_add_provider_for_display(
+                display, opaque(provider),
+                UInt32(GTK_STYLE_PROVIDER_PRIORITY_APPLICATION))
+        }
+    }
 }
