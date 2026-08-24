@@ -45,15 +45,22 @@ public enum GraphMetrics {
     /// `K` is the largest prefix that still leaves the remaining lanes at least
     /// `crowdedShare` of the spacing they would have had under an even squeeze,
     /// so widening the front never collapses the back.
-    static func uncompressedLanes(for columnCount: Int,
-                                  crowdedShare: CGFloat = 0.7) -> Int {
+    /// The share of an even squeeze the crowded lanes are guaranteed to keep.
+    /// The dial for the trade between a readable front and a readable back.
+    static let crowdedShare: CGFloat = 0.7
+
+    static func uncompressedLanes(for columnCount: Int) -> Int {
         let count = max(1, columnCount)
         guard count > maxUncompressedLanes else { return count }
         let even = maxGraphWidth / CGFloat(count)
         let floorSpacing = crowdedShare * even
         // K · laneWidth + (n − K) · floorSpacing = maxGraphWidth
         let headroom = laneWidth - floorSpacing
-        guard headroom > 0 else { return 0 }
+        // Unreachable while the constants hold — `count > maxUncompressedLanes`
+        // already forces a floor below `laneWidth`. If they ever drift, no
+        // headroom means every lane fits at full width, so every lane gets it;
+        // returning nothing here would spread them past the column instead.
+        guard headroom > 0 else { return count }
         let prefix = (maxGraphWidth - CGFloat(count) * floorSpacing) / headroom
         return min(count, max(0, Int(prefix)))
     }

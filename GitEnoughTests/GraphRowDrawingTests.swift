@@ -199,7 +199,10 @@ final class GraphLanePlacementTests: XCTestCase {
         // another.
         for count in [13, 20, 54, 200] {
             let even = GraphMetrics.laneWidth(for: count)
-            XCTAssertGreaterThanOrEqual(GraphMetrics.crowdedSpacing(for: count), even * 0.6,
+            // The prefix truncates down and the crowd's spacing falls as the
+            // prefix grows, so the floor holds exactly rather than approximately.
+            XCTAssertGreaterThanOrEqual(GraphMetrics.crowdedSpacing(for: count),
+                                        even * GraphMetrics.crowdedShare - 0.001,
                                         "\(count) lanes squeezed the crowd too hard")
         }
     }
@@ -218,18 +221,67 @@ final class GraphLanePlacementTests: XCTestCase {
     }
 
     func testALanesPositionNeverDependsOnTheRow() {
-        // The reason placement is a function of the column alone: anything
-        // row-dependent slides a lane sideways in proportion to its column as
-        // the graph's density changes around it.
-        let layout = GraphLayout.layout(commits: (0..<40).map { index in
-            Commit(hash: "c\(index)",
-                   parents: index == 39 ? [] : ["c\(index + 1)"],
-                   author: "A", email: "a@example.com", date: nil,
-                   subject: "c\(index)", decorations: [])
-        })
-        let centres = (0..<layout.nodes.count).compactMap {
-            layout.drawing(row: $0, isHeadRow: false).node?.center.x
+        // The invariant the whole design rests on: placement is a function of
+        // the column alone. Anything row-dependent slides a lane sideways in
+        // proportion to its column as the density changes around it, which is
+        // why the spacing can't simply track each row's lane count.
+        //
+        // The fixture has to vary in density or it proves nothing — a
+        // single-lane chain gives a constant x under any formula. This one fans
+        // out past the width budget and merges back, so rows differ in how many
+        // lanes they carry and the crowded placement is exercised too.
+        let branchCount = 20
+        var commits = [Commit(hash: "merge",
+                              parents: (0..<branchCount).map { "b\($0)" },
+                              author: "A", email: "a@example.com", date: nil,
+                              subject: "merge", decorations: [])]
+        commits += (0..<branchCount).map { index in
+            Commit(hash: "b\(index)", parents: ["base"], author: "A",
+                   email: "a@example.com", date: nil,
+                   subject: "b\(index)", decorations: [])
         }
-        XCTAssertEqual(Set(centres).count, 1, "the trunk drifted between rows")
+        commits.append(Commit(hash: "base", parents: [], author: "A",
+                              email: "a@example.com", date: nil,
+                              subject: "base", decorations: []))
+
+        let layout = GraphLayout.layout(commits: commits)
+        XCTAssertGreaterThan(layout.columnCount, GraphMetrics.maxUncompressedLanes,
+                             "fixture never reaches the crowded regime")
+
+        // Every row places its node on its column's one true centre, and every
+        // segment endpoint lands there too — including endpoints that belong to
+        // the row below, where a row-dependent width would show up first.
+        for (row, node) in layout.nodes.enumerated() {
+            let drawing = layout.drawing(row: row, isHeadRow: false)
+            let expected = Double(GraphMetrics.laneCentre(node.column,
+                                                          columnCount: layout.columnCount))
+            XCTAssertEqual(drawing.node?.center.x, expected,
+                           "row \(row) placed column \(node.column) off its lane")
+        }
+
+        // Every stroke endpoint sits on one of the lane centres — including the
+        // endpoints belonging to the row below, where a row-dependent width
+        // would show up first. Checked by membership rather than by recovering
+        // the column from x: placement is piecewise now, so dividing by
+        // laneWidth only inverts correctly below the prefix.
+        let laneCentres = (0..<layout.columnCount).map {
+            Double(GraphMetrics.laneCentre($0, columnCount: layout.columnCount))
+        }
+        func isOnALane(_ x: Double) -> Bool {
+            laneCentres.contains { abs($0 - x) < 0.001 }
+        }
+        for row in layout.nodes.indices {
+            for stroke in layout.drawing(row: row, isHeadRow: false).strokes {
+                let endpoints: [GraphRowDrawing.Point]
+                switch stroke.shape {
+                case .line(let from, let to): endpoints = [from, to]
+                case .curve(let from, let to, _, _): endpoints = [from, to]
+                }
+                for point in endpoints {
+                    XCTAssertTrue(isOnALane(point.x),
+                                  "row \(row) has an endpoint at \(point.x), off every lane")
+                }
+            }
+        }
     }
 }
