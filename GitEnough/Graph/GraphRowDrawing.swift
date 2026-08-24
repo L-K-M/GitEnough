@@ -65,7 +65,7 @@ extension GraphLayout {
 
         func point(absoluteRow: Int, column: Int) -> GraphRowDrawing.Point {
             GraphRowDrawing.Point(
-                x: Double(GraphMetrics.laneCentre(column, columnCount: columnCount)),
+                x: Double(GraphMetrics.laneCenter(column, columnCount: columnCount)),
                 y: Double(absoluteRow - row) * rowHeight + rowHeight / 2)
         }
 

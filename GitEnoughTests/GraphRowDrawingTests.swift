@@ -172,7 +172,7 @@ final class GraphLanePlacementTests: XCTestCase {
         // Nothing changes until lanes outgrow the column.
         for count in 1...GraphMetrics.maxUncompressedLanes {
             for column in 0..<count {
-                XCTAssertEqual(GraphMetrics.laneCentre(column, columnCount: count),
+                XCTAssertEqual(GraphMetrics.laneCenter(column, columnCount: count),
                                (CGFloat(column) + 0.5) * GraphMetrics.laneWidth,
                                "column \(column) of \(count)")
             }
@@ -187,7 +187,7 @@ final class GraphLanePlacementTests: XCTestCase {
             let full = GraphMetrics.uncompressedLanes(for: count)
             XCTAssertGreaterThanOrEqual(full, 3, "\(count) lanes left almost nothing at full width")
             for column in 0..<full {
-                XCTAssertEqual(GraphMetrics.laneCentre(column, columnCount: count),
+                XCTAssertEqual(GraphMetrics.laneCenter(column, columnCount: count),
                                (CGFloat(column) + 0.5) * GraphMetrics.laneWidth)
             }
         }
@@ -211,11 +211,11 @@ final class GraphLanePlacementTests: XCTestCase {
         for count in [1, 3, 12, 13, 20, 54, 200] {
             var previous = -CGFloat.greatestFiniteMagnitude
             for column in 0..<count {
-                let centre = GraphMetrics.laneCentre(column, columnCount: count)
-                XCTAssertGreaterThan(centre, previous, "column \(column) of \(count) went backwards")
-                XCTAssertLessThanOrEqual(centre, GraphMetrics.maxGraphWidth,
+                let center = GraphMetrics.laneCenter(column, columnCount: count)
+                XCTAssertGreaterThan(center, previous, "column \(column) of \(count) went backwards")
+                XCTAssertLessThanOrEqual(center, GraphMetrics.maxGraphWidth,
                                          "column \(column) of \(count) escaped the column")
-                previous = centre
+                previous = center
             }
         }
     }
@@ -253,7 +253,7 @@ final class GraphLanePlacementTests: XCTestCase {
         // the row below, where a row-dependent width would show up first.
         for (row, node) in layout.nodes.enumerated() {
             let drawing = layout.drawing(row: row, isHeadRow: false)
-            let expected = Double(GraphMetrics.laneCentre(node.column,
+            let expected = Double(GraphMetrics.laneCenter(node.column,
                                                           columnCount: layout.columnCount))
             XCTAssertEqual(drawing.node?.center.x, expected,
                            "row \(row) placed column \(node.column) off its lane")
@@ -264,11 +264,11 @@ final class GraphLanePlacementTests: XCTestCase {
         // would show up first. Checked by membership rather than by recovering
         // the column from x: placement is piecewise now, so dividing by
         // laneWidth only inverts correctly below the prefix.
-        let laneCentres = (0..<layout.columnCount).map {
-            Double(GraphMetrics.laneCentre($0, columnCount: layout.columnCount))
+        let laneCenters = (0..<layout.columnCount).map {
+            Double(GraphMetrics.laneCenter($0, columnCount: layout.columnCount))
         }
         func isOnALane(_ x: Double) -> Bool {
-            laneCentres.contains { abs($0 - x) < 0.001 }
+            laneCenters.contains { abs($0 - x) < 0.001 }
         }
         for row in layout.nodes.indices {
             for stroke in layout.drawing(row: row, isHeadRow: false).strokes {

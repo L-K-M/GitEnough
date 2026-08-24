@@ -74,11 +74,11 @@ public enum GraphMetrics {
         return (maxGraphWidth - CGFloat(prefix) * laneWidth) / CGFloat(count - prefix)
     }
 
-    /// Horizontal centre of `column` in a graph `columnCount` lanes wide.
+    /// Horizontal center of `column` in a graph `columnCount` lanes wide.
     ///
     /// Depends only on the column, never on the row, so a lane never moves
     /// sideways between rows however the graph's density changes around it.
-    public static func laneCentre(_ column: Int, columnCount: Int) -> CGFloat {
+    public static func laneCenter(_ column: Int, columnCount: Int) -> CGFloat {
         let prefix = uncompressedLanes(for: columnCount)
         if column < prefix {
             return (CGFloat(column) + 0.5) * laneWidth
