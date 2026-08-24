@@ -19,10 +19,6 @@ struct GraphStripView: View {
 
     @Environment(\.colorScheme) private var colorScheme
 
-    private var laneWidth: CGFloat {
-        GraphMetrics.laneWidth(for: layout.columnCount)
-    }
-
     private var width: CGFloat {
         GraphMetrics.graphWidth(for: layout.columnCount)
     }

@@ -60,13 +60,12 @@ extension GraphLayout {
     /// stale row index is a normal transient, not a bug.
     public func drawing(row: Int, isHeadRow: Bool,
                         isUnpushed: Bool = false) -> GraphRowDrawing {
-        let laneWidth = GraphMetrics.laneWidth(for: columnCount)
         let width = GraphMetrics.graphWidth(for: columnCount)
         let rowHeight = Double(GraphMetrics.rowHeight)
 
         func point(absoluteRow: Int, column: Int) -> GraphRowDrawing.Point {
             GraphRowDrawing.Point(
-                x: Double(column) * Double(laneWidth) + Double(laneWidth) / 2,
+                x: Double(GraphMetrics.laneCenter(column, columnCount: columnCount)),
                 y: Double(absoluteRow - row) * rowHeight + rowHeight / 2)
         }
 
@@ -100,7 +99,9 @@ extension GraphLayout {
             let layoutNode = nodes[row]
             node = GraphRowDrawing.Node(
                 center: point(absoluteRow: layoutNode.row, column: layoutNode.column),
-                radius: Double(GraphMetrics.nodeRadius(forLaneWidth: laneWidth)),
+                radius: Double(GraphMetrics.nodeRadius(
+                    forLaneWidth: GraphMetrics.spacing(around: layoutNode.column,
+                                                       columnCount: columnCount))),
                 colorIndex: layoutNode.colorIndex,
                 isHead: isHeadRow,
                 isUnpushed: isUnpushed)

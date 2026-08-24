@@ -161,3 +161,153 @@ final class GraphRowDrawingTests: XCTestCase {
         XCTAssertEqual(rgb(1, 1, 1), [1, 0, 0], "hue wraps at 1")
     }
 }
+
+/// Lane placement across the graph's width. A crowded stretch must not set the
+/// spacing for rows that only draw a lane or two — those are the rows people
+/// read most, and they were being squeezed to match the busiest merge in the
+/// history.
+final class GraphLanePlacementTests: XCTestCase {
+
+    func testGraphsWithinTheWidthBudgetAreEvenlySpaced() {
+        // Nothing changes until lanes outgrow the column.
+        for count in 1...GraphMetrics.maxUncompressedLanes {
+            for column in 0..<count {
+                XCTAssertEqual(GraphMetrics.laneCenter(column, columnCount: count),
+                               (CGFloat(column) + 0.5) * GraphMetrics.laneWidth,
+                               "column \(column) of \(count)")
+            }
+        }
+    }
+
+    func testTheFirstLanesKeepFullSpacingHoweverCrowdedTheGraphGets() {
+        // The complaint this fixes: a 54-lane history drew its trunk-only rows
+        // at 3.6pt. The low lanes now keep the same spacing they would have in
+        // a quiet graph, no matter what the busiest row does.
+        for count in [20, 54, 200] {
+            let full = GraphMetrics.uncompressedLanes(for: count)
+            // The prefix falls as the graph gets busier but never past
+            // `(1 - crowdedShare) · maxUncompressedLanes` — that is its limit
+            // as the lane count grows, approached from above. Derived rather
+            // than written out so tuning the two constants moves the bound
+            // with them instead of failing this test.
+            let floor = Int((1 - GraphMetrics.crowdedShare)
+                * CGFloat(GraphMetrics.maxUncompressedLanes))
+            XCTAssertGreaterThanOrEqual(full, floor,
+                                        "\(count) lanes left almost nothing at full width")
+            for column in 0..<full {
+                XCTAssertEqual(GraphMetrics.laneCenter(column, columnCount: count),
+                               (CGFloat(column) + 0.5) * GraphMetrics.laneWidth)
+            }
+        }
+    }
+
+    func testTheCrowdKeepsMostOfTheSpacingAnEvenSqueezeWouldGiveIt() {
+        // Widening the front is paid for out of the back, so the back has a
+        // floor — otherwise a busy graph would trade one unreadable region for
+        // another.
+        for count in [13, 20, 54, 200] {
+            let even = GraphMetrics.laneWidth(for: count)
+            // The prefix truncates down and the crowd's spacing falls as the
+            // prefix grows, so the floor holds exactly rather than approximately.
+            XCTAssertGreaterThanOrEqual(GraphMetrics.crowdedSpacing(for: count),
+                                        even * GraphMetrics.crowdedShare - 0.001,
+                                        "\(count) lanes squeezed the crowd too hard")
+        }
+    }
+
+    func testADotGrowsIntoWhateverItsOwnLaneHas() {
+        // `spacing(around:)` is what sizes the dots, so it has to agree with
+        // the placement either side of the prefix: full width in the front,
+        // the crowd's share behind it. Nothing else would notice it being
+        // inverted — the lanes would still be drawn in the right places, just
+        // with the wrong dots on them.
+        for count in [1, 12, 13, 20, 54, 200] {
+            XCTAssertEqual(GraphMetrics.spacing(around: 0, columnCount: count),
+                           GraphMetrics.laneWidth,
+                           "\(count) lanes pinched the first dot")
+            let prefix = GraphMetrics.uncompressedLanes(for: count)
+            guard prefix < count else { continue }
+            XCTAssertEqual(GraphMetrics.spacing(around: count - 1, columnCount: count),
+                           GraphMetrics.crowdedSpacing(for: count),
+                           "\(count) lanes mis-sized the last dot")
+        }
+    }
+
+    func testLanesStayInsideTheColumnAndInOrder() {
+        for count in [1, 3, 12, 13, 20, 54, 200] {
+            var previous = -CGFloat.greatestFiniteMagnitude
+            for column in 0..<count {
+                let center = GraphMetrics.laneCenter(column, columnCount: count)
+                XCTAssertGreaterThan(center, previous, "column \(column) of \(count) went backwards")
+                XCTAssertLessThanOrEqual(center, GraphMetrics.maxGraphWidth,
+                                         "column \(column) of \(count) escaped the column")
+                previous = center
+            }
+        }
+    }
+
+    func testALanesPositionNeverDependsOnTheRow() {
+        // The invariant the whole design rests on: placement is a function of
+        // the column alone. Anything row-dependent slides a lane sideways in
+        // proportion to its column as the density changes around it, which is
+        // why the spacing can't simply track each row's lane count.
+        //
+        // The fixture has to vary in density or it proves nothing — a
+        // single-lane chain gives a constant x under any formula. This one fans
+        // out past the width budget and merges back, so rows differ in how many
+        // lanes they carry and the crowded placement is exercised too.
+        let branchCount = 20
+        var commits = [Commit(hash: "merge",
+                              parents: (0..<branchCount).map { "b\($0)" },
+                              author: "A", email: "a@example.com", date: nil,
+                              subject: "merge", decorations: [])]
+        commits += (0..<branchCount).map { index in
+            Commit(hash: "b\(index)", parents: ["base"], author: "A",
+                   email: "a@example.com", date: nil,
+                   subject: "b\(index)", decorations: [])
+        }
+        commits.append(Commit(hash: "base", parents: [], author: "A",
+                              email: "a@example.com", date: nil,
+                              subject: "base", decorations: []))
+
+        let layout = GraphLayout.layout(commits: commits)
+        XCTAssertGreaterThan(layout.columnCount, GraphMetrics.maxUncompressedLanes,
+                             "fixture never reaches the crowded regime")
+
+        // Every row places its node on its column's one true centre — a
+        // row-dependent width would slide it sideways as the density of the
+        // graph around it changed. Endpoints are the loop after this one.
+        for (row, node) in layout.nodes.enumerated() {
+            let drawing = layout.drawing(row: row, isHeadRow: false)
+            let expected = Double(GraphMetrics.laneCenter(node.column,
+                                                          columnCount: layout.columnCount))
+            XCTAssertEqual(drawing.node?.center.x, expected,
+                           "row \(row) placed column \(node.column) off its lane")
+        }
+
+        // Every stroke endpoint sits on one of the lane centres — including the
+        // endpoints belonging to the row below, where a row-dependent width
+        // would show up first. Checked by membership rather than by recovering
+        // the column from x: placement is piecewise now, so dividing by
+        // laneWidth only inverts correctly below the prefix.
+        let laneCenters = (0..<layout.columnCount).map {
+            Double(GraphMetrics.laneCenter($0, columnCount: layout.columnCount))
+        }
+        func isOnALane(_ x: Double) -> Bool {
+            laneCenters.contains { abs($0 - x) < 0.001 }
+        }
+        for row in layout.nodes.indices {
+            for stroke in layout.drawing(row: row, isHeadRow: false).strokes {
+                let endpoints: [GraphRowDrawing.Point]
+                switch stroke.shape {
+                case .line(let from, let to): endpoints = [from, to]
+                case .curve(let from, let to, _, _): endpoints = [from, to]
+                }
+                for point in endpoints {
+                    XCTAssertTrue(isOnALane(point.x),
+                                  "row \(row) has an endpoint at \(point.x), off every lane")
+                }
+            }
+        }
+    }
+}
