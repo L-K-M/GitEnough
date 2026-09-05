@@ -688,9 +688,12 @@ public final class RepoViewModel: ObservableObject, Identifiable {
                 // atomically. `appending` only ever appends, so these bytes are
                 // exactly the difference.
                 let handle = try FileHandle(forWritingTo: url)
+                // Closed on every exit: a throwing seek or write (disk full,
+                // permissions revoked mid-flight) would otherwise leak the
+                // descriptor for the life of the process.
+                defer { try? handle.close() }
                 try handle.seekToEnd()
                 try handle.write(contentsOf: addition)
-                try handle.close()
             } else {
                 // `existing` is empty here, so the addition is the whole file.
                 try addition.write(to: url, options: .atomic)

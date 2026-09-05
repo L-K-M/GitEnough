@@ -355,25 +355,43 @@ public final class GitClient {
         try runChecked(["-C", worktree.path, "add", "-A"], in: nil)
     }
 
-    /// True when the repository has a commit to resolve paths against — false on
-    /// an unborn HEAD, where `restore --staged` and `reset` have no baseline.
-    ///
-    /// Both callers check this *explicitly* rather than inferring it from a
-    /// failure. Inferring is the dangerous version: a blanket `catch` around
-    /// `restore --staged` accepts every other cause too — a locked index, a
-    /// permissions problem, a corrupt ref, a path that moved underneath the
-    /// click — and falls through to `rm --cached`, which succeeds. The user
-    /// clicks Unstage, the operation reports success, the rows flip from
-    /// Modified to Deleted, and the next commit removes the files.
+    /// True when HEAD resolves to a commit.
     private func hasHEAD() -> Bool {
         (try? runReadChecked(
             ["-C", worktree.path, "rev-parse", "--verify", "--quiet", "HEAD"], in: nil)) != nil
     }
 
+    /// True when HEAD is **unborn**: a symbolic ref pointing at a branch that
+    /// does not exist yet. That is the one state where `restore --staged` and
+    /// `reset` have no baseline and dropping the index entry is the correct
+    /// equivalent.
+    ///
+    /// Both callers check this *explicitly* rather than inferring it from a
+    /// failure. Inferring is the dangerous version: a blanket `catch` around
+    /// `restore --staged` accepts every other cause too — a locked index, a
+    /// permissions problem, a path that moved underneath the click — and falls
+    /// through to `rm --cached`, which succeeds. The user clicks Unstage, the
+    /// operation reports success, the rows flip from Modified to Deleted, and
+    /// the next commit removes the files.
+    ///
+    /// "HEAD does not resolve" is not enough on its own, which is why this is
+    /// two commands rather than one: a corrupt `refs/heads/<branch>` fails
+    /// `rev-parse --verify HEAD` exactly as an unborn HEAD does, so keying off
+    /// that alone would send a *corrupt* repository down the index-surgery path
+    /// — staging deletions of files that really exist. `symbolic-ref` separates
+    /// them (verified against git 2.43): unborn exits 0 and prints the target,
+    /// a corrupt target exits 128. A repository in that state therefore reaches
+    /// `restore --staged` and fails loudly, which is what it should do.
+    private func isUnbornHEAD() -> Bool {
+        guard !hasHEAD() else { return false }
+        return (try? runReadChecked(
+            ["-C", worktree.path, "symbolic-ref", "--quiet", "HEAD"], in: nil)) != nil
+    }
+
     public func unstage(paths: [String]) throws {
         guard !paths.isEmpty else { return }
         let literalSpecs = Self.literalPathspecs(paths)
-        guard hasHEAD() else {
+        guard !isUnbornHEAD() else {
             // Unborn HEAD: nothing to restore against, so unstaging is exactly
             // dropping the index entry. --cached never touches worktree files.
             try runChecked(
@@ -406,9 +424,9 @@ public final class GitClient {
         // Force literal matching everywhere a real path is passed.
         let literalSpecs = Self.literalPathspecs(paths)
         // Check for an unborn HEAD explicitly instead of inferring it from a
-        // `reset` failure — see `hasHEAD()` for why the inferring version turns
-        // an unrelated error into staged deletions.
-        guard hasHEAD() else {
+        // `reset` failure — see `isUnbornHEAD()` for why the inferring version
+        // turns an unrelated error into staged deletions.
+        guard !isUnbornHEAD() else {
             // Unborn HEAD: there is nothing to restore against, so discarding
             // can only unstage. --cached never touches worktree files; -f just
             // bypasses the safety check that refuses staged-new files that

@@ -880,6 +880,27 @@ final class GitIntegrationTests: XCTestCase {
                        "a failed unstage must never stage a deletion")
     }
 
+    /// A repository whose HEAD does not resolve is not necessarily unborn. With
+    /// a corrupt `refs/heads/<branch>`, `rev-parse --verify HEAD` fails exactly
+    /// as it does for an unborn HEAD — so keying the fallback off that alone
+    /// would run index surgery on a repository full of real files.
+    func testACorruptHeadRefFailsInsteadOfStagingDeletions() throws {
+        try write("changed\n", to: "a.txt")
+        try client.stage(paths: ["a.txt"])
+        let headRef = repoURL.appendingPathComponent(".git/refs/heads/main")
+        try "not a sha\n".write(to: headRef, atomically: true, encoding: .utf8)
+
+        XCTAssertThrowsError(try client.unstage(paths: ["a.txt"]),
+                             "a corrupt HEAD must surface, not fall through to rm --cached")
+
+        // `ls-files` reads the index without needing HEAD, so it still answers
+        // in a repository this broken: the entry must still be there.
+        let indexed = try GitShell.shared.runChecked(
+            ["-C", repoURL.path, "ls-files", "--", "a.txt"], in: nil).stdout
+        XCTAssertTrue(indexed.contains("a.txt"),
+                      "the file must still be in the index, not removed from it")
+    }
+
     /// The case the blanket catch was written for still works: on an unborn
     /// HEAD there is nothing to restore against, so unstaging drops the index
     /// entry and leaves the file on disk.
@@ -889,7 +910,8 @@ final class GitIntegrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: fresh, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: fresh) }
         let unborn = GitClient(worktree: fresh)
-        _ = try GitShell.shared.runChecked(["init", "-b", "main", fresh.path], in: nil)
+        // No -b: this test never names the branch, only needs HEAD unborn.
+        _ = try GitShell.shared.runChecked(["init", fresh.path], in: nil)
         try "new\n".write(to: fresh.appendingPathComponent("new.txt"),
                           atomically: true, encoding: .utf8)
         try unborn.stage(paths: ["new.txt"])
