@@ -107,7 +107,15 @@ index 1234567..89abcde 100644
  kind: Deployment
 """
         let lines = DiffParser.parse(diff)
-        let byText = Dictionary(lines.map { ($0.text, $0.kind) }, uniquingKeysWith: { first, _ in first })
+        let byText = Dictionary(lines.map { ($0.text, $0.kind) },
+                                uniquingKeysWith: { first, second in
+                                    // Two lines with identical text must classify
+                                    // identically, or first-wins would hide the
+                                    // misclassification these tests exist to catch.
+                                    XCTAssertEqual(first, second,
+                                                   "duplicate line text classified inconsistently")
+                                    return first
+                                })
 
         // The real file headers, which appear before the first @@.
         XCTAssertEqual(byText["--- a/k8s.yaml"], .fileHeader)
@@ -139,7 +147,15 @@ index 111..222 100644
 +ok
 """
         let lines = DiffParser.parse(diff)
-        let byText = Dictionary(lines.map { ($0.text, $0.kind) }, uniquingKeysWith: { first, _ in first })
+        let byText = Dictionary(lines.map { ($0.text, $0.kind) },
+                                uniquingKeysWith: { first, second in
+                                    // Two lines with identical text must classify
+                                    // identically, or first-wins would hide the
+                                    // misclassification these tests exist to catch.
+                                    XCTAssertEqual(first, second,
+                                                   "duplicate line text classified inconsistently")
+                                    return first
+                                })
         XCTAssertEqual(byText["diff --git a/b.txt b/b.txt"], .fileHeader)
         XCTAssertEqual(byText["--- a/b.txt"], .fileHeader,
                        "the second file's header must not be read as hunk content")
@@ -161,7 +177,15 @@ diff --git a/img.png b/img.png
 Binary files a/img.png and b/img.png differ
 """
         let lines = DiffParser.parse(diff)
-        let byText = Dictionary(lines.map { ($0.text, $0.kind) }, uniquingKeysWith: { first, _ in first })
+        let byText = Dictionary(lines.map { ($0.text, $0.kind) },
+                                uniquingKeysWith: { first, second in
+                                    // Two lines with identical text must classify
+                                    // identically, or first-wins would hide the
+                                    // misclassification these tests exist to catch.
+                                    XCTAssertEqual(first, second,
+                                                   "duplicate line text classified inconsistently")
+                                    return first
+                                })
         XCTAssertEqual(byText["\\ No newline at end of file"], .meta)
         XCTAssertEqual(byText["Binary files a/img.png and b/img.png differ"], .meta)
     }

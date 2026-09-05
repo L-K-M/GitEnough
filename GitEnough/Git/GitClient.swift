@@ -256,7 +256,6 @@ public final class GitClient {
 
     // MARK: - Diffs
 
-    /// Unified diff for one worktree/index path.
     /// Flags every patch-producing read passes. `--no-ext-diff` is the one that
     /// matters: `diff.external` (what difftastic's own install instructions set,
     /// `git config --global diff.external difft`) replaces the patch with the
@@ -266,8 +265,17 @@ public final class GitClient {
     /// queue, so a pager-ish tool would block every repository operation behind
     /// it. Harmless on `--stat`, which never invokes the driver — passed there
     /// anyway so no reader has to work out which reads are exposed.
+    ///
+    /// Deliberately *not* `--no-textconv`. A `diff.<driver>.textconv` filter,
+    /// configured through gitattributes, is a different mechanism and usually a
+    /// wanted one: it is how a repository makes a binary format readable in a
+    /// diff at all. Suppressing it would hand the diff pane — and the
+    /// commit-message model — raw binary where the repository has arranged for
+    /// prose. `--no-ext-diff` removes a *replacement* for the patch; textconv
+    /// only changes what the patch is computed over.
     private static let patchReadFlags = ["--no-color", "--no-ext-diff"]
 
+    /// Unified diff for one worktree/index path.
     public func diff(path: String, staged: Bool) throws -> String {
         var args = ["-C", worktree.path, "diff"] + Self.patchReadFlags
         if staged { args.append("--staged") }
