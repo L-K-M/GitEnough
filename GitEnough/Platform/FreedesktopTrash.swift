@@ -28,6 +28,7 @@ public enum FreedesktopTrash {
     public enum TrashError: Error, LocalizedError {
         case noTrashDirectory(String)
         case couldNotReserveName(String)
+        case couldNotWriteRecord(String)
 
         public var errorDescription: String? {
             switch self {
@@ -35,6 +36,8 @@ public enum FreedesktopTrash {
                 return "No usable Trash directory for \(path)."
             case .couldNotReserveName(let name):
                 return "Could not reserve a Trash entry for \(name)."
+            case .couldNotWriteRecord(let reason):
+                return "Could not write the Trash record: \(reason)."
             }
         }
     }
@@ -45,6 +48,15 @@ public enum FreedesktopTrash {
     /// `homeTrash` is a seam for the tests, which must not be able to fill the
     /// developer's real Trash.
     public static func trash(_ url: URL, homeTrash: URL = homeTrashDirectory()) throws {
+        try trash(url, homeTrash: homeTrash, writeRecord: writeFully)
+    }
+
+    /// The body of `trash(_:homeTrash:)`, with the record write injectable so the
+    /// tests can exercise the failure path without needing a full disk. Internal:
+    /// the public signature above stays a two-argument call.
+    static func trash(_ url: URL,
+                      homeTrash: URL,
+                      writeRecord: (Data, Int32) throws -> Void) throws {
         let item = url.standardizedFileURL
         let trashDirectory = try trashDirectory(for: item, homeTrash: homeTrash)
         let files = trashDirectory.appendingPathComponent("files")
@@ -60,8 +72,18 @@ public enum FreedesktopTrash {
 
         let recordedPath = originalPath(of: item, relativeTo: trashDirectory)
         let record = Data(trashInfo(originalPath: recordedPath, deletedAt: Date()).utf8)
-        record.withUnsafeBytes { buffer in
-            _ = write(handle, buffer.baseAddress, buffer.count)
+        do {
+            try writeRecord(record, handle)
+            try syncRecord(handle)
+        } catch {
+            // A half-written record is worse than no trashing at all: the file
+            // would leave the worktree and land in the Trash with an origin
+            // nothing can parse, so "Restore" — the entire reason discard goes
+            // through here instead of unlink — silently stops working. Abandon
+            // the reservation and let the caller report the failure while the
+            // file is still where the user left it.
+            try? FileManager.default.removeItem(at: trashInfoURL(for: name, in: info))
+            throw error
         }
 
         do {
@@ -69,8 +91,7 @@ public enum FreedesktopTrash {
                                              to: files.appendingPathComponent(name))
         } catch {
             // Never leave an info record pointing at nothing.
-            try? FileManager.default.removeItem(
-                at: info.appendingPathComponent(name + ".trashinfo"))
+            try? FileManager.default.removeItem(at: trashInfoURL(for: name, in: info))
             throw error
         }
     }
@@ -136,13 +157,65 @@ public enum FreedesktopTrash {
 
     // MARK: - Filesystem
 
+    /// Writes every byte of `data` to `handle`, or throws. A bare `write(2)` is
+    /// permitted to write less than it was asked for, and returns -1 on error —
+    /// both of which produce a `.trashinfo` that parses wrong or not at all, so
+    /// neither may pass silently. EINTR is retried; it is not a failure.
+    static func writeFully(_ data: Data, to handle: Int32) throws {
+        try data.withUnsafeBytes { buffer in
+            guard var pointer = buffer.baseAddress else { return }
+            var remaining = buffer.count
+            while remaining > 0 {
+                let written = write(handle, pointer, remaining)
+                if written < 0 {
+                    if errno == EINTR { continue }
+                    throw TrashError.couldNotWriteRecord(String(cString: strerror(errno)))
+                }
+                if written == 0 {
+                    throw TrashError.couldNotWriteRecord("write reported no progress")
+                }
+                pointer += Int(written)
+                remaining -= Int(written)
+            }
+        }
+    }
+
+    /// Forces the record's bytes out of the page cache before the caller renames
+    /// the file into the Trash. `write(2)` promises only that they reached the
+    /// kernel, and the crash that follows delayed allocation leaves a
+    /// `.trashinfo` of the right length that reads back as zeros — an entry the
+    /// file manager shows with an origin it cannot parse.
+    ///
+    /// This buys one flush, not crash consistency, and the distinction is worth
+    /// stating rather than implying: the record's *name* is durable only once
+    /// `info/` is fsynced too, and the rename that follows is no more durable
+    /// than the name is. Guaranteeing the pair takes four fsyncs per discarded
+    /// item and still has to choose which way to fail — a stranded file or a
+    /// record pointing at nothing. Nothing in this space goes that far; glib's
+    /// `g_file_trash` does none of it. So this stops at the failure that
+    /// actually shows up, and the rest is a decision for whoever wants it.
+    /// (macOS would need `F_FULLFSYNC` to reach the platter; this file's
+    /// platform is Linux, where `fsync` is the real thing.)
+    static func syncRecord(_ handle: Int32) throws {
+        while fsync(handle) != 0 {
+            if errno == EINTR { continue }
+            throw TrashError.couldNotWriteRecord(String(cString: strerror(errno)))
+        }
+    }
+
+    /// Where a reserved entry's record lives. Reservation and the cleanup that
+    /// undoes it both go through here so neither can drift onto the other's path.
+    private static func trashInfoURL(for name: String, in info: URL) -> URL {
+        info.appendingPathComponent(name + ".trashinfo")
+    }
+
     /// Reserves a free `<name>.trashinfo` in `info` and returns the open
     /// descriptor. O_EXCL makes the reservation atomic against other trashers.
     private static func reserveName(_ name: String,
                                     in info: URL) throws -> (String, Int32) {
         for attempt in 1...1000 {
             let candidate = candidateName(name, attempt: attempt)
-            let path = info.appendingPathComponent(candidate + ".trashinfo").path
+            let path = trashInfoURL(for: candidate, in: info).path
             let handle = open(path, O_CREAT | O_EXCL | O_WRONLY, 0o600)
             if handle >= 0 { return (candidate, handle) }
             if errno != EEXIST {
