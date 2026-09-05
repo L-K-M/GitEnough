@@ -31,6 +31,13 @@ final class BranchesPane {
         connect(localList, "row-activated") { [weak self] _ in self?.checkout(from: false) }
         connect(remoteList, "row-activated") { [weak self] _ in self?.checkout(from: true) }
         connect(stashList, "row-activated") { [weak self] _ in self?.applyStash() }
+        // Activation is a double click (see UI.listBox), and these three lists
+        // have no other affordance for it — say so rather than letting the pane
+        // look inert.
+        gtk_widget_set_tooltip_text(localList, "Double-click to check out this branch")
+        gtk_widget_set_tooltip_text(remoteList,
+                                    "Double-click to check out a tracking branch")
+        gtk_widget_set_tooltip_text(stashList, "Double-click to apply this stash")
 
         observer = ModelObserver(viewModel) { [weak self] in self?.refresh() }
         refresh()

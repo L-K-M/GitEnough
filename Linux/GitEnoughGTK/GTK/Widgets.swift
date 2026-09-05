@@ -97,6 +97,18 @@ enum UI {
         -> UnsafeMutablePointer<GtkWidget> {
         let widget = require(gtk_list_box_new(), "list box")
         gtk_list_box_set_selection_mode(opaque(widget), selection)
+        // GtkListBox activates on a *single* click by default, so a row's
+        // `row-activated` handler fires the moment the row is clicked — at the
+        // same time as `row-selected`. Every activate handler in this front end
+        // performs a mutation (stage, unstage, check out, apply a stash), so on
+        // the default setting merely clicking a row to look at it does the
+        // thing: clicking an unstaged file stages it, clicking a stash entry
+        // applies it to the working tree.
+        //
+        // The macOS front end binds those same actions to a double click
+        // (`.onTapGesture(count: 2)`), which is also what every list in a
+        // GNOME app does. Selection stays single-click; activation needs two.
+        gtk_list_box_set_activate_on_single_click(opaque(widget), 0)
         return widget
     }
 
