@@ -357,8 +357,15 @@ public final class RepoViewModel: ObservableObject, Identifiable {
     /// force-pushing is the one action where sending a stale refspec would
     /// rewrite the wrong branch, and only `.push` has an upstream to overwrite.
     public func forcePush() {
-        guard case .push(let remote, let local, let remoteBranch) = pushCapability else {
-            errorMessage = "Can't force push: this branch has no upstream to overwrite. Publish it first."
+        let capability = pushCapability
+        guard case .push(let remote, let local, let remoteBranch) = capability else {
+            // `.unavailable` already carries a reason that names the real
+            // problem; only the `.publish` case is "no upstream to overwrite".
+            if case .unavailable(let reason) = capability {
+                errorMessage = reason.message
+            } else {
+                errorMessage = "Can't force push: this branch has no upstream to overwrite. Publish it first."
+            }
             return
         }
         perform("Force pushing…", invalidatesMessageGeneration: false) {

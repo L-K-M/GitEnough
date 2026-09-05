@@ -858,9 +858,7 @@ final class GitIntegrationTests: XCTestCase {
                         setUpstream: false, forceWithLease: true)
         let localHead = try GitShell.shared.runChecked(["rev-parse", "HEAD"], in: repoURL)
             .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-        let remoteHead = try GitShell.shared.runChecked(
-            ["-C", remoteURL.path, "rev-parse", "refs/heads/main"], in: nil)
-            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let remoteHead = try remoteRef("refs/heads/main", in: remoteURL)
         XCTAssertEqual(localHead, remoteHead)
     }
 

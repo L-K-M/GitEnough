@@ -199,7 +199,7 @@ struct RepoDetailView: View {
         let command = GitActivityLog.displayCommand(for: GitClient.pushArguments(
             remote: remote, localBranch: local, remoteBranch: remoteBranch,
             setUpstream: false, forceWithLease: true))
-        return warning + "\n\nWill run:\ngit " + command
+        return warning + "\n\nWill run in this repository:\ngit " + command
     }
 
     // MARK: - Toolbar pieces

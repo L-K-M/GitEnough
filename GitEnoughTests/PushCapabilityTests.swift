@@ -139,10 +139,11 @@ final class PushCapabilityTests: XCTestCase {
     /// A branch called `-x` is a legal ref. Fully qualifying the refspec is what
     /// keeps it out of option position.
     func testALeadingDashBranchCannotReachOptionPosition() {
-        let args = GitClient.pushArguments(remote: "origin", localBranch: "-x",
-                                           remoteBranch: "-x", setUpstream: false)
-        XCTAssertFalse(args.contains { $0.hasPrefix("-") && $0 != "--force-with-lease" },
-                       "no argument may start with a dash except a real option, got \(args)")
+        XCTAssertEqual(
+            GitClient.pushArguments(remote: "origin", localBranch: "-x",
+                                    remoteBranch: "-x", setUpstream: false),
+            ["push", "origin", "refs/heads/-x:refs/heads/-x"],
+            "the dash-leading branch stays inside the qualified refspec")
     }
 
     // MARK: - Remote.split
