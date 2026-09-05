@@ -9,6 +9,17 @@ final class DiffParserTests: XCTestCase {
             .map { String(line.text[$0]) }
     }
 
+    /// Line text → kind for assertions. Fails when two identical texts classify
+    /// differently, which plain first-wins would silently hide.
+    private func kindsByText(_ lines: [DiffLine]) -> [String: DiffLine.Kind] {
+        Dictionary(lines.map { ($0.text, $0.kind) },
+                   uniquingKeysWith: { first, second in
+                       XCTAssertEqual(first, second,
+                                      "duplicate line text classified inconsistently")
+                       return first
+                   })
+    }
+
     private func first(_ lines: [DiffLine], kind: DiffLine.Kind) -> DiffLine? {
         lines.first { $0.kind == kind }
     }
@@ -107,15 +118,7 @@ index 1234567..89abcde 100644
  kind: Deployment
 """
         let lines = DiffParser.parse(diff)
-        let byText = Dictionary(lines.map { ($0.text, $0.kind) },
-                                uniquingKeysWith: { first, second in
-                                    // Two lines with identical text must classify
-                                    // identically, or first-wins would hide the
-                                    // misclassification these tests exist to catch.
-                                    XCTAssertEqual(first, second,
-                                                   "duplicate line text classified inconsistently")
-                                    return first
-                                })
+        let byText = kindsByText(lines)
 
         // The real file headers, which appear before the first @@.
         XCTAssertEqual(byText["--- a/k8s.yaml"], .fileHeader)
@@ -147,15 +150,7 @@ index 111..222 100644
 +ok
 """
         let lines = DiffParser.parse(diff)
-        let byText = Dictionary(lines.map { ($0.text, $0.kind) },
-                                uniquingKeysWith: { first, second in
-                                    // Two lines with identical text must classify
-                                    // identically, or first-wins would hide the
-                                    // misclassification these tests exist to catch.
-                                    XCTAssertEqual(first, second,
-                                                   "duplicate line text classified inconsistently")
-                                    return first
-                                })
+        let byText = kindsByText(lines)
         XCTAssertEqual(byText["diff --git a/b.txt b/b.txt"], .fileHeader)
         XCTAssertEqual(byText["--- a/b.txt"], .fileHeader,
                        "the second file's header must not be read as hunk content")
@@ -177,21 +172,38 @@ diff --git a/img.png b/img.png
 Binary files a/img.png and b/img.png differ
 """
         let lines = DiffParser.parse(diff)
-        let byText = Dictionary(lines.map { ($0.text, $0.kind) },
-                                uniquingKeysWith: { first, second in
-                                    // Two lines with identical text must classify
-                                    // identically, or first-wins would hide the
-                                    // misclassification these tests exist to catch.
-                                    XCTAssertEqual(first, second,
-                                                   "duplicate line text classified inconsistently")
-                                    return first
-                                })
+        let byText = kindsByText(lines)
         XCTAssertEqual(byText["\\ No newline at end of file"], .meta)
         XCTAssertEqual(byText["Binary files a/img.png and b/img.png differ"], .meta)
     }
 
     /// A fragment with no `@@` — the hunk state cannot help, so the header
     /// patterns have to be precise enough on their own.
+    func testATrailingNewlineDoesNotAddAPhantomLine() {
+        // Every git diff ends in a newline; splitting on it leaves an empty
+        // final component that used to render as a blank context row and spend
+        // one line of the truncation budget.
+        let lines = DiffParser.parse("@@ -1 +1 @@\n-a\n+b\n")
+        XCTAssertEqual(lines.map(\.text), ["@@ -1 +1 @@", "-a", "+b"])
+
+        // An empty line inside the body is still content and must survive.
+        let withBlank = DiffParser.parse("@@ -1,2 +1,2 @@\n a\n\n b\n")
+        XCTAssertEqual(withBlank.map(\.text), ["@@ -1,2 +1,2 @@", " a", "", " b"])
+        XCTAssertEqual(withBlank[2].kind, .context)
+    }
+
+    func testDissimilarityIndexIsAFileHeader() {
+        // git emits this for a broken-out rewrite (-B). Nothing in the app
+        // passes -B today, so this pins the classification before it can.
+        let lines = DiffParser.parse("""
+diff --git a/f b/f
+dissimilarity index 96%
+--- a/f
++++ b/f
+""")
+        XCTAssertEqual(kindsByText(lines)["dissimilarity index 96%"], .fileHeader)
+    }
+
     func testAFragmentWithoutAHunkHeaderStillColoursItsChanges() {
         let lines = DiffParser.parse("----\n+++i;\n-- sql\n")
         XCTAssertEqual(lines[0].kind, .deletion)

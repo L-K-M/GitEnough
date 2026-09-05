@@ -34,7 +34,13 @@ public enum DiffParser {
         // painted them as file headers — grey, in the pane whose only job is
         // showing what changed. File headers only ever appear *outside* a hunk.
         var inHunk = false
-        for rawLine in diff.components(separatedBy: "\n") {
+        var rawLines = diff.components(separatedBy: "\n")
+        // Git's output always ends in a newline, so the split leaves a phantom
+        // empty final component. Drop exactly that one — an empty line *inside*
+        // the body is a context line whose trailing space some tool stripped,
+        // and the in-hunk branch below still keeps it.
+        if rawLines.last?.isEmpty == true { rawLines.removeLast() }
+        for rawLine in rawLines {
             if count >= maxLines {
                 lines.append(DiffLine(kind: .meta, text: "… diff truncated after \(maxLines) lines …"))
                 break
@@ -55,6 +61,12 @@ public enum DiffParser {
                 case " ": kind = .context
                 case "\\": kind = .meta          // "\ No newline at end of file"
                 default:
+                    // In git's output the only thing that can appear here is the
+                    // next file's section, which always opens with `diff --git`
+                    // or `index`. A plain `diff -u` patch without those
+                    // separators would need the `@@` line counts to find the
+                    // boundary; every producer feeding this parser is git
+                    // (`diff`, `diff --no-index`, `show`), so it does not.
                     inHunk = false
                     kind = Self.classifyOutsideHunk(rawLine)
                 }
@@ -82,9 +94,9 @@ public enum DiffParser {
         if rawLine.hasPrefix("diff --git") || rawLine.hasPrefix("index ")
             || rawLine.hasPrefix("--- ") || rawLine.hasPrefix("+++ ")
             || rawLine.hasPrefix("old mode") || rawLine.hasPrefix("new mode")
-            || rawLine.hasPrefix("similarity index") || rawLine.hasPrefix("rename from")
-            || rawLine.hasPrefix("rename to") || rawLine.hasPrefix("copy from")
-            || rawLine.hasPrefix("copy to") {
+            || rawLine.hasPrefix("similarity index") || rawLine.hasPrefix("dissimilarity index")
+            || rawLine.hasPrefix("rename from") || rawLine.hasPrefix("rename to")
+            || rawLine.hasPrefix("copy from") || rawLine.hasPrefix("copy to") {
             return .fileHeader
         }
         if rawLine.hasPrefix("new file mode") || rawLine.hasPrefix("deleted file mode")
