@@ -360,17 +360,19 @@ public final class RepoViewModel: ObservableObject, Identifiable {
         let capability = pushCapability
         guard case .push(let remote, let local, let remoteBranch) = capability else {
             // `.unavailable` already carries a reason that names the real
-            // problem; only the `.publish` case is "no upstream to overwrite".
+            // problem. `.publish` covers two states — no upstream at all, and an
+            // upstream naming a remote that no longer exists — so the wording
+            // has to be true of both.
             if case .unavailable(let reason) = capability {
                 errorMessage = reason.message
             } else {
-                errorMessage = "Can't force push: this branch has no upstream to overwrite. Publish it first."
+                errorMessage = "Can't force push: this branch has no upstream on a configured remote to overwrite. Publish it first."
             }
             return
         }
         perform("Force pushing…", invalidatesMessageGeneration: false) {
-            try $0.push(remote: remote, localBranch: local, remoteBranch: remoteBranch,
-                        setUpstream: false, forceWithLease: true)
+            try $0.push(GitClient.forcePushArguments(
+                remote: remote, localBranch: local, remoteBranch: remoteBranch))
         }
     }
 

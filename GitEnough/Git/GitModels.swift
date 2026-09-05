@@ -92,13 +92,33 @@ public struct Remote: Identifiable, Hashable {
     /// own ahead/behind counters are measured against — so it is the ref Push
     /// has to move. Returns nil when no configured remote is a prefix, which
     /// means the upstream names a remote that no longer exists.
+    /// `localBranch`, when known, breaks the tie that nested remote names create.
+    /// With remotes `origin` and `origin/features`, the upstream
+    /// `origin/features/x` splits two ways and the string alone cannot say
+    /// which: it is `origin/features` + `x`, or `origin` + `features/x`. The
+    /// branch half matching the local branch name settles it in the case that
+    /// actually occurs — a branch tracking its own name on a remote — and
+    /// longest-prefix remains the fallback.
+    ///
+    /// The unambiguous answer is git's own `branch.<name>.remote`, available as
+    /// `%(upstream:remotename)` from the `for-each-ref` that already builds the
+    /// branch list. Carrying it through would remove the guess entirely; see
+    /// ANALYSIS.md.
     public static func split(upstream: String?,
-                             among remotes: [Remote]) -> (remote: Remote, branch: String)? {
+                             among remotes: [Remote],
+                             localBranch: String? = nil) -> (remote: Remote, branch: String)? {
         guard let upstream else { return nil }
-        guard let matched = remotes
-            .filter({ upstream.hasPrefix($0.name + "/") })
-            .max(by: { $0.name.count < $1.name.count }) else { return nil }
-        let branch = String(upstream.dropFirst(matched.name.count + 1))
+        func branchHalf(_ remote: Remote) -> String {
+            String(upstream.dropFirst(remote.name.count + 1))
+        }
+        let matches = remotes.filter { upstream.hasPrefix($0.name + "/") }
+        let matched = matches.first(where: { remote in
+            guard let localBranch else { return false }
+            let branch = branchHalf(remote)
+            return !branch.isEmpty && branch == localBranch
+        }) ?? matches.max(by: { $0.name.count < $1.name.count })
+        guard let matched else { return nil }
+        let branch = branchHalf(matched)
         return branch.isEmpty ? nil : (matched, branch)
     }
 

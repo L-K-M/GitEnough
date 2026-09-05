@@ -196,9 +196,8 @@ struct RepoDetailView: View {
             = viewModel.pushCapability else { return warning }
         // Built from the same `pushArguments` the client executes, so the
         // sentence and the command cannot drift apart.
-        let command = GitActivityLog.displayCommand(for: GitClient.pushArguments(
-            remote: remote, localBranch: local, remoteBranch: remoteBranch,
-            setUpstream: false, forceWithLease: true))
+        let command = GitActivityLog.displayCommand(for: GitClient.forcePushArguments(
+            remote: remote, localBranch: local, remoteBranch: remoteBranch))
         return warning + "\n\nWill run in this repository:\ngit " + command
     }
 

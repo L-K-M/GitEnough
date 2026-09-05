@@ -668,11 +668,7 @@ final class GitIntegrationTests: XCTestCase {
         // A local bare repo as the remote, under a non-default name: "origin"-
         // hardcoded publishing would fail here with "origin does not appear to
         // be a git repository".
-        let remoteURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("GitEnoughTests-remote-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: remoteURL) }
-        try run(["init", "--bare", remoteURL.path])
-        try run(["remote", "add", "work", remoteURL.path])
+        _ = try makeBareRemote(named: "work")
 
         try client.push(remote: "work", localBranch: "main", remoteBranch: "main",
                         setUpstream: true)
@@ -683,11 +679,7 @@ final class GitIntegrationTests: XCTestCase {
     }
 
     func testOrdinaryFetchAndPullDoNotForceUpdateEveryTag() throws {
-        let remoteURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("GitEnoughTests-remote-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: remoteURL) }
-        try run(["init", "--bare", remoteURL.path])
-        try run(["remote", "add", "origin", remoteURL.path])
+        let remoteURL = try makeBareRemote()
         try run(["push", "-u", "origin", "main"])
 
         let head = try GitShell.shared.runChecked(
@@ -712,11 +704,7 @@ final class GitIntegrationTests: XCTestCase {
     }
 
     func testBranchUpstreamGoneAfterRemoteDeletion() throws {
-        let remoteURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("GitEnoughTests-remote-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: remoteURL) }
-        try run(["init", "--bare", remoteURL.path])
-        try run(["remote", "add", "origin", remoteURL.path])
+        let remoteURL = try makeBareRemote()
         try client.push(remote: "origin", localBranch: "main", remoteBranch: "main",
                         setUpstream: true)
 
@@ -739,11 +727,7 @@ final class GitIntegrationTests: XCTestCase {
         // No upstream configured: the concept doesn't apply — empty set.
         XCTAssertTrue(try client.unpushedCommitHashes().isEmpty)
 
-        let remoteURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("GitEnoughTests-remote-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: remoteURL) }
-        try run(["init", "--bare", remoteURL.path])
-        try run(["remote", "add", "origin", remoteURL.path])
+        _ = try makeBareRemote()
         try client.push(remote: "origin", localBranch: "main", remoteBranch: "main",
                         setUpstream: true)
         XCTAssertTrue(try client.unpushedCommitHashes().isEmpty)
@@ -767,11 +751,7 @@ final class GitIntegrationTests: XCTestCase {
     }
 
     func testDeleteRemoteBranch() throws {
-        let remoteURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("GitEnoughTests-remote-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: remoteURL) }
-        try run(["init", "--bare", remoteURL.path])
-        try run(["remote", "add", "origin", remoteURL.path])
+        _ = try makeBareRemote()
         // Publish something to delete, then mirror the remote-tracking ref
         // like a fetch would.
         try run(["checkout", "-b", "to-delete"])
@@ -837,11 +817,7 @@ final class GitIntegrationTests: XCTestCase {
     }
 
     func testForcePushWithLease() throws {
-        let remoteURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("GitEnoughTests-remote-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: remoteURL) }
-        try run(["init", "--bare", remoteURL.path])
-        try run(["remote", "add", "origin", remoteURL.path])
+        let remoteURL = try makeBareRemote()
         try client.push(remote: "origin", localBranch: "main", remoteBranch: "main",
                         setUpstream: true)
 
@@ -867,11 +843,7 @@ final class GitIntegrationTests: XCTestCase {
     /// bare `git push --force-with-lease` force-updates *every* branch that
     /// exists on both sides, while the confirmation dialog names exactly one.
     func testForcePushRewritesOnlyTheNamedBranch() throws {
-        let remoteURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("GitEnoughTests-remote-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: remoteURL) }
-        try run(["init", "--bare", remoteURL.path])
-        try run(["remote", "add", "origin", remoteURL.path])
+        let remoteURL = try makeBareRemote()
         try run(["config", "push.default", "matching"])
 
         // Two branches published to the remote, then both diverged locally.
@@ -910,11 +882,7 @@ final class GitIntegrationTests: XCTestCase {
     /// `push.default = nothing` makes a bare `git push` fail with "You didn't
     /// specify any refspecs to push". An explicit refspec is immune.
     func testPushWorksUnderPushDefaultNothing() throws {
-        let remoteURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("GitEnoughTests-remote-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: remoteURL) }
-        try run(["init", "--bare", remoteURL.path])
-        try run(["remote", "add", "origin", remoteURL.path])
+        let remoteURL = try makeBareRemote()
         try run(["config", "push.default", "nothing"])
 
         try client.push(remote: "origin", localBranch: "main", remoteBranch: "main",
@@ -929,11 +897,7 @@ final class GitIntegrationTests: XCTestCase {
     /// what the ahead/behind counters are measured against — not a same-named
     /// branch on the remote (which is what `push.default = current` would do).
     func testPushMovesTheUpstreamBranchNotTheSameNamedOne() throws {
-        let remoteURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("GitEnoughTests-remote-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: remoteURL) }
-        try run(["init", "--bare", remoteURL.path])
-        try run(["remote", "add", "origin", remoteURL.path])
+        let remoteURL = try makeBareRemote()
         try client.push(remote: "origin", localBranch: "main", remoteBranch: "main",
                         setUpstream: true)
 
@@ -961,6 +925,16 @@ final class GitIntegrationTests: XCTestCase {
                        "the configured upstream is what moves")
         XCTAssertEqual(try remoteRef("refs/heads/sidecar", in: remoteURL), sidecarBefore,
                        "the same-named remote branch is untouched")
+    }
+
+    /// A bare repository registered as a remote, cleaned up with the test.
+    private func makeBareRemote(named name: String = "origin") throws -> URL {
+        let remoteURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitEnoughTests-remote-\(UUID().uuidString)")
+        addTeardownBlock { try? FileManager.default.removeItem(at: remoteURL) }
+        try run(["init", "--bare", remoteURL.path])
+        try run(["remote", "add", name, remoteURL.path])
+        return remoteURL
     }
 
     private func remoteRef(_ ref: String, in remoteURL: URL) throws -> String {

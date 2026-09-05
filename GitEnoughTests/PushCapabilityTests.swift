@@ -118,14 +118,14 @@ final class PushCapabilityTests: XCTestCase {
         XCTAssertEqual(
             GitClient.pushArguments(remote: "origin", localBranch: "feature",
                                     remoteBranch: "main", setUpstream: false),
-            ["push", "origin", "refs/heads/feature:refs/heads/main"])
+            ["push", "--", "origin", "refs/heads/feature:refs/heads/main"])
     }
 
     func testPublishArgumentsSetUpstream() {
         XCTAssertEqual(
             GitClient.pushArguments(remote: "work", localBranch: "topic",
                                     remoteBranch: "topic", setUpstream: true),
-            ["push", "-u", "work", "refs/heads/topic:refs/heads/topic"])
+            ["push", "-u", "--", "work", "refs/heads/topic:refs/heads/topic"])
     }
 
     func testForceWithLeasePrecedesTheRefspec() {
@@ -133,7 +133,7 @@ final class PushCapabilityTests: XCTestCase {
             GitClient.pushArguments(remote: "origin", localBranch: "main",
                                     remoteBranch: "main", setUpstream: false,
                                     forceWithLease: true),
-            ["push", "--force-with-lease", "origin", "refs/heads/main:refs/heads/main"])
+            ["push", "--force-with-lease", "--", "origin", "refs/heads/main:refs/heads/main"])
     }
 
     /// A branch called `-x` is a legal ref. Fully qualifying the refspec is what
@@ -142,7 +142,7 @@ final class PushCapabilityTests: XCTestCase {
         XCTAssertEqual(
             GitClient.pushArguments(remote: "origin", localBranch: "-x",
                                     remoteBranch: "-x", setUpstream: false),
-            ["push", "origin", "refs/heads/-x:refs/heads/-x"],
+            ["push", "--", "origin", "refs/heads/-x:refs/heads/-x"],
             "the dash-leading branch stays inside the qualified refspec")
     }
 
@@ -152,5 +152,61 @@ final class PushCapabilityTests: XCTestCase {
         XCTAssertNil(Remote.split(upstream: "origin/", among: [origin]))
         XCTAssertNil(Remote.split(upstream: nil, among: [origin]))
         XCTAssertNil(Remote.split(upstream: "origin", among: [origin]))
+        XCTAssertNil(Remote.split(upstream: "elsewhere/main", among: [origin]),
+                     "an upstream on no configured remote does not split")
+    }
+
+    func testSplitPicksTheLongestMatchingRemoteName() {
+        let simple = Remote.split(upstream: "origin/main", among: [origin])
+        XCTAssertEqual(simple?.remote.name, "origin")
+        XCTAssertEqual(simple?.branch, "main")
+
+        let up = Remote(name: "up", url: "https://example.com/a.git")
+        let upStream = Remote(name: "up/stream", url: "https://example.com/b.git")
+        let nested = Remote.split(upstream: "up/stream/port", among: [up, upStream])
+        XCTAssertEqual(nested?.remote.name, "up/stream", "longest prefix wins")
+        XCTAssertEqual(nested?.branch, "port")
+    }
+
+    /// Nested remote names make the string genuinely ambiguous: with `origin`
+    /// and `origin/features` both configured, `origin/features/x` is either
+    /// `origin/features` + `x` or `origin` + `features/x`. The local branch
+    /// name settles it when it can.
+    func testSplitUsesTheLocalBranchToBreakANestedRemoteTie() {
+        let features = Remote(name: "origin/features", url: "https://example.com/f.git")
+        let remotes = [origin, features]
+
+        let asOrigin = Remote.split(upstream: "origin/features/x", among: remotes,
+                                    localBranch: "features/x")
+        XCTAssertEqual(asOrigin?.remote.name, "origin")
+        XCTAssertEqual(asOrigin?.branch, "features/x")
+
+        let asNested = Remote.split(upstream: "origin/features/x", among: remotes,
+                                    localBranch: "x")
+        XCTAssertEqual(asNested?.remote.name, "origin/features")
+        XCTAssertEqual(asNested?.branch, "x")
+
+        // With no local branch to compare, longest prefix still decides.
+        XCTAssertEqual(
+            Remote.split(upstream: "origin/features/x", among: remotes)?.remote.name,
+            "origin/features")
+    }
+
+    func testTheRemoteOperandCannotBeReadAsAnOption() {
+        // `git remote add -- -f <url>` is accepted, so a remote really can be
+        // called "-f"; `--` is what keeps it an operand.
+        let args = GitClient.pushArguments(remote: "-f", localBranch: "main",
+                                           remoteBranch: "main", setUpstream: false)
+        XCTAssertEqual(args, ["push", "--", "-f", "refs/heads/main:refs/heads/main"])
+    }
+
+    func testForcePushArgumentsAreTheOnesForcePushRuns() {
+        XCTAssertEqual(
+            GitClient.forcePushArguments(remote: "origin", localBranch: "main",
+                                         remoteBranch: "main"),
+            GitClient.pushArguments(remote: "origin", localBranch: "main",
+                                    remoteBranch: "main", setUpstream: false,
+                                    forceWithLease: true),
+            "the confirmation dialog and the command it describes share one definition")
     }
 }

@@ -50,7 +50,8 @@ public enum PushCapability: Equatable {
         guard let fallback = remotes.first(where: { $0.name == "origin" }) ?? remotes.first else {
             return .unavailable(.noRemotes)
         }
-        if let upstream = Remote.split(upstream: status.upstream, among: remotes) {
+        if let upstream = Remote.split(upstream: status.upstream, among: remotes,
+                                       localBranch: head) {
             return .push(remote: upstream.remote.name,
                          localBranch: head,
                          remoteBranch: upstream.branch)

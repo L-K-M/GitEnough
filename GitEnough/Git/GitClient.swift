@@ -459,9 +459,16 @@ public final class GitClient {
     /// silently. With an explicit refspec the lease applies to that one ref.
     public func push(remote: String, localBranch: String, remoteBranch: String,
                      setUpstream: Bool, forceWithLease: Bool = false) throws {
-        try runChecked(["-C", worktree.path] + Self.pushArguments(
+        try push(Self.pushArguments(
             remote: remote, localBranch: localBranch, remoteBranch: remoteBranch,
-            setUpstream: setUpstream, forceWithLease: forceWithLease), in: nil)
+            setUpstream: setUpstream, forceWithLease: forceWithLease))
+    }
+
+    /// Runs an argv built by `pushArguments`/`forcePushArguments`, so a caller
+    /// that has already resolved the exact command (the force-push confirmation
+    /// shows it to the user first) runs that command rather than rebuilding it.
+    public func push(_ arguments: [String]) throws {
+        try runChecked(["-C", worktree.path] + arguments, in: nil)
     }
 
     /// The argv `push` runs, without the repo-scoping `-C` pair. Pure, so the
@@ -474,9 +481,25 @@ public final class GitClient {
         var args = ["push"]
         if forceWithLease { args.append("--force-with-lease") }
         if setUpstream { args.append("-u") }
+        // `--` ends option parsing. Qualifying the refspec covers the branch
+        // names, but the remote is its own operand — and a remote really can be
+        // called `-f`: `git remote add -- -f <url>` is accepted, and without the
+        // separator `git push … -f refs/…` would parse it as --force.
+        args.append("--")
         args.append(remote)
         args.append("refs/heads/\(localBranch):refs/heads/\(remoteBranch)")
         return args
+    }
+
+    /// The argv a force push runs. One definition so the confirmation dialog and
+    /// the command it describes share their *flags* too, not just the refspec —
+    /// otherwise adding, say, `--force-if-includes` would change what runs
+    /// without changing what the user was shown.
+    public static func forcePushArguments(remote: String, localBranch: String,
+                                          remoteBranch: String) -> [String] {
+        pushArguments(remote: remote, localBranch: localBranch,
+                      remoteBranch: remoteBranch, setUpstream: false,
+                      forceWithLease: true)
     }
 
     // MARK: - Branches
