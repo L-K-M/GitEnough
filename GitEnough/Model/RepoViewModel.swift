@@ -678,19 +678,22 @@ public final class RepoViewModel: ObservableObject, Identifiable {
             let existing = fileExists
                 ? try String(contentsOf: url, encoding: .utf8)
                 : ""
-            let updated = GitIgnore.appending(change.path, to: existing)
-            guard updated != existing else { return }
+            // The bytes to add, computed once in `GitIgnore` — see
+            // `appendedBytes` for why this must not be a Character-count slice.
+            let addition = GitIgnore.appendedBytes(change.path, to: existing)
+            guard !addition.isEmpty else { return }
             if fileExists {
                 // Append through the existing file (following symlinks, and
                 // preserving permissions/ownership) rather than replacing it
-                // atomically. `appending` only ever appends, so the new bytes
-                // are exactly the difference.
+                // atomically. `appending` only ever appends, so these bytes are
+                // exactly the difference.
                 let handle = try FileHandle(forWritingTo: url)
                 try handle.seekToEnd()
-                try handle.write(contentsOf: Data(updated.dropFirst(existing.count).utf8))
+                try handle.write(contentsOf: addition)
                 try handle.close()
             } else {
-                try updated.write(to: url, atomically: true, encoding: .utf8)
+                // `existing` is empty here, so the addition is the whole file.
+                try addition.write(to: url, options: .atomic)
             }
         }
     }

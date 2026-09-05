@@ -75,6 +75,51 @@ final class GitIgnoreTests: XCTestCase {
                        " /build/output\n//build/output\n")
     }
 
+    // MARK: - The bytes the caller appends
+
+    /// `RepoViewModel.ignore` appends only the tail of `appending`'s result to
+    /// the existing file, so the tail has to be taken in bytes. A .gitignore
+    /// ending in a bare CR is the case that makes a Character-count slice wrong:
+    /// the separator "\n" merges with it into one CRLF grapheme cluster, so the
+    /// result has one Character *fewer* at the join than `existing` does.
+    func testAppendedBytesSurviveACarriageReturnAtTheJoin() {
+        let existing = "a\r"
+        XCTAssertEqual(GitIgnore.appending("x", to: existing), "a\r\n/x\n")
+        XCTAssertEqual(
+            String(decoding: GitIgnore.appendedBytes("x", to: existing), as: UTF8.self),
+            "\n/x\n")
+
+        // The slice that must not be used: it swallows the separator, gluing the
+        // new rule onto the previous one — "a\r/x\n" — which destroys the "a"
+        // rule and leaves the new one matching nothing.
+        let updated = GitIgnore.appending("x", to: existing)
+        XCTAssertEqual(String(updated.dropFirst(existing.count)), "/x\n",
+                       "precondition: the Character slice is short by the separator")
+    }
+
+    /// The general invariant the caller depends on: appending these bytes to the
+    /// existing bytes reproduces `appending` exactly, for any input.
+    func testAppendedBytesReconstructTheWholeFile() {
+        let cases: [(String, String)] = [
+            ("", "notes.md"),
+            ("build/\n", "dist/"),
+            ("build/", "dist/"),                 // no trailing newline
+            ("a\r", "x"),                        // CR at the join
+            ("\u{1F600}", "emoji.txt"),          // multi-byte final character
+            ("e\u{301}", "combining.txt"),       // combining mark at the join
+        ]
+        for (existing, path) in cases {
+            let expected = GitIgnore.appending(path, to: existing)
+            let rebuilt = Data(existing.utf8) + GitIgnore.appendedBytes(path, to: existing)
+            XCTAssertEqual(String(decoding: rebuilt, as: UTF8.self), expected,
+                           "existing: \(existing.debugDescription), path: \(path)")
+        }
+    }
+
+    func testAppendedBytesAreEmptyWhenTheRuleAlreadyExists() {
+        XCTAssertTrue(GitIgnore.appendedBytes("build", to: "/build\n").isEmpty)
+    }
+
     func testGeneratedRulesMatchLiteralNamesWithGit() throws {
         guard GitShell.shared.isAvailable else {
             throw XCTSkip("git is not installed")

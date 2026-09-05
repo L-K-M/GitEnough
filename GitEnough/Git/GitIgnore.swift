@@ -52,6 +52,24 @@ public enum GitIgnore {
         return existing + separator + "/" + escaped + "\n"
     }
 
+    /// The bytes a caller must append to a file currently holding `existing` in
+    /// order to reach `appending(path, to: existing)`. Empty when the rule is
+    /// already covered.
+    ///
+    /// This exists so the difference is taken in **bytes**, once, here. Deriving
+    /// it from Character counts is wrong in a way that is easy to miss and
+    /// destructive when it happens: `appending` returns `existing` plus a tail,
+    /// but the two can disagree on Character count at the join. An existing file
+    /// ending in a bare CR gains the separator "\n", and CR + LF is a single
+    /// grapheme cluster — so the result has one Character *fewer* at that point
+    /// than `existing` does, and `updated.dropFirst(existing.count)` drops the
+    /// separator along with it. The file becomes "a\r/x\n": the previous rule
+    /// destroyed, the new one matching nothing, and the caller reporting success.
+    public static func appendedBytes(_ path: String, to existing: String) -> Data {
+        let updated = appending(path, to: existing)
+        return Data(updated.utf8).dropFirst(Data(existing.utf8).count)
+    }
+
     /// git ignores unescaped trailing whitespace in patterns (and nothing
     /// else) — mirror exactly that for the duplicate comparison, so a line
     /// like " /build" (leading space is significant) can't false-positive,

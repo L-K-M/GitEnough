@@ -855,6 +855,56 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertEqual(localHead, remoteHead)
     }
 
+    // MARK: - Unstage never becomes a deletion
+
+    /// `unstage` used to wrap `git restore --staged` in a blanket `catch` that
+    /// fell through to `git rm --cached`. That is only correct for an unborn
+    /// HEAD; on a repository that has commits, *any* failure — here, one bad
+    /// pathspec alongside a good one — turned every selected staged
+    /// modification into a staged **deletion**, and reported success while
+    /// doing it.
+    func testAFailedUnstageLeavesTheFileStagedRatherThanDeleted() throws {
+        try write("changed\n", to: "a.txt")
+        try client.stage(paths: ["a.txt"])
+
+        // `git restore --staged` refuses the whole invocation when a pathspec
+        // matches nothing, so this is a genuine failure with a real staged file
+        // in the same call — exactly the shape the old catch mishandled.
+        XCTAssertThrowsError(try client.unstage(paths: ["a.txt", "no-such-file.txt"]),
+                             "a pathspec that matches nothing must surface, not be swallowed")
+
+        let status = try client.status()
+        XCTAssertTrue(status.staged.contains { $0.path == "a.txt" && $0.stagedStatus == .modified },
+                      "the file must still be staged as a modification, got \(status.staged)")
+        XCTAssertFalse(status.staged.contains { $0.stagedStatus == .deleted },
+                       "a failed unstage must never stage a deletion")
+    }
+
+    /// The case the blanket catch was written for still works: on an unborn
+    /// HEAD there is nothing to restore against, so unstaging drops the index
+    /// entry and leaves the file on disk.
+    func testUnstageOnUnbornHeadDropsTheIndexEntry() throws {
+        let fresh = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitEnoughTests-unborn-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: fresh, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: fresh) }
+        let unborn = GitClient(worktree: fresh)
+        _ = try GitShell.shared.runChecked(["init", "-b", "main", fresh.path], in: nil)
+        try "new\n".write(to: fresh.appendingPathComponent("new.txt"),
+                          atomically: true, encoding: .utf8)
+        try unborn.stage(paths: ["new.txt"])
+        XCTAssertEqual(try unborn.status().staged.map(\.path), ["new.txt"])
+
+        try unborn.unstage(paths: ["new.txt"])
+
+        let status = try unborn.status()
+        XCTAssertTrue(status.staged.isEmpty, "got \(status.staged)")
+        XCTAssertEqual(status.unstaged.map(\.path), ["new.txt"])
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: fresh.appendingPathComponent("new.txt").path),
+            "unstaging must never remove the file from disk")
+    }
+
     func testCreateTagLightweightAndAnnotated() throws {
         let head = try XCTUnwrap(try client.log(limit: 1).first?.hash)
         try client.createTag(name: "v1.0", message: nil, at: head)

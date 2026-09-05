@@ -355,20 +355,35 @@ public final class GitClient {
         try runChecked(["-C", worktree.path, "add", "-A"], in: nil)
     }
 
+    /// True when the repository has a commit to resolve paths against — false on
+    /// an unborn HEAD, where `restore --staged` and `reset` have no baseline.
+    ///
+    /// Both callers check this *explicitly* rather than inferring it from a
+    /// failure. Inferring is the dangerous version: a blanket `catch` around
+    /// `restore --staged` accepts every other cause too — a locked index, a
+    /// permissions problem, a corrupt ref, a path that moved underneath the
+    /// click — and falls through to `rm --cached`, which succeeds. The user
+    /// clicks Unstage, the operation reports success, the rows flip from
+    /// Modified to Deleted, and the next commit removes the files.
+    private func hasHEAD() -> Bool {
+        (try? runReadChecked(
+            ["-C", worktree.path, "rev-parse", "--verify", "--quiet", "HEAD"], in: nil)) != nil
+    }
+
     public func unstage(paths: [String]) throws {
         guard !paths.isEmpty else { return }
         let literalSpecs = Self.literalPathspecs(paths)
-        do {
-            try runChecked(
-                ["-C", worktree.path, "restore", "--staged", "--"] + literalSpecs, in: nil)
-        } catch {
-            // On an unborn HEAD (no commits yet) `restore --staged` has nothing to
-            // resolve HEAD against; `rm --cached` is the equivalent there.
+        guard hasHEAD() else {
+            // Unborn HEAD: nothing to restore against, so unstaging is exactly
+            // dropping the index entry. --cached never touches worktree files.
             try runChecked(
                 ["-C", worktree.path, "rm", "--cached", "-r", "--ignore-unmatch", "--"]
                     + literalSpecs,
                 in: nil)
+            return
         }
+        try runChecked(
+            ["-C", worktree.path, "restore", "--staged", "--"] + literalSpecs, in: nil)
     }
 
     /// Reverts tracked paths to their HEAD state — both the index and the
@@ -391,13 +406,9 @@ public final class GitClient {
         // Force literal matching everywhere a real path is passed.
         let literalSpecs = Self.literalPathspecs(paths)
         // Check for an unborn HEAD explicitly instead of inferring it from a
-        // `reset` failure: a blanket catch would turn a genuine reset error
-        // (corrupt ref, unwritable index) into an unintended `rm --cached`,
-        // which shows up as staged *deletions* of files the user only meant
-        // to revert.
-        let headExists = (try? runReadChecked(
-            ["-C", worktree.path, "rev-parse", "--verify", "--quiet", "HEAD"], in: nil)) != nil
-        guard headExists else {
+        // `reset` failure — see `hasHEAD()` for why the inferring version turns
+        // an unrelated error into staged deletions.
+        guard hasHEAD() else {
             // Unborn HEAD: there is nothing to restore against, so discarding
             // can only unstage. --cached never touches worktree files; -f just
             // bypasses the safety check that refuses staged-new files that
