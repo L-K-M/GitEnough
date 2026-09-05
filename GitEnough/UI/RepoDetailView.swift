@@ -127,9 +127,9 @@ struct RepoDetailView: View {
                     Button("Force Push (with Lease)…") {
                         showingForcePushConfirmation = true
                     }
-                    .disabled(viewModel.pushCapability != .push)
+                    .disabled(!viewModel.pushCapability.allowsForcePush)
                 } label: {
-                    Label(viewModel.pushCapability == .push && viewModel.status.ahead > 0
+                    Label(viewModel.pushCapability.allowsForcePush && viewModel.status.ahead > 0
                           ? "Push (\(viewModel.status.ahead))"
                           : viewModel.pushCapability.label,
                           systemImage: "arrow.up.to.line")
@@ -176,8 +176,30 @@ struct RepoDetailView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This rewrites the remote branch to match your local history. “With lease” refuses to overwrite commits you haven't fetched yet, so a teammate's new work can't be lost silently — but anyone who pulled the old history will have to recover.")
+            Text(forcePushMessage)
         }
+    }
+
+    /// The force-push warning, ending in the literal command that will run.
+    ///
+    /// Showing the command is not decoration: this is the one action in the app
+    /// that can destroy someone else's work, and the whole premise of GitEnough
+    /// is that it does what the command line would — so it should be willing to
+    /// say which command. It also makes the refspec visible, which is exactly
+    /// what a bare `git push` left to `push.default` did not have.
+    private var forcePushMessage: String {
+        let warning = "This rewrites the remote branch to match your local history."
+            + " “With lease” refuses to overwrite commits you haven't fetched yet, so a"
+            + " teammate's new work can't be lost silently — but anyone who pulled the old"
+            + " history will have to recover."
+        guard case .push(let remote, let local, let remoteBranch)
+            = viewModel.pushCapability else { return warning }
+        // Built from the same `pushArguments` the client executes, so the
+        // sentence and the command cannot drift apart.
+        let command = GitActivityLog.displayCommand(for: GitClient.pushArguments(
+            remote: remote, localBranch: local, remoteBranch: remoteBranch,
+            setUpstream: false, forceWithLease: true))
+        return warning + "\n\nWill run:\ngit " + command
     }
 
     // MARK: - Toolbar pieces

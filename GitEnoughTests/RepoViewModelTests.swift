@@ -8,45 +8,6 @@ final class RepoViewModelTests: XCTestCase {
         RepoViewModel(repo: Repository(path: "/nonexistent/gitenough-test", name: "test"))
     }
 
-    // MARK: - Push capability
-
-    private let origin = Remote(name: "origin", url: "https://example.com/owner/repo.git")
-
-    func testPushCapabilityWithUpstreamUsesPlainPush() {
-        let status = RepoStatus(head: "main", headHash: "abc123",
-                                upstream: "origin/main")
-        XCTAssertEqual(PushCapability.resolve(status: status, remotes: [origin]), .push)
-    }
-
-    func testPushCapabilityForNewLocalBranchPublishesToOrigin() {
-        let status = RepoStatus(head: "feature", headHash: "abc123")
-        let backup = Remote(name: "backup", url: "https://example.com/backup/repo.git")
-        XCTAssertEqual(
-            PushCapability.resolve(status: status, remotes: [backup, origin]),
-            .publish(remote: "origin"))
-    }
-
-    func testPushCapabilityRejectsDetachedHead() {
-        let status = RepoStatus(head: nil, headHash: "abc123")
-        let capability = PushCapability.resolve(status: status, remotes: [origin])
-        XCTAssertEqual(capability, .unavailable(.detachedHead))
-        XCTAssertTrue(capability.help.contains("detached"))
-    }
-
-    func testPushCapabilityRejectsUnbornHead() {
-        let status = RepoStatus(head: "main", headHash: "(initial)")
-        let capability = PushCapability.resolve(status: status, remotes: [origin])
-        XCTAssertEqual(capability, .unavailable(.unbornHead))
-        XCTAssertTrue(capability.help.contains("no commits"))
-    }
-
-    func testPushCapabilityRejectsRepositoryWithoutRemotes() {
-        let status = RepoStatus(head: "feature", headHash: "abc123")
-        let capability = PushCapability.resolve(status: status, remotes: [])
-        XCTAssertEqual(capability, .unavailable(.noRemotes))
-        XCTAssertTrue(capability.help.contains("no remotes"))
-    }
-
     // MARK: - Pull guard
 
     func testPullWithoutUpstreamFailsGracefully() {
@@ -75,9 +36,9 @@ final class RepoViewModelTests: XCTestCase {
         // because a repo with no branch can't publish however many remotes it
         // has. This test therefore pins the *view model's* contract — the
         // reason is surfaced and no work is queued — rather than one specific
-        // reason's wording. Each reason's message is covered exhaustively by
-        // the pure PushCapability cases above, where the status can be built
-        // to select the branch under test.
+        // reason's wording. Each reason's message, and the refs every usable
+        // case resolves to, are covered exhaustively in PushCapabilityTests,
+        // where the status can be built to select the branch under test.
         viewModel.pushOrPublish()
         XCTAssertEqual(viewModel.errorMessage,
                        PushCapability.UnavailableReason.noCurrentBranch.message)

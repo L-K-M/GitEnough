@@ -437,18 +437,46 @@ public final class GitClient {
         try runChecked(args, in: nil)
     }
 
+    /// Pushes exactly one branch to exactly one remote.
+    ///
+    /// The refspec is never left implicit. A bare `git push` delegates the
+    /// choice of what to send to `push.default`, `remote.pushDefault` and
+    /// `branch.<name>.pushRemote`: under `push.default = matching` (git's
+    /// default before 2.0, and still present in plenty of inherited configs) it
+    /// pushes *every* branch that exists on both sides, so a single force push
+    /// rewrites branches the user never selected; under `current` it pushes to a
+    /// same-named branch that need not be the configured upstream the app's
+    /// ahead/behind counters are measured against; under `nothing` it fails
+    /// outright. Naming the refspec makes all three irrelevant.
+    ///
+    /// Both sides are fully qualified so that a branch sharing its short name
+    /// with a tag cannot be selected instead, and so a name beginning with `-`
+    /// can never land in option position.
+    ///
     /// `forceWithLease` rewrites the remote branch to the local history, but —
     /// unlike a bare --force — refuses when the remote moved past what this
     /// repo last fetched, so a teammate's unpulled commits can't be clobbered
-    /// silently.
-    public func push(setUpstream: Bool, remote: String = "origin",
-              forceWithLease: Bool = false) throws {
-        var args = ["-C", worktree.path, "push"]
+    /// silently. With an explicit refspec the lease applies to that one ref.
+    public func push(remote: String, localBranch: String, remoteBranch: String,
+                     setUpstream: Bool, forceWithLease: Bool = false) throws {
+        try runChecked(["-C", worktree.path] + Self.pushArguments(
+            remote: remote, localBranch: localBranch, remoteBranch: remoteBranch,
+            setUpstream: setUpstream, forceWithLease: forceWithLease), in: nil)
+    }
+
+    /// The argv `push` runs, without the repo-scoping `-C` pair. Pure, so the
+    /// confirmation dialog can show the user the exact command rather than a
+    /// description of it — and so the command shown and the command run cannot
+    /// drift apart.
+    public static func pushArguments(remote: String, localBranch: String, remoteBranch: String,
+                                     setUpstream: Bool,
+                                     forceWithLease: Bool = false) -> [String] {
+        var args = ["push"]
         if forceWithLease { args.append("--force-with-lease") }
-        if setUpstream {
-            args.append(contentsOf: ["-u", remote, "HEAD"])
-        }
-        try runChecked(args, in: nil)
+        if setUpstream { args.append("-u") }
+        args.append(remote)
+        args.append("refs/heads/\(localBranch):refs/heads/\(remoteBranch)")
+        return args
     }
 
     // MARK: - Branches

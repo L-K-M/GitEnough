@@ -674,7 +674,8 @@ final class GitIntegrationTests: XCTestCase {
         try run(["init", "--bare", remoteURL.path])
         try run(["remote", "add", "work", remoteURL.path])
 
-        try client.push(setUpstream: true, remote: "work")
+        try client.push(remote: "work", localBranch: "main", remoteBranch: "main",
+                        setUpstream: true)
 
         let main = try XCTUnwrap(client.branches().first { $0.name == "main" },
                                  "expected default branch 'main'")
@@ -716,7 +717,8 @@ final class GitIntegrationTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: remoteURL) }
         try run(["init", "--bare", remoteURL.path])
         try run(["remote", "add", "origin", remoteURL.path])
-        try client.push(setUpstream: true, remote: "origin")
+        try client.push(remote: "origin", localBranch: "main", remoteBranch: "main",
+                        setUpstream: true)
 
         var main = try XCTUnwrap(client.branches().first { $0.name == "main" && !$0.isRemote })
         XCTAssertEqual(main.upstream, "origin/main")
@@ -742,7 +744,8 @@ final class GitIntegrationTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: remoteURL) }
         try run(["init", "--bare", remoteURL.path])
         try run(["remote", "add", "origin", remoteURL.path])
-        try client.push(setUpstream: true, remote: "origin")
+        try client.push(remote: "origin", localBranch: "main", remoteBranch: "main",
+                        setUpstream: true)
         XCTAssertTrue(try client.unpushedCommitHashes().isEmpty)
 
         try write("five\n", to: "e.txt")
@@ -758,7 +761,8 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertEqual(unpushed, Set(newest))
 
         // Pushing clears the markers.
-        try client.push(setUpstream: false)
+        try client.push(remote: "origin", localBranch: "main", remoteBranch: "main",
+                        setUpstream: false)
         XCTAssertTrue(try client.unpushedCommitHashes().isEmpty)
     }
 
@@ -771,7 +775,8 @@ final class GitIntegrationTests: XCTestCase {
         // Publish something to delete, then mirror the remote-tracking ref
         // like a fetch would.
         try run(["checkout", "-b", "to-delete"])
-        try client.push(setUpstream: true, remote: "origin")
+        try client.push(remote: "origin", localBranch: "to-delete", remoteBranch: "to-delete",
+                        setUpstream: true)
         try run(["checkout", "main"])
         try client.fetch()
         XCTAssertTrue(try client.branches().contains { $0.name == "origin/to-delete" })
@@ -814,7 +819,8 @@ final class GitIntegrationTests: XCTestCase {
         try run(["remote", "add", "up/stream", upStreamURL.path])
 
         try run(["checkout", "-b", "port"])
-        try client.push(setUpstream: true, remote: "up/stream")
+        try client.push(remote: "up/stream", localBranch: "port", remoteBranch: "port",
+                        setUpstream: true)
         try run(["push", "up", "port"])   // the same branch on both remotes
         try run(["checkout", "main"])
 
@@ -836,7 +842,8 @@ final class GitIntegrationTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: remoteURL) }
         try run(["init", "--bare", remoteURL.path])
         try run(["remote", "add", "origin", remoteURL.path])
-        try client.push(setUpstream: true, remote: "origin")
+        try client.push(remote: "origin", localBranch: "main", remoteBranch: "main",
+                        setUpstream: true)
 
         // Rewrite local history so local and remote diverge.
         try write("amended\n", to: "a.txt")
@@ -844,15 +851,122 @@ final class GitIntegrationTests: XCTestCase {
         try client.commit(message: "Amended tip", amend: true)
 
         // A plain push is refused (non-fast-forward)…
-        XCTAssertThrowsError(try client.push(setUpstream: false))
+        XCTAssertThrowsError(try client.push(remote: "origin", localBranch: "main",
+                                             remoteBranch: "main", setUpstream: false))
         // …the lease push succeeds, and the remote tip matches local HEAD.
-        try client.push(setUpstream: false, forceWithLease: true)
+        try client.push(remote: "origin", localBranch: "main", remoteBranch: "main",
+                        setUpstream: false, forceWithLease: true)
         let localHead = try GitShell.shared.runChecked(["rev-parse", "HEAD"], in: repoURL)
             .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         let remoteHead = try GitShell.shared.runChecked(
             ["-C", remoteURL.path, "rev-parse", "refs/heads/main"], in: nil)
             .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         XCTAssertEqual(localHead, remoteHead)
+    }
+
+    /// The bug this signature exists to prevent: with `push.default = matching`
+    /// — git's default before 2.0, and still common in inherited configs — a
+    /// bare `git push --force-with-lease` force-updates *every* branch that
+    /// exists on both sides, while the confirmation dialog names exactly one.
+    func testForcePushRewritesOnlyTheNamedBranch() throws {
+        let remoteURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitEnoughTests-remote-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: remoteURL) }
+        try run(["init", "--bare", remoteURL.path])
+        try run(["remote", "add", "origin", remoteURL.path])
+        try run(["config", "push.default", "matching"])
+
+        // Two branches published to the remote, then both diverged locally.
+        try client.push(remote: "origin", localBranch: "main", remoteBranch: "main",
+                        setUpstream: true)
+        try run(["checkout", "-b", "topic"])
+        try write("topic\n", to: "t.txt")
+        try client.stage(paths: ["t.txt"])
+        try client.commit(message: "Topic")
+        try client.push(remote: "origin", localBranch: "topic", remoteBranch: "topic",
+                        setUpstream: true)
+
+        try run(["checkout", "main"])
+        try write("rewritten main\n", to: "a.txt")
+        try client.stage(paths: ["a.txt"])
+        try client.commit(message: "Rewritten main", amend: true)
+        try run(["checkout", "topic"])
+        try write("rewritten topic\n", to: "t.txt")
+        try client.stage(paths: ["t.txt"])
+        try client.commit(message: "Rewritten topic", amend: true)
+
+        let remoteMainBefore = try remoteRef("refs/heads/main", in: remoteURL)
+
+        // Force push topic only.
+        try client.push(remote: "origin", localBranch: "topic", remoteBranch: "topic",
+                        setUpstream: false, forceWithLease: true)
+
+        let localTopic = try GitShell.shared.runChecked(["rev-parse", "HEAD"], in: repoURL)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        XCTAssertEqual(try remoteRef("refs/heads/topic", in: remoteURL), localTopic,
+                       "the named branch is the one that moves")
+        XCTAssertEqual(try remoteRef("refs/heads/main", in: remoteURL), remoteMainBefore,
+                       "a branch the user did not select must not be force-updated")
+    }
+
+    /// `push.default = nothing` makes a bare `git push` fail with "You didn't
+    /// specify any refspecs to push". An explicit refspec is immune.
+    func testPushWorksUnderPushDefaultNothing() throws {
+        let remoteURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitEnoughTests-remote-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: remoteURL) }
+        try run(["init", "--bare", remoteURL.path])
+        try run(["remote", "add", "origin", remoteURL.path])
+        try run(["config", "push.default", "nothing"])
+
+        try client.push(remote: "origin", localBranch: "main", remoteBranch: "main",
+                        setUpstream: true)
+
+        let localHead = try GitShell.shared.runChecked(["rev-parse", "HEAD"], in: repoURL)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        XCTAssertEqual(try remoteRef("refs/heads/main", in: remoteURL), localHead)
+    }
+
+    /// A branch tracking a differently-named upstream must move the upstream —
+    /// what the ahead/behind counters are measured against — not a same-named
+    /// branch on the remote (which is what `push.default = current` would do).
+    func testPushMovesTheUpstreamBranchNotTheSameNamedOne() throws {
+        let remoteURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitEnoughTests-remote-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: remoteURL) }
+        try run(["init", "--bare", remoteURL.path])
+        try run(["remote", "add", "origin", remoteURL.path])
+        try client.push(remote: "origin", localBranch: "main", remoteBranch: "main",
+                        setUpstream: true)
+
+        // "feature" exists on both sides, but tracks origin/main.
+        try run(["checkout", "-b", "feature"])
+        try run(["push", "origin", "feature"])
+        let featureBefore = try remoteRef("refs/heads/feature", in: remoteURL)
+        try run(["branch", "--set-upstream-to=origin/main", "feature"])
+        try write("via feature\n", to: "a.txt")
+        try client.stage(paths: ["a.txt"])
+        try client.commit(message: "Through the upstream")
+
+        let capability = PushCapability.resolve(status: try client.status(),
+                                                remotes: try client.remotes())
+        guard case .push(let remote, let local, let remoteBranch) = capability else {
+            return XCTFail("expected a push capability, got \(capability)")
+        }
+        try client.push(remote: remote, localBranch: local, remoteBranch: remoteBranch,
+                        setUpstream: false)
+
+        let localHead = try GitShell.shared.runChecked(["rev-parse", "HEAD"], in: repoURL)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        XCTAssertEqual(try remoteRef("refs/heads/main", in: remoteURL), localHead,
+                       "the configured upstream is what moves")
+        XCTAssertEqual(try remoteRef("refs/heads/feature", in: remoteURL), featureBefore,
+                       "the same-named remote branch is untouched")
+    }
+
+    private func remoteRef(_ ref: String, in remoteURL: URL) throws -> String {
+        try GitShell.shared.runChecked(["-C", remoteURL.path, "rev-parse", ref], in: nil)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     func testCreateTagLightweightAndAnnotated() throws {

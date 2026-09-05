@@ -352,9 +352,18 @@ public final class RepoViewModel: ObservableObject, Identifiable {
 
     /// Force push with lease. The UI gates this behind an explicit
     /// confirmation dialog — it rewrites the remote branch.
+    ///
+    /// The capability is re-resolved here rather than trusted from the click:
+    /// force-pushing is the one action where sending a stale refspec would
+    /// rewrite the wrong branch, and only `.push` has an upstream to overwrite.
     public func forcePush() {
+        guard case .push(let remote, let local, let remoteBranch) = pushCapability else {
+            errorMessage = "Can't force push: this branch has no upstream to overwrite. Publish it first."
+            return
+        }
         perform("Force pushing…", invalidatesMessageGeneration: false) {
-            try $0.push(setUpstream: false, forceWithLease: true)
+            try $0.push(remote: remote, localBranch: local, remoteBranch: remoteBranch,
+                        setUpstream: false, forceWithLease: true)
         }
     }
 
@@ -381,18 +390,18 @@ public final class RepoViewModel: ObservableObject, Identifiable {
     /// a remote, and the error explains the next useful step.
     public func pushOrPublish() {
         switch pushCapability {
-        case .push:
-            push()
-        case .publish(let remote):
-            publishBranch(to: remote)
+        case .push(let remote, let local, let remoteBranch):
+            perform("Pushing…", invalidatesMessageGeneration: false) {
+                try $0.push(remote: remote, localBranch: local, remoteBranch: remoteBranch,
+                            setUpstream: false)
+            }
+        case .publish(let remote, let branch):
+            perform("Publishing branch…", invalidatesMessageGeneration: false) {
+                try $0.push(remote: remote, localBranch: branch, remoteBranch: branch,
+                            setUpstream: true)
+            }
         case .unavailable(let reason):
             errorMessage = reason.message
-        }
-    }
-
-    private func push() {
-        perform("Pushing…", invalidatesMessageGeneration: false) {
-            try $0.push(setUpstream: false)
         }
     }
 
@@ -403,14 +412,6 @@ public final class RepoViewModel: ObservableObject, Identifiable {
     /// would otherwise die on "You have not concluded your merge").
     public var canPull: Bool {
         !isBusy && !remotes.isEmpty && status.upstream != nil && !mergeState.isInProgress
-    }
-
-    /// Push -u <remote> HEAD for a branch with no upstream yet. Only invoked
-    /// with the remote selected by `PushCapability.resolve`.
-    private func publishBranch(to remote: String) {
-        perform("Publishing branch…", invalidatesMessageGeneration: false) {
-            try $0.push(setUpstream: true, remote: remote)
-        }
     }
 
     // MARK: Pull request

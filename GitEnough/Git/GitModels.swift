@@ -80,13 +80,26 @@ public struct Remote: Identifiable, Hashable {
     /// may themselves contain slashes, so split-at-first-slash is ambiguous;
     /// the longest configured prefix is the exact match.
     public static func preferred(for upstream: String?, among remotes: [Remote]) -> Remote? {
-        if let upstream,
-           let matched = remotes
+        split(upstream: upstream, among: remotes)?.remote
+            ?? remotes.first { $0.name == "origin" } ?? remotes.first
+    }
+
+    /// Splits an upstream ref (`origin/main`, `up/stream/topic`) into the
+    /// configured remote it names and the branch **on that remote**.
+    ///
+    /// The branch half matters as much as the remote half: a local branch may
+    /// track a differently-named upstream, and the upstream is what the app's
+    /// own ahead/behind counters are measured against — so it is the ref Push
+    /// has to move. Returns nil when no configured remote is a prefix, which
+    /// means the upstream names a remote that no longer exists.
+    public static func split(upstream: String?,
+                             among remotes: [Remote]) -> (remote: Remote, branch: String)? {
+        guard let upstream else { return nil }
+        guard let matched = remotes
             .filter({ upstream.hasPrefix($0.name + "/") })
-            .max(by: { $0.name.count < $1.name.count }) {
-            return matched
-        }
-        return remotes.first { $0.name == "origin" } ?? remotes.first
+            .max(by: { $0.name.count < $1.name.count }) else { return nil }
+        let branch = String(upstream.dropFirst(matched.name.count + 1))
+        return branch.isEmpty ? nil : (matched, branch)
     }
 
     /// Short host-ish label for the status bar, e.g. "github.com/L-K-M/GitEnough".
