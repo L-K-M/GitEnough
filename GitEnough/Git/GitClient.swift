@@ -600,8 +600,9 @@ public final class GitClient {
 
     /// Hands one conflicted file to an external merge tool (`git mergetool`).
     /// Blocks until the tool exits. Afterwards the caller refreshes: if the tool
-    /// (or git's "was the merge successful?" prompt, which gets a headless EOF)
-    /// didn't stage the file, the UI still offers “Mark Resolved”.
+    /// (or git's "was the merge successful?" prompt, which gets a headless EOF
+    /// because `GitShell.run` gives every child `/dev/null` on stdin) didn't
+    /// stage the file, the UI still offers “Mark Resolved”.
     public func runMergeTool(_ tool: String, path: String) throws {
         // git-mergetool is a shell script. Even after its initial git command
         // selects a literal path, it expands the returned filename with an
