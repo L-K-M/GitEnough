@@ -855,6 +855,53 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertEqual(localHead, remoteHead)
     }
 
+    // MARK: - External diff drivers
+
+    /// `diff.external` is what difftastic's own install instructions set
+    /// (`git config --global diff.external difft`). Without `--no-ext-diff`
+    /// every patch the app reads becomes that tool's rendered stdout — parsed
+    /// as a unified diff by the diff pane, and handed to the commit-message
+    /// model as though it were the change.
+    ///
+    /// Verified against git 2.43: `git diff --staged` and `git diff --no-index`
+    /// are replaced; `git show` and `git diff --stat` are not.
+    func testDiffReadsIgnoreAConfiguredExternalDiffDriver() throws {
+        let script = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitEnough-fake-difftool-\(UUID().uuidString).sh")
+        defer { try? FileManager.default.removeItem(at: script) }
+        try "#!/bin/sh\necho EXTERNAL-TOOL-OUTPUT\n"
+            .write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755],
+                                              ofItemAtPath: script.path)
+        try run(["config", "diff.external", script.path])
+
+        try write("changed\n", to: "a.txt")
+        try client.stage(paths: ["a.txt"])
+        try write("brand new\n", to: "fresh.txt")
+
+        let staged = try client.stagedDiff()
+        XCTAssertFalse(staged.contains("EXTERNAL-TOOL-OUTPUT"),
+                       "the model must be handed a patch, not a diff tool's rendering")
+        XCTAssertTrue(staged.contains("@@"), "…and that patch must be a real one")
+
+        let untracked = try client.diffForUntracked(path: "fresh.txt")
+        XCTAssertFalse(untracked.contains("EXTERNAL-TOOL-OUTPUT"))
+        XCTAssertTrue(untracked.contains("brand new"))
+
+        // Already carried the flag before this change; pinned so it stays.
+        XCTAssertFalse(try client.diff(path: "a.txt", staged: true)
+            .contains("EXTERNAL-TOOL-OUTPUT"))
+
+        // git does not apply the driver to these two, but they pass the flag
+        // for consistency — assert they still return what they always did.
+        XCTAssertTrue(try client.stagedDiffStat().contains("a.txt"))
+        try client.commit(message: "Change a.txt")
+        let head = try XCTUnwrap(try client.log(limit: 1).first?.hash)
+        let commitDiff = try client.commitFileDiff(hash: head, path: "a.txt")
+        XCTAssertTrue(commitDiff.contains("diff --git"), "got \(commitDiff)")
+        XCTAssertFalse(commitDiff.contains("EXTERNAL-TOOL-OUTPUT"))
+    }
+
     func testCreateTagLightweightAndAnnotated() throws {
         let head = try XCTUnwrap(try client.log(limit: 1).first?.hash)
         try client.createTag(name: "v1.0", message: nil, at: head)

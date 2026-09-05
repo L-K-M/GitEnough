@@ -26,6 +26,14 @@ public enum DiffParser {
         var lines: [DiffLine] = []
         lines.reserveCapacity(min(diff.count / 40, maxLines + 1))
         var count = 0
+        // Where we are matters, because a diff's line prefixes are ambiguous
+        // out of context. Inside a hunk the leading character belongs to the
+        // diff, not to the content, so a deleted "--- " (every YAML document
+        // separator, every SQL/Lua/Haskell comment) arrives as "----" and an
+        // added "++i;" arrives as "+++i;". Classifying those by prefix alone
+        // painted them as file headers — grey, in the pane whose only job is
+        // showing what changed. File headers only ever appear *outside* a hunk.
+        var inHunk = false
         for rawLine in diff.components(separatedBy: "\n") {
             if count >= maxLines {
                 lines.append(DiffLine(kind: .meta, text: "… diff truncated after \(maxLines) lines …"))
@@ -33,29 +41,62 @@ public enum DiffParser {
             }
             count += 1
             let kind: DiffLine.Kind
-            if rawLine.hasPrefix("diff --git") || rawLine.hasPrefix("index ")
-                || rawLine.hasPrefix("---") || rawLine.hasPrefix("+++")
-                || rawLine.hasPrefix("old mode") || rawLine.hasPrefix("new mode")
-                || rawLine.hasPrefix("similarity index") || rawLine.hasPrefix("rename from")
-                || rawLine.hasPrefix("rename to") || rawLine.hasPrefix("copy from")
-                || rawLine.hasPrefix("copy to") {
-                kind = .fileHeader
-            } else if rawLine.hasPrefix("@@") {
+            if rawLine.hasPrefix("@@") {
+                // Also matches a combined diff's "@@@".
+                inHunk = true
                 kind = .hunk
-            } else if rawLine.hasPrefix("+") {
-                kind = .addition
-            } else if rawLine.hasPrefix("-") {
-                kind = .deletion
-            } else if rawLine.hasPrefix("new file mode") || rawLine.hasPrefix("deleted file mode")
-                        || rawLine.hasPrefix("Binary files") || rawLine.hasPrefix("GIT binary patch")
-                        || rawLine.hasPrefix("\\") || rawLine.hasPrefix("Submodule") {
-                kind = .meta
-            } else {
+            } else if inHunk, let marker = rawLine.first {
+                // Every line git emits inside a hunk carries one of these
+                // markers. Anything else is the next file's header, so the hunk
+                // has ended and the line falls through to the header rules.
+                switch marker {
+                case "+": kind = .addition
+                case "-": kind = .deletion
+                case " ": kind = .context
+                case "\\": kind = .meta          // "\ No newline at end of file"
+                default:
+                    inHunk = false
+                    kind = Self.classifyOutsideHunk(rawLine)
+                }
+            } else if inHunk {
+                // An empty line: a context line whose trailing space some tool
+                // stripped. Still hunk content, so stay in the hunk.
                 kind = .context
+            } else {
+                kind = Self.classifyOutsideHunk(rawLine)
             }
             lines.append(DiffLine(kind: kind, text: rawLine))
         }
         return emphasizeIntralineChanges(lines)
+    }
+
+    /// Classification for a line that is not inside a hunk, where a leading
+    /// `---`/`+++` really is a file header rather than content.
+    ///
+    /// The `--- `/`+++ ` forms require the space git always writes after them
+    /// (`--- a/path`, `--- /dev/null`, and `--- path` under `--no-prefix`). That
+    /// costs nothing on real output and keeps a hand-fed fragment with no `@@`
+    /// line — where the hunk state cannot help — from reading a deleted `--`
+    /// comment as a header.
+    private static func classifyOutsideHunk(_ rawLine: String) -> DiffLine.Kind {
+        if rawLine.hasPrefix("diff --git") || rawLine.hasPrefix("index ")
+            || rawLine.hasPrefix("--- ") || rawLine.hasPrefix("+++ ")
+            || rawLine.hasPrefix("old mode") || rawLine.hasPrefix("new mode")
+            || rawLine.hasPrefix("similarity index") || rawLine.hasPrefix("rename from")
+            || rawLine.hasPrefix("rename to") || rawLine.hasPrefix("copy from")
+            || rawLine.hasPrefix("copy to") {
+            return .fileHeader
+        }
+        if rawLine.hasPrefix("new file mode") || rawLine.hasPrefix("deleted file mode")
+            || rawLine.hasPrefix("Binary files") || rawLine.hasPrefix("GIT binary patch")
+            || rawLine.hasPrefix("\\") || rawLine.hasPrefix("Submodule") {
+            return .meta
+        }
+        // A fragment handed to the parser without its `@@` line still colours
+        // its changes, rather than falling silently to context.
+        if rawLine.hasPrefix("+") { return .addition }
+        if rawLine.hasPrefix("-") { return .deletion }
+        return .context
     }
 
     // MARK: - Intraline (word-level) emphasis

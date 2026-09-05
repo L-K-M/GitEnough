@@ -84,6 +84,97 @@ index 1234567..89abcde 100644
         XCTAssertEqual(emphasizedText(of: additions[1]), ["dos"])
     }
 
+    // MARK: - Classification
+
+    /// Inside a hunk the leading character belongs to the diff, not the
+    /// content, so a deleted line whose text starts with "--" arrives as "---"
+    /// and an added line starting with "++" arrives as "+++". Classifying by
+    /// prefix alone painted both grey as file headers — in the pane whose only
+    /// job is showing what changed.
+    func testHunkContentThatLooksLikeAFileHeaderIsStillAChange() {
+        let diff = """
+diff --git a/k8s.yaml b/k8s.yaml
+index 1234567..89abcde 100644
+--- a/k8s.yaml
++++ b/k8s.yaml
+@@ -1,6 +1,6 @@
+ kind: Service
+----
+--- a comment removed by SQL
+-++ not a header either
++++i;
++--- a YAML separator added
+ kind: Deployment
+"""
+        let lines = DiffParser.parse(diff)
+        let byText = Dictionary(lines.map { ($0.text, $0.kind) }, uniquingKeysWith: { first, _ in first })
+
+        // The real file headers, which appear before the first @@.
+        XCTAssertEqual(byText["--- a/k8s.yaml"], .fileHeader)
+        XCTAssertEqual(byText["+++ b/k8s.yaml"], .fileHeader)
+        XCTAssertEqual(byText["diff --git a/k8s.yaml b/k8s.yaml"], .fileHeader)
+
+        // Everything after the @@ is content, whatever it starts with.
+        XCTAssertEqual(byText["----"], .deletion, "a deleted YAML document separator")
+        XCTAssertEqual(byText["--- a comment removed by SQL"], .deletion)
+        XCTAssertEqual(byText["-++ not a header either"], .deletion)
+        XCTAssertEqual(byText["+++i;"], .addition, "an added C pre-increment")
+        XCTAssertEqual(byText["+--- a YAML separator added"], .addition)
+        XCTAssertEqual(byText[" kind: Service"], .context)
+    }
+
+    /// A second file's header ends the previous file's hunk, even though no
+    /// blank line separates them.
+    func testANewFileHeaderEndsThePreviousHunk() {
+        let diff = """
+@@ -1 +1 @@
+-old
++new
+diff --git a/b.txt b/b.txt
+index 111..222 100644
+--- a/b.txt
++++ b/b.txt
+@@ -1 +1 @@
+----
++ok
+"""
+        let lines = DiffParser.parse(diff)
+        let byText = Dictionary(lines.map { ($0.text, $0.kind) }, uniquingKeysWith: { first, _ in first })
+        XCTAssertEqual(byText["diff --git a/b.txt b/b.txt"], .fileHeader)
+        XCTAssertEqual(byText["--- a/b.txt"], .fileHeader,
+                       "the second file's header must not be read as hunk content")
+        XCTAssertEqual(byText["+++ b/b.txt"], .fileHeader)
+        XCTAssertEqual(byText["----"], .deletion,
+                       "…but content in the second file's hunk still is content")
+    }
+
+    func testNoNewlineMarkerAndBinaryNoticeStayMeta() {
+        let diff = """
+diff --git a/f b/f
+--- a/f
++++ b/f
+@@ -1 +1 @@
+-a
++b
+\\ No newline at end of file
+diff --git a/img.png b/img.png
+Binary files a/img.png and b/img.png differ
+"""
+        let lines = DiffParser.parse(diff)
+        let byText = Dictionary(lines.map { ($0.text, $0.kind) }, uniquingKeysWith: { first, _ in first })
+        XCTAssertEqual(byText["\\ No newline at end of file"], .meta)
+        XCTAssertEqual(byText["Binary files a/img.png and b/img.png differ"], .meta)
+    }
+
+    /// A fragment with no `@@` — the hunk state cannot help, so the header
+    /// patterns have to be precise enough on their own.
+    func testAFragmentWithoutAHunkHeaderStillColoursItsChanges() {
+        let lines = DiffParser.parse("----\n+++i;\n-- sql\n")
+        XCTAssertEqual(lines[0].kind, .deletion)
+        XCTAssertEqual(lines[1].kind, .addition)
+        XCTAssertEqual(lines[2].kind, .deletion)
+    }
+
     func testUnpairedDeletionRunIsLeftPlain() {
         // A deletion run with no additions following it (a pure removal) must
         // stay plain — there is nothing to pair with.

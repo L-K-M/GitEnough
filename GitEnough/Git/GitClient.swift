@@ -257,8 +257,19 @@ public final class GitClient {
     // MARK: - Diffs
 
     /// Unified diff for one worktree/index path.
+    /// Flags every patch-producing read passes. `--no-ext-diff` is the one that
+    /// matters: `diff.external` (what difftastic's own install instructions set,
+    /// `git config --global diff.external difft`) replaces the patch with the
+    /// external tool's rendered output. Parsing that as a unified diff colours
+    /// it at random, and feeding it to the commit-message model describes the
+    /// wrong thing entirely. It is also a process launched on the repo's serial
+    /// queue, so a pager-ish tool would block every repository operation behind
+    /// it. Harmless on `--stat`, which never invokes the driver — passed there
+    /// anyway so no reader has to work out which reads are exposed.
+    private static let patchReadFlags = ["--no-color", "--no-ext-diff"]
+
     public func diff(path: String, staged: Bool) throws -> String {
-        var args = ["-C", worktree.path, "diff", "--no-color", "--no-ext-diff"]
+        var args = ["-C", worktree.path, "diff"] + Self.patchReadFlags
         if staged { args.append("--staged") }
         args.append(contentsOf: ["--", Self.literalPathspec(path)])
         return try runReadChecked(args, in: nil).stdout
@@ -275,8 +286,8 @@ public final class GitClient {
             return try untrackedDirectoryListing(path: path)
         }
         let result = try runRead(
-            ["-C", worktree.path, "diff", "--no-color", "--no-index",
-             "--", "/dev/null", path],
+            ["-C", worktree.path, "diff"] + Self.patchReadFlags
+                + ["--no-index", "--", "/dev/null", path],
             in: nil)
         // --no-index exits 1 when files differ (i.e. always, here); 0/1 are both OK.
         guard result.exitCode == 0 || result.exitCode == 1 else {
@@ -317,21 +328,23 @@ public final class GitClient {
     /// Patch of one file within a commit (for the detail pane).
     public func commitFileDiff(hash: String, path: String) throws -> String {
         try runReadChecked(
-            ["-C", worktree.path, "show", "-m", "--first-parent",
-             "--format=", "--no-color", hash, "--", Self.literalPathspec(path)],
+            ["-C", worktree.path, "show", "-m", "--first-parent", "--format="]
+                + Self.patchReadFlags + [hash, "--", Self.literalPathspec(path)],
             in: nil).stdout
     }
 
     /// Full staged patch — the input for LLM commit-message generation.
     public func stagedDiff() throws -> String {
         try runReadChecked(
-            ["-C", worktree.path, "diff", "--staged", "--no-color"], in: nil).stdout
+            ["-C", worktree.path, "diff", "--staged"] + Self.patchReadFlags,
+            in: nil).stdout
     }
 
     /// `--stat` summary of the staged changes (always sent to the model in full).
     public func stagedDiffStat() throws -> String {
         try runReadChecked(
-            ["-C", worktree.path, "diff", "--staged", "--stat", "--no-color"], in: nil).stdout
+            ["-C", worktree.path, "diff", "--staged", "--stat"] + Self.patchReadFlags,
+            in: nil).stdout
     }
 
     /// True when an existing gitignore rule already covers `path`
