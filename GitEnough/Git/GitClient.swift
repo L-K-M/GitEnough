@@ -351,7 +351,31 @@ public final class GitClient {
             ["-C", worktree.path, "add", "--"] + Self.literalPathspecs(paths), in: nil)
     }
 
+    /// Stages everything — but never while a path is unmerged.
+    ///
+    /// `git add -A` on an unmerged path stages the **worktree content**, conflict
+    /// markers and all, and clears the unmerged state, which is git's way of
+    /// saying "I resolved this". Verified against git 2.43: during a conflicted
+    /// merge, `git add -A` turns `u UU … f.txt` into `1 M. … f.txt`, the commit
+    /// then succeeds, and the committed file contains
+    /// `<<<<<<< HEAD … ======= … >>>>>>> other`.
+    ///
+    /// In the app that is worse than the raw command, because the conflict UI is
+    /// rendered from the unmerged entries: staging them makes the warning
+    /// disappear and the Commit button light up. The user is shown every signal
+    /// that the conflict is resolved, at the moment it has been buried.
+    ///
+    /// So the guard lives here rather than only in a button's `disabled`: both
+    /// front ends call this, and only one of them renders conflicts at all.
     public func stageAll() throws {
+        let conflicted = try conflictedPaths()
+        guard conflicted.isEmpty else {
+            let names = conflicted.prefix(3).joined(separator: ", ")
+            let more = conflicted.count > 3 ? " and \(conflicted.count - 3) more" : ""
+            throw GitError(
+                message: "Can't stage everything while \(conflicted.count) file\(conflicted.count == 1 ? " is" : "s are") still conflicted (\(names)\(more)). Staging a conflicted file as-is would commit its conflict markers — resolve each one first, or use Ours/Theirs/Mark Resolved.",
+                exitCode: -1)
+        }
         try runChecked(["-C", worktree.path, "add", "-A"], in: nil)
     }
 

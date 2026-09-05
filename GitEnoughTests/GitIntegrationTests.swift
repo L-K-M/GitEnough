@@ -855,6 +855,56 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertEqual(localHead, remoteHead)
     }
 
+    // MARK: - Stage All during a conflict
+
+    /// `git add -A` on an unmerged path stages the worktree content — conflict
+    /// markers included — and clears the unmerged state, so the commit that
+    /// follows lands `<<<<<<< HEAD` in history. In the app it is worse than the
+    /// raw command: the conflict section is rendered from the unmerged entries,
+    /// so staging them makes the warning vanish and the Commit button light up.
+    func testStageAllRefusesWhileAnythingIsConflicted() throws {
+        try makeConflict()
+        let before = try client.conflictedPaths()
+        XCTAssertEqual(before, ["a.txt"], "precondition: a real conflict")
+
+        XCTAssertThrowsError(try client.stageAll()) { error in
+            let message = (error as? GitError)?.message ?? "\(error)"
+            XCTAssertTrue(message.contains("a.txt"),
+                          "the refusal must name what to resolve, got \(message)")
+        }
+
+        // The unmerged entry survives, so the conflict UI still shows and the
+        // markers are still in the worktree rather than in the index.
+        XCTAssertEqual(try client.conflictedPaths(), ["a.txt"])
+        let staged = try client.status().staged
+        XCTAssertFalse(staged.contains { $0.path == "a.txt" },
+                       "a conflicted path must not become a staged modification")
+    }
+
+    /// The guard is about unmerged paths, not about being mid-merge: once every
+    /// conflict is resolved, Stage All works again for the rest of the tree.
+    func testStageAllWorksOnceTheConflictIsResolved() throws {
+        try makeConflict()
+        try client.resolveConflict(path: "a.txt", ours: true)
+        try write("unrelated\n", to: "new.txt")
+
+        try client.stageAll()
+
+        XCTAssertTrue(try client.conflictedPaths().isEmpty)
+        XCTAssertTrue(try client.status().staged.contains { $0.path == "new.txt" })
+    }
+
+    /// main and other both change a.txt's middle line, then merge.
+    private func makeConflict() throws {
+        try run(["checkout", "-b", "conflicting", "main"])
+        try write("one\nfrom-branch\n", to: "a.txt")
+        try run(["commit", "-am", "Branch edit"])
+        try run(["checkout", "main"])
+        try write("one\nfrom-main\n", to: "a.txt")
+        try run(["commit", "-am", "Main edit"])
+        _ = try GitShell.shared.run(["-C", repoURL.path, "merge", "conflicting"], in: nil)
+    }
+
     func testCreateTagLightweightAndAnnotated() throws {
         let head = try XCTUnwrap(try client.log(limit: 1).first?.hash)
         try client.createTag(name: "v1.0", message: nil, at: head)

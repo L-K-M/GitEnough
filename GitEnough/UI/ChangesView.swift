@@ -185,10 +185,19 @@ struct ChangesView: View {
                     Text("Changes (\(viewModel.status.unstaged.count))")
                     Spacer()
                     if !viewModel.status.unstaged.isEmpty {
+                        // Never offered while anything is unmerged: `git add -A`
+                        // would stage the conflict markers as the resolution,
+                        // which also empties the conflict section and enables
+                        // Commit — every signal saying "resolved" at the moment
+                        // the conflict is buried. GitClient refuses too; this is
+                        // so the user is told before clicking rather than after.
                         Button("Stage All") { viewModel.stageAll() }
                             .buttonStyle(.borderless)
                             .font(.caption)
-                            .disabled(viewModel.isBusy)
+                            .disabled(viewModel.isBusy || !conflicts.isEmpty)
+                            .help(conflicts.isEmpty
+                                  ? "Stage every change"
+                                  : "Resolve the conflicted files first — staging them as-is would commit their conflict markers")
                     }
                 }
             } footer: {
