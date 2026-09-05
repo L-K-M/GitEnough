@@ -939,12 +939,13 @@ final class GitIntegrationTests: XCTestCase {
         try client.push(remote: "origin", localBranch: "main", remoteBranch: "main",
                         setUpstream: true)
 
-        // "feature" exists on both sides, but tracks origin/main.
-        try run(["checkout", "-b", "feature"])
-        try run(["push", "origin", "feature"])
-        let featureBefore = try remoteRef("refs/heads/feature", in: remoteURL)
-        try run(["branch", "--set-upstream-to=origin/main", "feature"])
-        try write("via feature\n", to: "a.txt")
+        // "sidecar" exists on both sides, but tracks origin/main. (Not
+        // "feature": the shared fixture already creates one.)
+        try run(["checkout", "-b", "sidecar"])
+        try run(["push", "origin", "sidecar"])
+        let sidecarBefore = try remoteRef("refs/heads/sidecar", in: remoteURL)
+        try run(["branch", "--set-upstream-to=origin/main", "sidecar"])
+        try write("via sidecar\n", to: "a.txt")
         try client.stage(paths: ["a.txt"])
         try client.commit(message: "Through the upstream")
 
@@ -960,7 +961,7 @@ final class GitIntegrationTests: XCTestCase {
             .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         XCTAssertEqual(try remoteRef("refs/heads/main", in: remoteURL), localHead,
                        "the configured upstream is what moves")
-        XCTAssertEqual(try remoteRef("refs/heads/feature", in: remoteURL), featureBefore,
+        XCTAssertEqual(try remoteRef("refs/heads/sidecar", in: remoteURL), sidecarBefore,
                        "the same-named remote branch is untouched")
     }
 
