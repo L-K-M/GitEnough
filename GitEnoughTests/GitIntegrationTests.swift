@@ -887,8 +887,21 @@ final class GitIntegrationTests: XCTestCase {
     func testACorruptHeadRefFailsInsteadOfStagingDeletions() throws {
         try write("changed\n", to: "a.txt")
         try client.stage(paths: ["a.txt"])
-        let headRef = repoURL.appendingPathComponent(".git/refs/heads/main")
+        // Derived, not assumed: corrupting a ref that isn't HEAD's would leave
+        // HEAD resolving fine, `restore --staged` succeeding, and this test
+        // failing with "unstage didn't throw" — which points nowhere near the
+        // real cause.
+        let branch = try GitShell.shared.runChecked(
+            ["-C", repoURL.path, "symbolic-ref", "--short", "HEAD"], in: nil).stdout
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let headRef = repoURL.appendingPathComponent(".git/refs/heads/\(branch)")
         try "not a sha\n".write(to: headRef, atomically: true, encoding: .utf8)
+
+        // Precondition, so a future fixture change fails here with its own
+        // message rather than downstream with a misleading one.
+        XCTAssertNotEqual(try GitShell.shared.run(
+            ["-C", repoURL.path, "rev-parse", "--verify", "--quiet", "HEAD"], in: nil).exitCode, 0,
+            "precondition: HEAD must no longer resolve after corrupting \(branch)")
 
         XCTAssertThrowsError(try client.unstage(paths: ["a.txt"]),
                              "a corrupt HEAD must surface, not fall through to rm --cached")
