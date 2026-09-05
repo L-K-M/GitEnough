@@ -106,8 +106,14 @@ enum UI {
         // applies it to the working tree.
         //
         // The macOS front end binds those same actions to a double click
-        // (`.onTapGesture(count: 2)`), which is also what every list in a
-        // GNOME app does. Selection stays single-click; activation needs two.
+        // (`.onTapGesture(count: 2)`); matching it keeps the two front ends
+        // behaving alike. Selection stays single-click; activation needs two.
+        //
+        // Not a platform rule: GTK's default really is single-click activation
+        // and plenty of GNOME surfaces keep it. It is the right choice *here*
+        // because every activate handler in this app mutates the repository.
+        // A list whose activation is navigational rather than destructive
+        // should pass `GTK_SELECTION_SINGLE` and re-enable this.
         gtk_list_box_set_activate_on_single_click(opaque(widget), 0)
         return widget
     }
