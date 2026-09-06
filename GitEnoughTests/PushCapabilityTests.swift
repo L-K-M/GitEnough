@@ -261,21 +261,56 @@ final class PushCapabilityTests: XCTestCase {
     func testResolveCarriesTheNestedRemoteTieBreakThrough() {
         let remotes = [origin, nestedFeatures]
 
+        // Both readings exist, so *whichever* the tie-break picks is a guess —
+        // including the one that happens to be right.
         XCTAssertEqual(
             PushCapability.resolve(
                 status: status(head: "x", upstream: "origin/features/x"), remotes: remotes),
-            .push(remote: "origin/features", localBranch: "x", remoteBranch: "x"))
+            .pushToGuessedRemote(remote: "origin/features", localBranch: "x", remoteBranch: "x"))
 
         // Known-wrong by design: a local `features/x` that actually tracks
         // `origin/features`'s branch `x` matches the *other* reading and lands
         // here. Pinned so the behaviour is visible rather than accidental —
         // o-G4 in ANALYSIS.md owns the fix, and this expectation flips when
         // `%(upstream:remotename)` lands on RepoStatus.
+        let guessed = PushCapability.resolve(
+            status: status(head: "features/x", upstream: "origin/features/x"),
+            remotes: remotes)
+        XCTAssertEqual(
+            guessed,
+            .pushToGuessedRemote(remote: "origin", localBranch: "features/x",
+                                 remoteBranch: "features/x"))
+
+        // The containment that makes the known-wrong answer survivable until
+        // o-G4. A plain push to a guessed ref is recoverable; a
+        // `--force-with-lease` to one is not, and the lease guards against
+        // staleness, never against the wrong target.
+        XCTAssertFalse(guessed.allowsForcePush,
+                       "a tie-break match is still a guess; it must not arm "
+                       + "--force-with-lease on a remote the user never chose")
+        XCTAssertTrue(guessed.tracksAnUpstream,
+                      "…but it does have an upstream to count against, so the "
+                      + "ahead badge still applies")
+    }
+
+    /// A remote whose name is the *whole* upstream is not a second reading:
+    /// `origin/main` under remote `origin/main` would leave an empty branch
+    /// half, and `git check-ref-format` rejects a ref ending in a slash, so it
+    /// cannot arise. Pinned because reading it as a candidate would make this
+    /// ordinary setup refuse as ambiguous.
+    func testARemoteNamedLikeTheWholeUpstreamIsNotACandidate() {
+        let remotes = [origin, Remote(name: "origin/main",
+                                      url: "https://example.com/m.git")]
+        XCTAssertEqual(Remote.splitCandidates(upstream: "origin/main", among: remotes)
+                        .map(\.name), ["origin"])
+        XCTAssertFalse(Remote.isAmbiguous(upstream: "origin/main", among: remotes,
+                                          localBranch: "topic"))
         XCTAssertEqual(
             PushCapability.resolve(
-                status: status(head: "features/x", upstream: "origin/features/x"),
-                remotes: remotes),
-            .push(remote: "origin", localBranch: "features/x", remoteBranch: "features/x"))
+                status: status(head: "topic", upstream: "origin/main"), remotes: remotes),
+            .push(remote: "origin", localBranch: "topic", remoteBranch: "main"),
+            "one well-formed reading is not a guess, so force push stays armed")
+        XCTAssertEqual(Remote.preferred(for: "origin/main", among: remotes)?.name, "origin")
     }
 
     /// When the local branch name matches *neither* reading, nothing settles the

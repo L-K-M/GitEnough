@@ -96,7 +96,13 @@ public struct Remote: Identifiable, Hashable {
     /// is two well-formed readings and nothing in the string picks between them.
     public static func splitCandidates(upstream: String?, among remotes: [Remote]) -> [Remote] {
         guard let upstream else { return [] }
-        return remotes.filter { upstream.hasPrefix($0.name + "/") }
+        // Via `branchHalf`, so that "is this a well-formed reading" has exactly
+        // one definition here. Equivalent on real input — a candidate can only
+        // leave an empty branch half when the upstream ends in a slash, which
+        // `git check-ref-format` rejects — but the equivalence is a fact about
+        // git, not about this filter, and the next reader shouldn't have to
+        // rediscover it.
+        return remotes.filter { branchHalf(of: upstream, under: $0) != nil }
     }
 
     /// Whether `upstream` reads two or more ways under the configured remotes

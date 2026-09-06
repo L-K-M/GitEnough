@@ -48,6 +48,17 @@ public enum PushCapability: Equatable {
     /// A branch with a usable upstream. `remoteBranch` can differ from
     /// `localBranch` when the branch tracks a differently-named upstream.
     case push(remote: String, localBranch: String, remoteBranch: String)
+    /// The same push, except that the *remote* half was settled by a guess.
+    ///
+    /// With `origin` and `origin/features` both configured, `origin/features/x`
+    /// reads two ways and only `branch.<name>.remote` knows which — which this
+    /// app does not read yet (`o-G4`). `resolve` refuses outright when nothing
+    /// chooses between the readings, and otherwise takes the one whose branch
+    /// half matches the local branch name. That tie-break is a good guess, not
+    /// knowledge, so it pushes but does not force: a plain push to a guessed
+    /// ref is recoverable, and `--force-with-lease` on the wrong remote is not.
+    /// The lease protects against staleness, never against the wrong target.
+    case pushToGuessedRemote(remote: String, localBranch: String, remoteBranch: String)
     /// A branch with **no** upstream configured: push it and set one. Not the
     /// same as an upstream that names a missing remote — see
     /// `.upstreamRemoteMissing`, which this deliberately does not absorb.
@@ -101,9 +112,18 @@ public enum PushCapability: Equatable {
                 return .unavailable(
                     .upstreamRemoteMissing(upstream: upstream, branch: head))
             }
-            return .push(remote: match.remote.name,
-                         localBranch: head,
-                         remoteBranch: match.branch)
+            // Reaching here with more than one candidate means `isAmbiguous`
+            // was satisfied by the local-branch tie-break rather than by the
+            // string being unambiguous. Same command either way; only force
+            // push is withheld.
+            let readings = Remote.splitCandidates(upstream: upstream, among: remotes).count
+            return readings > 1
+                ? .pushToGuessedRemote(remote: match.remote.name,
+                                       localBranch: head,
+                                       remoteBranch: match.branch)
+                : .push(remote: match.remote.name,
+                        localBranch: head,
+                        remoteBranch: match.branch)
         }
         // After the upstream block, not before it: a repository with a
         // configured upstream and *no* remotes is the most extreme case of "an
@@ -124,17 +144,23 @@ public enum PushCapability: Equatable {
     /// True when this is a push to an existing upstream — so an ahead count is
     /// measured against something real and can be shown.
     public var tracksAnUpstream: Bool {
+        switch self {
+        case .push, .pushToGuessedRemote: return true
+        case .publish, .unavailable: return false
+        }
+    }
+
+    /// Only a branch whose upstream is *known* has something safe to overwrite.
+    ///
+    /// This is why it was never a synonym for `tracksAnUpstream`: one asks "is
+    /// there a remote branch to count against", the other "is there remote
+    /// history we are certain enough about to destroy". `.pushToGuessedRemote`
+    /// answers yes to the first and no to the second — an ahead count against a
+    /// guessed ref is a cosmetic error, a force push to one is not.
+    public var allowsForcePush: Bool {
         if case .push = self { return true }
         return false
     }
-
-    /// Only a branch that already has an upstream has anything to overwrite.
-    ///
-    /// Identical to `tracksAnUpstream` today, and deliberately a separate name:
-    /// one asks "is there a remote branch to count against", the other "is there
-    /// remote history to destroy". A reader gating a *label* on `allowsForcePush`
-    /// has to stop and work out whether that was meant.
-    public var allowsForcePush: Bool { tracksAnUpstream }
 
     public var label: String {
         if case .publish = self { return "Publish" }
@@ -147,6 +173,11 @@ public enum PushCapability: Equatable {
             return local == remoteBranch
                 ? "Push \(local) to \(remote) (⇧⌘P)"
                 : "Push \(local) to \(remote)/\(remoteBranch) (⇧⌘P)"
+        case .pushToGuessedRemote(let remote, let local, let remoteBranch):
+            return "Push \(local) to \(remote)/\(remoteBranch) (⇧⌘P). "
+                + "More than one configured remote could account for this "
+                + "branch's upstream; GitEnough matched the branch name. Force "
+                + "push is off until the upstream says which remote it means."
         case .publish(let remote, let branch):
             return "Push \(branch) and set upstream to \(remote) (⇧⌘P)"
         case .unavailable(let reason):

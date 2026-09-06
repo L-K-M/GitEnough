@@ -139,9 +139,19 @@ struct RepoDetailView: View {
                         // leave this nil, and then the dialog would open with no
                         // command and a confirm button that silently does
                         // nothing — the worst place in the app for a no-op.
-                        guard let command = forcePushCommand else { return }
-                        pendingForcePush = command
-                        showingForcePushConfirmation = true
+                        // Not a bare `return`: `.disabled` is evaluated when
+                        // the menu renders, so a refresh landing between that
+                        // and the tap can still reach here — and a destructive
+                        // button that does nothing at all hides the very state
+                        // change (the upstream moved) the user needs to know
+                        // about. Say what happened instead.
+                        switch viewModel.forcePushResolution {
+                        case .command(let command):
+                            pendingForcePush = command
+                            showingForcePushConfirmation = true
+                        case .refused(let reason):
+                            viewModel.errorMessage = reason
+                        }
                     }
                     // Gated on the command, not on the capability, so the
                     // dialog can never open without the command it will show.
@@ -214,14 +224,41 @@ struct RepoDetailView: View {
                     .font(.system(.footnote, design: .monospaced))
             }
         }
+        // Cancel and confirm both clear this, but dismissing a confirmation
+        // dialog by clicking outside it runs neither action — which would leave
+        // a destructive refspec sitting in view state after the dialog closed.
+        // Benign today (the open path always overwrites it) and exactly the
+        // staleness this whole flow exists to eliminate.
+        .onChange(of: showingForcePushConfirmation) { _, showing in
+            if !showing { pendingForcePush = nil }
+        }
     }
 
-    /// Typed as `LocalizedStringKey`, and one literal rather than a
+    /// Two literals, picked by what the installed git can actually enforce.
+    ///
+    /// The strong sentence is only true because `pushArguments` sends
+    /// `--force-if-includes` alongside `--force-with-lease`. Measured against
+    /// git 2.43 on one fixture — teammate pushes, our background auto-fetch
+    /// pulls their commit into the tracking ref, we force push: the bare lease
+    /// is *accepted* and their commit is destroyed, while the same push with
+    /// `--force-if-includes` is rejected and it survives.
+    ///
+    /// But that flag is gated on git 2.30, and dropped when `git --version`
+    /// cannot be read or parsed. On such a git the lease compares only against
+    /// the tracking ref that the app's own fetch just moved, so the strong
+    /// sentence would promise protection precisely where there is none — the
+    /// most destructive dialog in the app, confidently wrong. So it says the
+    /// weaker, true thing instead.
+    ///
+    /// Typed as `LocalizedStringKey`, and each a single literal rather than a
     /// concatenation, so `Text` takes the localizing initializer. A `String`
-    /// constant here would silently make the app's most safety-critical sentence
-    /// the only untranslated one on screen.
-    private static let forcePushWarning: LocalizedStringKey =
-        "This rewrites the remote branch to match your local history. It refuses if the remote has commits you haven't merged in — including ones GitEnough fetched for you in the background — so a teammate's new work can't be lost silently. Anyone who already pulled the old history will still have to recover."
+    /// constant here would silently make the app's most safety-critical
+    /// sentence the only untranslated one on screen.
+    private static var forcePushWarning: LocalizedStringKey {
+        GitClient.supportsForceIfIncludes
+            ? "This rewrites the remote branch to match your local history. It refuses if the remote has commits you haven't merged in — including ones GitEnough fetched for you in the background — so a teammate's new work can't be lost silently. Anyone who already pulled the old history will still have to recover."
+            : "This rewrites the remote branch to match your local history. Your git is older than 2.30, so GitEnough can only check that the remote still points where your last fetch left it: a teammate's commits that GitEnough has already fetched in the background will be overwritten without warning. Update git to be protected from that. Anyone who already pulled the old history will still have to recover."
+    }
 
     /// The command a confirmed force push would run, as of right now.
     ///
@@ -232,14 +269,16 @@ struct RepoDetailView: View {
     /// bare `git push` left to `push.default` did not have.
     ///
     /// `pendingForcePush` is the snapshot of this taken when the dialog opened;
-    /// this property is what gates the menu item. Both come from the same
-    /// `forcePushArguments` the client executes, so the sentence and the command
-    /// cannot describe different things.
+    /// this property is what gates the menu item.
+    ///
+    /// Delegated rather than derived: this used to repeat the
+    /// capability-to-command switch that `forcePush(confirming:)` also runs, so
+    /// the enablement logic and the execution logic could diverge as
+    /// `PushCapability` grew — the view's `guard case .push` silently yielding
+    /// nil for a new case while the view model handled it. On the one action
+    /// where they must agree, there is now one switch.
     private var forcePushCommand: GitClient.PushCommand? {
-        guard case .push(let remote, let local, let remoteBranch)
-            = viewModel.pushCapability else { return nil }
-        return GitClient.forcePushArguments(
-            remote: remote, localBranch: local, remoteBranch: remoteBranch)
+        viewModel.forcePushCommand
     }
 
     // MARK: - Toolbar pieces

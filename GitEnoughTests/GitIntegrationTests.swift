@@ -910,6 +910,14 @@ final class GitIntegrationTests: XCTestCase {
         let localHead = try GitShell.shared.runChecked(["rev-parse", "main"], in: repoURL)
             .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         XCTAssertEqual(try remoteRef("refs/heads/main", in: remoteURL), localHead)
+
+        // The `-u` half, which this test asked for and never checked. Other
+        // tests in this file lean on tracking being wired here, so a regression
+        // that dropped `-u` under this config would leave them failing
+        // somewhere else entirely.
+        let main = try XCTUnwrap(client.branches().first { $0.name == "main" && !$0.isRemote })
+        XCTAssertEqual(main.upstream, "origin/main",
+                       "an explicit refspec must still let -u configure tracking")
     }
 
     /// A branch tracking a differently-named upstream must move the upstream —

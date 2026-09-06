@@ -350,12 +350,58 @@ public final class RepoViewModel: ObservableObject, Identifiable {
         perform(rebase ? "Pulling (rebase)…" : "Pulling…") { try $0.pull(rebase: rebase) }
     }
 
+    /// The outcome of asking "can this branch be force pushed right now?" —
+    /// carrying either the command or a sentence saying why not.
+    public enum ForcePushResolution {
+        case command(GitClient.PushCommand)
+        case refused(String)
+    }
+
+    /// Whether a force push is possible right now, and the command it would run.
+    ///
+    /// One definition, because the menu's enablement, the dialog's contents and
+    /// the execution path must agree about the single action in this app that
+    /// destroys someone else's work. The view derived its own copy of this
+    /// switch before; two expressions of one predicate is how they drift, and
+    /// here the drift would be silent — the menu greying out with no diagnostic.
+    ///
+    /// Switched rather than guarded, so a new `PushCapability` case has to be
+    /// handled here instead of silently inheriting "no upstream".
+    public var forcePushResolution: ForcePushResolution {
+        switch pushCapability {
+        case .push(let remote, let local, let remoteBranch):
+            return .command(GitClient.forcePushArguments(
+                remote: remote, localBranch: local, remoteBranch: remoteBranch))
+        case .pushToGuessedRemote(let remote, _, let remoteBranch):
+            return .refused(
+                "Can't force push: more than one configured remote could account "
+                + "for this branch's upstream, and GitEnough picked “\(remote)” by "
+                + "matching the branch name. A plain push to “\(remote)/\(remoteBranch)” "
+                + "is recoverable if that guess is wrong; a force push is not. "
+                + "Rename one of the remotes, or set the upstream again.")
+        case .publish:
+            // `.publish` means exactly one thing — no upstream at all.
+            return .refused("Can't force push: this branch has no upstream on a configured remote to overwrite. Publish it first.")
+        case .unavailable(let reason):
+            // Already names the real problem, including upstream-remote-is-gone.
+            return .refused(reason.message)
+        }
+    }
+
+    /// The command a confirmed force push would run, or nil when refused. What
+    /// the menu item gates on.
+    public var forcePushCommand: GitClient.PushCommand? {
+        if case .command(let command) = forcePushResolution { return command }
+        return nil
+    }
+
     /// Force push with lease. The UI gates this behind an explicit
     /// confirmation dialog — it rewrites the remote branch.
     ///
-    /// The capability is re-resolved here rather than trusted from the click:
-    /// force-pushing is the one action where sending a stale refspec would
-    /// rewrite the wrong branch, and only `.push` has an upstream to overwrite.
+    /// The capability is re-resolved here (through `forcePushResolution`)
+    /// rather than trusted from the click: force-pushing is the one action
+    /// where sending a stale refspec would rewrite the wrong branch, and only
+    /// `.push` has an upstream this app is certain enough about to overwrite.
     ///
     /// Re-resolving alone is not enough, which is why `confirming` exists. The
     /// dialog renders its command when it opens; this runs at tap. A refresh
@@ -371,21 +417,12 @@ public final class RepoViewModel: ObservableObject, Identifiable {
     /// and the compiler says nothing. The parameter being mandatory is what
     /// makes the guarantee one rather than a convention.
     public func forcePush(confirming shown: GitClient.PushCommand) {
-        // Switched rather than guarded, so a new PushCapability case has to be
-        // handled here instead of silently inheriting "no upstream" — on the one
-        // action in the app that destroys work.
         let command: GitClient.PushCommand
-        switch pushCapability {
-        case .push(let remote, let local, let remoteBranch):
-            command = GitClient.forcePushArguments(
-                remote: remote, localBranch: local, remoteBranch: remoteBranch)
-        case .unavailable(let reason):
-            // Already names the real problem, including upstream-remote-is-gone.
-            errorMessage = reason.message
-            return
-        case .publish:
-            // `.publish` means exactly one thing — no upstream at all.
-            errorMessage = "Can't force push: this branch has no upstream on a configured remote to overwrite. Publish it first."
+        switch forcePushResolution {
+        case .command(let resolved):
+            command = resolved
+        case .refused(let reason):
+            errorMessage = reason
             return
         }
         if shown != command {
@@ -420,7 +457,11 @@ public final class RepoViewModel: ObservableObject, Identifiable {
     /// a remote, and the error explains the next useful step.
     public func pushOrPublish() {
         switch pushCapability {
-        case .push(let remote, let local, let remoteBranch):
+        // A guessed remote pushes exactly like a known one: the refspec is
+        // fully qualified either way, and a plain push to the wrong ref of two
+        // readings is recoverable. Only `forcePush` withholds.
+        case .push(let remote, let local, let remoteBranch),
+             .pushToGuessedRemote(let remote, let local, let remoteBranch):
             perform("Pushing…", invalidatesMessageGeneration: false) {
                 try $0.push(remote: remote, localBranch: local, remoteBranch: remoteBranch,
                             setUpstream: false)
