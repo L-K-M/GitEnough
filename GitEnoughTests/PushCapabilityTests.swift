@@ -108,11 +108,36 @@ final class PushCapabilityTests: XCTestCase {
     /// renamed or removed. Publishing repairs it and pushes somewhere the label
     /// names; a plain push would have to guess a remote, and guessing is the
     /// whole class of bug this type exists to remove.
-    func testUpstreamNamingAMissingRemoteFallsBackToPublish() {
+    /// A configured upstream that no configured remote accounts for is its own
+    /// state, not the same as having none.
+    ///
+    /// This used to resolve to `.publish(remote: "origin")`, which reads as
+    /// helpful and isn't: one unconfirmed click would rewrite
+    /// `branch.main.remote` and pick the destination by a name heuristic —
+    /// `origin` if it exists, otherwise whichever remote git lists first. And
+    /// because `.publish` disallows force push, a fallback remote already
+    /// carrying a diverged `main` would reject it as non-fast-forward with no
+    /// way forward.
+    func testAnUpstreamNamingAMissingRemoteIsItsOwnReason() {
+        let resolved = PushCapability.resolve(
+            status: status(head: "main", upstream: "gone/main"), remotes: [origin])
+        XCTAssertEqual(resolved,
+                       .unavailable(.upstreamRemoteMissing(remote: "gone", branch: "main")))
+        XCTAssertFalse(resolved.allowsForcePush,
+                       "nothing is resolved, so there is certainly nothing to force onto")
+        XCTAssertTrue(resolved.help.contains("gone"),
+                      "the tooltip must name the remote that went missing")
+    }
+
+    /// The fourth half-read status shape: the branch name parsed but the hash
+    /// has not landed. Pinned so a refactor reordering the unborn/detached
+    /// checks — both of which key off `headHash` — cannot change it silently.
+    func testABranchWithoutAHashStillResolves() {
         XCTAssertEqual(
-            PushCapability.resolve(status: status(head: "main", upstream: "gone/main"),
+            PushCapability.resolve(status: status(head: "main", headHash: nil),
                                    remotes: [origin]),
-            .publish(remote: "origin", branch: "main"))
+            .publish(remote: "origin", branch: "main"),
+            "the push refspec never uses the hash, so this resolves normally")
     }
 
     // MARK: - The command itself
@@ -174,7 +199,12 @@ final class PushCapabilityTests: XCTestCase {
     /// Nested remote names make the string genuinely ambiguous: with `origin`
     /// and `origin/features` both configured, `origin/features/x` is either
     /// `origin/features` + `x` or `origin` + `features/x`. The local branch
-    /// name settles it when it can.
+    /// name settles it when it can — but only *when* it can, and a match is a
+    /// guess too. A local `features/x` that tracks `origin/features`'s branch
+    /// `x` produces the same upstream string and matches the **other** reading,
+    /// so it resolves to `origin` + `features/x`: confidently, and wrongly. The
+    /// heuristic has no failure it can detect. Only `%(upstream:remotename)` on
+    /// `RepoStatus` settles nested names for real.
     func testSplitUsesTheLocalBranchToBreakANestedRemoteTie() {
         let features = Remote(name: "origin/features", url: "https://example.com/f.git")
         let remotes = [origin, features]

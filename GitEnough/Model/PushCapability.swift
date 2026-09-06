@@ -18,6 +18,8 @@ public enum PushCapability: Equatable {
         case unbornHead
         case noRemotes
         case noCurrentBranch
+        /// `branch.<name>.remote` names a remote that is no longer configured.
+        case upstreamRemoteMissing(remote: String, branch: String)
 
         public var message: String {
             switch self {
@@ -29,6 +31,8 @@ public enum PushCapability: Equatable {
                 return "Can't push: this repository has no remotes configured. Add a remote first."
             case .noCurrentBranch:
                 return "Can't push: the current branch is unavailable. Refresh the repository, then check out or create a branch."
+            case .upstreamRemoteMissing(let remote, let branch):
+                return "Can't push: \(branch) tracks “\(remote)”, which is no longer a configured remote. Add it back, or set a new upstream for this branch."
             }
         }
     }
@@ -36,7 +40,9 @@ public enum PushCapability: Equatable {
     /// A branch with a usable upstream. `remoteBranch` can differ from
     /// `localBranch` when the branch tracks a differently-named upstream.
     case push(remote: String, localBranch: String, remoteBranch: String)
-    /// A branch with no usable upstream: push it and set one.
+    /// A branch with **no** upstream configured: push it and set one. Not the
+    /// same as an upstream that names a missing remote — see
+    /// `.upstreamRemoteMissing`, which this deliberately does not absorb.
     case publish(remote: String, branch: String)
     case unavailable(UnavailableReason)
 
@@ -56,11 +62,24 @@ public enum PushCapability: Equatable {
                          localBranch: head,
                          remoteBranch: upstream.branch)
         }
-        // Either there is no upstream, or the one configured names a remote that
-        // no longer exists (renamed or removed). Publishing is the right answer
-        // to both: it pushes to a remote the user can see in the label and
-        // re-points the upstream at something real. Falling back to a plain push
-        // would send the branch somewhere nothing in the UI named.
+        // A *configured* upstream that no configured remote can account for is
+        // its own state, not the same as having none.
+        //
+        // Publishing looks like the helpful answer — it would push somewhere
+        // real and re-point the branch — but it is the app deciding, on one
+        // unconfirmed click, to rewrite `branch.<name>.remote` and to pick the
+        // destination by a name heuristic (`origin`, else whichever remote git
+        // happens to list first). Worse, `.publish` disallows force push, so a
+        // fallback remote that already carries a diverged branch of the same
+        // name rejects the push as non-fast-forward with no way forward.
+        //
+        // Before this type carried refs, `.push` here ran a bare `git push`,
+        // which failed loudly against the missing remote. That was the right
+        // outcome for the wrong reason; say it deliberately instead.
+        if let upstream = status.upstream {
+            let remoteName = upstream.split(separator: "/").first.map(String.init) ?? upstream
+            return .unavailable(.upstreamRemoteMissing(remote: remoteName, branch: head))
+        }
         return .publish(remote: fallback.name, branch: head)
     }
 

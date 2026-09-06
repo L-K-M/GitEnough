@@ -360,9 +360,9 @@ public final class RepoViewModel: ObservableObject, Identifiable {
         let capability = pushCapability
         guard case .push(let remote, let local, let remoteBranch) = capability else {
             // `.unavailable` already carries a reason that names the real
-            // problem. `.publish` covers two states — no upstream at all, and an
-            // upstream naming a remote that no longer exists — so the wording
-            // has to be true of both.
+            // problem, including the upstream-remote-is-gone case. `.publish`
+            // now means exactly one thing — no upstream at all — so the fallback
+            // wording only has to be true of that.
             if case .unavailable(let reason) = capability {
                 errorMessage = reason.message
             } else {

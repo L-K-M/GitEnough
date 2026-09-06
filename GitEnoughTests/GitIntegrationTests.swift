@@ -871,7 +871,7 @@ final class GitIntegrationTests: XCTestCase {
         try client.push(remote: "origin", localBranch: "topic", remoteBranch: "topic",
                         setUpstream: false, forceWithLease: true)
 
-        let localTopic = try GitShell.shared.runChecked(["rev-parse", "HEAD"], in: repoURL)
+        let localTopic = try GitShell.shared.runChecked(["rev-parse", "topic"], in: repoURL)
             .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         XCTAssertEqual(try remoteRef("refs/heads/topic", in: remoteURL), localTopic,
                        "the named branch is the one that moves")
@@ -881,6 +881,46 @@ final class GitIntegrationTests: XCTestCase {
 
     /// `push.default = nothing` makes a bare `git push` fail with "You didn't
     /// specify any refspecs to push". An explicit refspec is immune.
+    /// The lease-free half of the `matching` hazard. `push.default = matching`
+    /// makes a bare `git push` publish *every* branch that exists on both sides,
+    /// not just the one named — the same surprise the force-push test guards
+    /// against, minus the lease. Verified against git 2.43.
+    func testPlainPushUnderMatchingMovesOnlyTheNamedBranch() throws {
+        let remoteURL = try makeBareRemote()
+        try run(["config", "push.default", "matching"])
+        try client.push(remote: "origin", localBranch: "main", remoteBranch: "main",
+                        setUpstream: true)
+
+        try run(["checkout", "-b", "topic"])
+        try write("topic\n", to: "t.txt")
+        try client.stage(paths: ["t.txt"])
+        try client.commit(message: "Topic")
+        try client.push(remote: "origin", localBranch: "topic", remoteBranch: "topic",
+                        setUpstream: true)
+
+        // Give main a commit the remote doesn't have: under `matching`, a bare
+        // push of topic would fast-forward this one along with it.
+        try run(["checkout", "main"])
+        try write("quiet\n", to: "q.txt")
+        try client.stage(paths: ["q.txt"])
+        try client.commit(message: "Quiet main")
+        let remoteMainBefore = try remoteRef("refs/heads/main", in: remoteURL)
+
+        try run(["checkout", "topic"])
+        try write("more\n", to: "t.txt")
+        try client.stage(paths: ["t.txt"])
+        try client.commit(message: "More topic")
+        try client.push(remote: "origin", localBranch: "topic", remoteBranch: "topic",
+                        setUpstream: false)
+
+        XCTAssertEqual(try remoteRef("refs/heads/main", in: remoteURL), remoteMainBefore,
+                       "a plain push must not publish branches the user didn't name")
+        XCTAssertEqual(try remoteRef("refs/heads/topic", in: remoteURL),
+                       try GitShell.shared.runChecked(["rev-parse", "topic"], in: repoURL)
+                           .stdout.trimmingCharacters(in: .whitespacesAndNewlines),
+                       "and the named one must actually move")
+    }
+
     func testPushWorksUnderPushDefaultNothing() throws {
         let remoteURL = try makeBareRemote()
         try run(["config", "push.default", "nothing"])
@@ -888,7 +928,7 @@ final class GitIntegrationTests: XCTestCase {
         try client.push(remote: "origin", localBranch: "main", remoteBranch: "main",
                         setUpstream: true)
 
-        let localHead = try GitShell.shared.runChecked(["rev-parse", "HEAD"], in: repoURL)
+        let localHead = try GitShell.shared.runChecked(["rev-parse", "main"], in: repoURL)
             .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         XCTAssertEqual(try remoteRef("refs/heads/main", in: remoteURL), localHead)
     }
@@ -919,7 +959,7 @@ final class GitIntegrationTests: XCTestCase {
         try client.push(remote: remote, localBranch: local, remoteBranch: remoteBranch,
                         setUpstream: false)
 
-        let localHead = try GitShell.shared.runChecked(["rev-parse", "HEAD"], in: repoURL)
+        let localHead = try GitShell.shared.runChecked(["rev-parse", "sidecar"], in: repoURL)
             .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         XCTAssertEqual(try remoteRef("refs/heads/main", in: remoteURL), localHead,
                        "the configured upstream is what moves")
@@ -933,6 +973,15 @@ final class GitIntegrationTests: XCTestCase {
             .appendingPathComponent("GitEnoughTests-remote-\(UUID().uuidString)")
         addTeardownBlock { try? FileManager.default.removeItem(at: remoteURL) }
         try run(["init", "--bare", remoteURL.path])
+        // Pin the remote's HEAD rather than inheriting the machine's
+        // `init.defaultBranch`, which is still `master` on a stock git. Nothing
+        // asserts on it today — every interaction here uses explicit refspecs —
+        // but this helper is now shared by seven tests, and the first one that
+        // clones or reads `ls-remote origin HEAD` would behave differently on
+        // different developers' machines. `symbolic-ref` rather than
+        // `init --initial-branch=`, which older git does not have.
+        _ = try GitShell.shared.runChecked(
+            ["-C", remoteURL.path, "symbolic-ref", "HEAD", "refs/heads/main"], in: nil)
         try run(["remote", "add", name, remoteURL.path])
         return remoteURL
     }

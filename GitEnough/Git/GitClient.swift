@@ -468,6 +468,12 @@ public final class GitClient {
     /// that has already resolved the exact command (the force-push confirmation
     /// shows it to the user first) runs that command rather than rebuilding it.
     public func push(_ arguments: [String]) throws {
+        // The contract in the doc comment, made real at zero release cost. This
+        // is the one place the codebase accepts raw argv, and the whole point of
+        // routing everything through `pushArguments`/`forcePushArguments` is
+        // that no caller gets to add `--force` or drop the refspec.
+        assert(arguments.first == "push",
+               "push(_:) takes an argv from pushArguments()/forcePushArguments()")
         try runChecked(["-C", worktree.path] + arguments, in: nil)
     }
 
