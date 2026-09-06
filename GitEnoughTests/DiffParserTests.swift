@@ -27,6 +27,31 @@ final class DiffParserTests: XCTestCase {
         lines.first { $0.kind == kind }
     }
 
+    /// Assert that every body line in a parsed fixture really opens with
+    /// `columns` marker columns.
+    ///
+    /// Three review rounds have read the combined fixtures below as carrying
+    /// one leading space where they carry two, because a rendered diff is a
+    /// poor place to count whitespace. Whitespace that load-bearing should not
+    /// rest on the eye: a fixture silently reduced to one column still parses,
+    /// just against a shape git never emits, and the kind assertions alone
+    /// would not notice. This reads the width back out of the fixture.
+    private func assertBodyLinesCarryMarkerColumns(
+        _ columns: Int, _ lines: [DiffLine],
+        file: StaticString = #filePath, line: UInt = #line
+    ) {
+        let bodyKinds: [DiffLine.Kind] = [.context, .addition, .deletion]
+        for parsed in lines where bodyKinds.contains(parsed.kind) {
+            let markers = parsed.text.prefix(columns)
+            XCTAssertEqual(markers.count, columns,
+                           "\(parsed.text.debugDescription) is too short to carry "
+                           + "\(columns) marker column(s)", file: file, line: line)
+            XCTAssertTrue(markers.allSatisfy { $0 == " " || $0 == "+" || $0 == "-" },
+                          "\(parsed.text.debugDescription) must open with \(columns) "
+                          + "marker column(s), one per parent", file: file, line: line)
+        }
+    }
+
     func testChangedWordsAreEmphasizedOnBothSides() {
         let diff = """
 diff --git a/f.txt b/f.txt
@@ -227,8 +252,6 @@ dissimilarity index 96%
         XCTAssertEqual(kindsByText(lines)["dissimilarity index 96%"], .fileHeader)
     }
 
-    /// A fragment with no `@@` — the hunk state cannot help, so the header
-    /// patterns have to be precise enough on their own.
     /// `git diff` on a conflicted path emits a **combined** diff: `diff --cc`,
     /// `@@@` hunks, and one marker column per parent. Captured verbatim from
     /// git 2.43 on a two-branch content conflict.
@@ -253,8 +276,9 @@ index daf31e1,594dc4f..0000000
 ++>>>>>>> other
   three
 """
-        let kinds = DiffParser.parse(diff).map(\.kind)
-        XCTAssertEqual(kinds, [
+        let lines = DiffParser.parse(diff)
+        assertBodyLinesCarryMarkerColumns(2, lines)
+        XCTAssertEqual(lines.map(\.kind), [
             .fileHeader,   // diff --cc a.txt
             .fileHeader,   // index …
             .fileHeader,   // --- a/a.txt
@@ -291,7 +315,9 @@ index 5a7db94,a79868b..f7628f4
  -THEIRS
 ++RESOLVED
 """
-        XCTAssertEqual(DiffParser.parse(diff).map(\.kind), [
+        let lines = DiffParser.parse(diff)
+        assertBodyLinesCarryMarkerColumns(2, lines)
+        XCTAssertEqual(lines.map(\.kind), [
             .fileHeader,   // diff --cc a.txt
             .fileHeader,   // index …
             .fileHeader,   // --- a/a.txt
@@ -342,6 +368,7 @@ index d91eb2d,5a70c8a..0000000
   z
 """
         let lines = DiffParser.parse(diff)
+        assertBodyLinesCarryMarkerColumns(2, lines)
         XCTAssertEqual(lines.count, 24, "the whole fixture should survive parsing")
 
         // The four header lines of the *second* file are the whole point.
@@ -382,6 +409,8 @@ index 0000000..1111111 100644
         ])
     }
 
+    /// A fragment with no `@@` — the hunk state cannot help, so the header
+    /// patterns have to be precise enough on their own.
     func testAFragmentWithoutAHunkHeaderStillColoursItsChanges() {
         let lines = DiffParser.parse("----\n+++i;\n-- sql\n")
         // The whole array, not subscripts: a parser regression that returns

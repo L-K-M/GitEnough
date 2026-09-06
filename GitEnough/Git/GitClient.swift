@@ -294,6 +294,14 @@ public final class GitClient {
     /// working copy safe, which is not a property this app has. But that is a
     /// reason to do the trust work, not to treat this as minor. Tracked as
     /// `o-L14` in ANALYSIS.md.
+    ///
+    /// That trust work has a second half worth naming here, because it is easy
+    /// to miss when the risk is filed under "runs code": the filter's *output*
+    /// is what `stagedDiff()` hands the commit-message model. An untrusted
+    /// textconv therefore also writes directly into an LLM prompt. File
+    /// contents already reach that prompt, so this widens no boundary on its
+    /// own — but a per-repo trust gate that only stops process execution and
+    /// leaves the model input alone would be solving half the problem.
     private static let patchReadFlags = ["--no-color", "--no-ext-diff"]
 
     /// Unified diff for one worktree/index path.

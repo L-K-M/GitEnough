@@ -160,6 +160,16 @@ public enum DiffParser {
             // The payload headers `GIT binary patch` introduces. Without these
             // the section opener renders as diff content between two meta
             // lines; the base85 rows after them already fall to context.
+            //
+            // They fall there for a structural reason, not a lucky one, and
+            // it is worth writing down because git's base85 alphabet does
+            // contain `+`, `-` and `@`. Column 0 of a payload row is never
+            // part of the payload: it is a length prefix, `A`–`Z` for 1–26
+            // bytes and `a`–`z` for 27–52 (`emit_binary_diff_body` in git's
+            // diff.c). Measured on a real `git diff --binary`, 19 rows
+            // contained one of those three characters and none began with
+            // one. So no payload row can open a phantom hunk or colour as a
+            // change, however the alphabet reads.
             || rawLine.hasPrefix("literal ") || rawLine.hasPrefix("delta ")
             || rawLine.hasPrefix("\\") || rawLine.hasPrefix("Submodule") {
             return .meta
