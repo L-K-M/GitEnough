@@ -603,6 +603,15 @@ public final class GitClient {
     /// (or git's "was the merge successful?" prompt, which gets a headless EOF
     /// because `GitShell.run` gives every child `/dev/null` on stdin) didn't
     /// stage the file, the UI still offers “Mark Resolved”.
+    ///
+    /// **`--no-prompt` below is load-bearing, not tidiness.** `mergetool.prompt`
+    /// defaults to true, and git then asks "Hit return to start merge resolution
+    /// tool" *before* launching anything. With stdin at `/dev/null` that read
+    /// hits EOF and git gives up on the file — verified against git 2.43 with a
+    /// fake tool: prompting on, the tool is **never launched**; with
+    /// `--no-prompt` it launches. Removing the flag would make this feature a
+    /// silent no-op (exit 0, no tool, nothing staged, no error), and the prompt
+    /// text would be invisible because it goes to the captured stdout pipe.
     public func runMergeTool(_ tool: String, path: String) throws {
         // git-mergetool is a shell script. Even after its initial git command
         // selects a literal path, it expands the returned filename with an
