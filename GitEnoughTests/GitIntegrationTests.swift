@@ -883,6 +883,13 @@ final class GitIntegrationTests: XCTestCase {
         // fixture that never ran the script — a noexec TMPDIR, a git that
         // stopped honouring diff.external — would leave every "must not
         // contain" assertion below passing for the wrong reason.
+        //
+        // Deliberately fails rather than skips. A runner whose temp directory is
+        // mounted noexec cannot execute the script and will go red here — that
+        // is the intended outcome, because a skip on the same signal would also
+        // hide a real regression in the client, and this is the only assertion
+        // standing between the two. If you are looking at this failure on CI,
+        // check whether TMPDIR is executable before reading the client code.
         let hijacked = try GitShell.shared.runChecked(
             ["-C", repoURL.path, "diff", "--staged"], in: nil).stdout
         XCTAssertTrue(hijacked.contains("EXTERNAL-TOOL-OUTPUT"),

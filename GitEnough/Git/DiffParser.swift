@@ -22,6 +22,21 @@ public enum DiffParser {
 
     /// Classifies unified-diff output into display lines. Very large diffs are
     /// capped to keep the UI responsive; a synthetic note line marks the cutoff.
+    ///
+    /// **Input contract: git's own diff output**, from `diff`, `diff --no-index`
+    /// or `show`. Every one of those emits a `diff --git` (and `index`) line
+    /// between files, which is what closes a hunk here. A *separator-less*
+    /// multi-file patch — a hand-pasted `diff -u`, an LLM-generated patch —
+    /// would leave the second file's `--- `/`+++ ` headers inside the first
+    /// file's still-open hunk, coloured as a deletion/addition pair.
+    ///
+    /// That is out of contract rather than unnoticed. Closing it means trusting
+    /// the `@@ -a,b +c,d @@` line counts to find the boundary, and a header that
+    /// a truncated or hand-edited patch got wrong then silently swallows or
+    /// spills real lines — a worse failure than a miscoloured header, and one
+    /// this parser cannot detect. The no-`@@` fallback in `classifyOutsideHunk`
+    /// is likewise a degradation path for partial git output, not support for
+    /// arbitrary patches; do not read it as widening this contract.
     public static func parse(_ diff: String, maxLines: Int = 4000) -> [DiffLine] {
         var lines: [DiffLine] = []
         lines.reserveCapacity(min(diff.count / 40, maxLines + 1))

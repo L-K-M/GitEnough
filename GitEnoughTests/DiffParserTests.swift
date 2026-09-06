@@ -177,8 +177,8 @@ Binary files a/img.png and b/img.png differ
         XCTAssertEqual(byText["Binary files a/img.png and b/img.png differ"], .meta)
     }
 
-    /// A fragment with no `@@` — the hunk state cannot help, so the header
-    /// patterns have to be precise enough on their own.
+    /// A trailing newline is a separator, not a line — the split must drop the
+    /// empty final component while keeping blank lines that are hunk content.
     func testATrailingNewlineDoesNotAddAPhantomLine() {
         // Every git diff ends in a newline; splitting on it leaves an empty
         // final component that used to render as a blank context row and spend
@@ -204,6 +204,8 @@ dissimilarity index 96%
         XCTAssertEqual(kindsByText(lines)["dissimilarity index 96%"], .fileHeader)
     }
 
+    /// A fragment with no `@@` — the hunk state cannot help, so the header
+    /// patterns have to be precise enough on their own.
     func testAFragmentWithoutAHunkHeaderStillColoursItsChanges() {
         let lines = DiffParser.parse("----\n+++i;\n-- sql\n")
         XCTAssertEqual(lines[0].kind, .deletion)

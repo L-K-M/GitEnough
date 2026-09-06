@@ -273,6 +273,17 @@ public final class GitClient {
     /// commit-message model — raw binary where the repository has arranged for
     /// prose. `--no-ext-diff` removes a *replacement* for the patch; textconv
     /// only changes what the patch is computed over.
+    ///
+    /// The security half of that tradeoff, stated so it is a decision rather
+    /// than an omission: a textconv filter is an **arbitrary executable named by
+    /// the repository being viewed**, so rendering a diff in a repo that
+    /// arrived with a hostile `.git/config` runs it. GitEnough is not a sandbox
+    /// and does not claim to be one — it shells out to the user's own git, which
+    /// runs that repository's hooks on commit, checkout and merge regardless, a
+    /// strictly larger hole than this one. "Opening an untrusted working copy is
+    /// safe" is therefore not a property this app has, and suppressing textconv
+    /// alone would not give it one while costing every legitimate binary-format
+    /// diff. Making it true is its own piece of work, tracked in ANALYSIS.md.
     private static let patchReadFlags = ["--no-color", "--no-ext-diff"]
 
     /// Unified diff for one worktree/index path.
