@@ -61,9 +61,6 @@ public enum PushCapability: Equatable {
         if status.isUnborn { return .unavailable(.unbornHead) }
         if status.isDetached { return .unavailable(.detachedHead) }
         guard let head = status.head else { return .unavailable(.noCurrentBranch) }
-        guard let fallback = remotes.first(where: { $0.name == "origin" }) ?? remotes.first else {
-            return .unavailable(.noRemotes)
-        }
         // One block, so the ambiguity rule and the resolution that follows it
         // cannot answer differently. `resolve` deciding "not ambiguous" by one
         // rule while `Remote.split` selects by another is how the refusal would
@@ -107,6 +104,14 @@ public enum PushCapability: Equatable {
             return .push(remote: match.remote.name,
                          localBranch: head,
                          remoteBranch: match.branch)
+        }
+        // After the upstream block, not before it: a repository with a
+        // configured upstream and *no* remotes is the most extreme case of "an
+        // upstream nothing accounts for", and reporting the generic `.noRemotes`
+        // there gave the user who most needs the specific guidance the least of
+        // it — no branch name, no vanished upstream, no way forward.
+        guard let fallback = remotes.first(where: { $0.name == "origin" }) ?? remotes.first else {
+            return .unavailable(.noRemotes)
         }
         return .publish(remote: fallback.name, branch: head)
     }

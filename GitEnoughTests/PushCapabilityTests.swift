@@ -159,11 +159,45 @@ final class PushCapabilityTests: XCTestCase {
     }
 
     func testForceWithLeasePrecedesTheRefspec() {
+        // `--force-if-includes` rides along on git 2.30+, so the expectation is
+        // built from the same gate the builder uses rather than hardcoded — the
+        // point of the test is flag *order* relative to the refspec.
+        let lease = GitClient.supportsForceIfIncludes
+            ? ["--force-with-lease", "--force-if-includes"]
+            : ["--force-with-lease"]
         XCTAssertEqual(
             GitClient.pushArguments(remote: "origin", localBranch: "main",
                                     remoteBranch: "main", setUpstream: false,
                                     forceWithLease: true).arguments,
-            ["push", "--force-with-lease", "--", "origin", "refs/heads/main:refs/heads/main"])
+            ["push"] + lease + ["--", "origin", "refs/heads/main:refs/heads/main"])
+    }
+
+    /// `--force-with-lease` on its own compares against the remote-tracking
+    /// ref, and this app moves that ref behind the user's back — `autoFetchIfDue`
+    /// fetches on a timer when enabled. Reproduced against git 2.43: rewrite
+    /// locally, fetch, then force-push with a bare lease and a teammate's commit
+    /// is destroyed; add `--force-if-includes` and the push is rejected instead.
+    func testForcePushCarriesForceIfIncludesWhereGitSupportsIt() throws {
+        try XCTSkipUnless(GitClient.supportsForceIfIncludes,
+                          "git older than 2.30 has no --force-if-includes")
+        XCTAssertTrue(
+            GitClient.forcePushArguments(remote: "origin", localBranch: "main",
+                                         remoteBranch: "main")
+                .arguments.contains("--force-if-includes"),
+            "a lease that a background fetch can satisfy is not a lease")
+    }
+
+    /// The gate is a version comparison on git's banner, so pin the shapes real
+    /// gits emit — Apple's and Windows' both carry extra components.
+    func testGitVersionParsing() {
+        XCTAssertTrue(GitClient.parseVersion("git version 2.43.0").map { $0 >= (2, 30) } == true)
+        XCTAssertTrue(GitClient.parseVersion("git version 2.39.3 (Apple Git-146)")
+            .map { $0 >= (2, 30) } == true)
+        XCTAssertTrue(GitClient.parseVersion("git version 2.30.1.windows.1")
+            .map { $0 >= (2, 30) } == true)
+        XCTAssertTrue(GitClient.parseVersion("git version 2.29.2").map { $0 >= (2, 30) } == false)
+        XCTAssertNil(GitClient.parseVersion("git version banana"))
+        XCTAssertNil(GitClient.parseVersion(""))
     }
 
     /// A branch called `-x` is a legal ref. Fully qualifying the refspec is what
@@ -220,7 +254,10 @@ final class PushCapabilityTests: XCTestCase {
         XCTAssertEqual(asNested?.remote.name, "origin/features")
         XCTAssertEqual(asNested?.branch, "x")
 
-        // With no local branch to compare, longest prefix still decides.
+        // With no local branch to compare, longest prefix still decides — a
+        // *guess* on the same ambiguity `resolve` refuses. Safe only for callers
+        // that never move refs (labels, the status bar); anything that writes
+        // must pass a `localBranch` so the ambiguity can be refused. See o-G4.
         XCTAssertEqual(
             Remote.split(upstream: "origin/features/x", among: remotes)?.remote.name,
             "origin/features")
@@ -236,6 +273,11 @@ final class PushCapabilityTests: XCTestCase {
                 status: status(head: "x", upstream: "origin/features/x"), remotes: remotes),
             .push(remote: "origin/features", localBranch: "x", remoteBranch: "x"))
 
+        // Known-wrong by design: a local `features/x` that actually tracks
+        // `origin/features`'s branch `x` matches the *other* reading and lands
+        // here. Pinned so the behaviour is visible rather than accidental —
+        // o-G4 in ANALYSIS.md owns the fix, and this expectation flips when
+        // `%(upstream:remotename)` lands on RepoStatus.
         XCTAssertEqual(
             PushCapability.resolve(
                 status: status(head: "features/x", upstream: "origin/features/x"),
@@ -264,6 +306,19 @@ final class PushCapabilityTests: XCTestCase {
                        "an unresolved upstream must not offer to overwrite one")
         XCTAssertTrue(resolved.help.contains("origin/features/x"),
                       "the message must name the string it cannot read")
+    }
+
+    /// An upstream with no remote left to account for it, in the most extreme
+    /// form: every remote deleted. Its own reason, not the generic `.noRemotes`.
+    func testAnUpstreamWithNoRemotesAtAllStillNamesTheUpstream() {
+        XCTAssertEqual(
+            PushCapability.resolve(status: status(head: "main", upstream: "origin/main"),
+                                   remotes: []),
+            .unavailable(.upstreamRemoteMissing(upstream: "origin/main", branch: "main")))
+        // No upstream and no remotes is still just "no remotes".
+        XCTAssertEqual(
+            PushCapability.resolve(status: status(head: "main"), remotes: []),
+            .unavailable(.noRemotes))
     }
 
     /// One candidate remote is not ambiguous, however nested its name looks.

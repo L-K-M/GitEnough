@@ -134,7 +134,13 @@ struct RepoDetailView: View {
                         // read whatever the capability says at *tap* time,
                         // which is exactly the value the comparison exists to
                         // catch changing.
-                        pendingForcePush = forcePushCommand
+                        // `.disabled` is evaluated when the menu renders; a
+                        // refresh landing between that and the tap can still
+                        // leave this nil, and then the dialog would open with no
+                        // command and a confirm button that silently does
+                        // nothing — the worst place in the app for a no-op.
+                        guard let command = forcePushCommand else { return }
+                        pendingForcePush = command
                         showingForcePushConfirmation = true
                     }
                     // Gated on the command, not on the capability, so the
@@ -215,7 +221,7 @@ struct RepoDetailView: View {
     /// constant here would silently make the app's most safety-critical sentence
     /// the only untranslated one on screen.
     private static let forcePushWarning: LocalizedStringKey =
-        "This rewrites the remote branch to match your local history. “With lease” refuses to overwrite commits you haven't fetched yet, so a teammate's new work can't be lost silently — but anyone who pulled the old history will have to recover."
+        "This rewrites the remote branch to match your local history. It refuses if the remote has commits you haven't merged in — including ones GitEnough fetched for you in the background — so a teammate's new work can't be lost silently. Anyone who already pulled the old history will still have to recover."
 
     /// The command a confirmed force push would run, as of right now.
     ///

@@ -371,21 +371,23 @@ public final class RepoViewModel: ObservableObject, Identifiable {
     /// and the compiler says nothing. The parameter being mandatory is what
     /// makes the guarantee one rather than a convention.
     public func forcePush(confirming shown: GitClient.PushCommand) {
-        let capability = pushCapability
-        guard case .push(let remote, let local, let remoteBranch) = capability else {
-            // `.unavailable` already carries a reason that names the real
-            // problem, including the upstream-remote-is-gone case. `.publish`
-            // now means exactly one thing — no upstream at all — so the fallback
-            // wording only has to be true of that.
-            if case .unavailable(let reason) = capability {
-                errorMessage = reason.message
-            } else {
-                errorMessage = "Can't force push: this branch has no upstream on a configured remote to overwrite. Publish it first."
-            }
+        // Switched rather than guarded, so a new PushCapability case has to be
+        // handled here instead of silently inheriting "no upstream" — on the one
+        // action in the app that destroys work.
+        let command: GitClient.PushCommand
+        switch pushCapability {
+        case .push(let remote, let local, let remoteBranch):
+            command = GitClient.forcePushArguments(
+                remote: remote, localBranch: local, remoteBranch: remoteBranch)
+        case .unavailable(let reason):
+            // Already names the real problem, including upstream-remote-is-gone.
+            errorMessage = reason.message
+            return
+        case .publish:
+            // `.publish` means exactly one thing — no upstream at all.
+            errorMessage = "Can't force push: this branch has no upstream on a configured remote to overwrite. Publish it first."
             return
         }
-        let command = GitClient.forcePushArguments(
-            remote: remote, localBranch: local, remoteBranch: remoteBranch)
         if shown != command {
             errorMessage = "This branch's upstream changed while the confirmation was open, so the command shown is no longer the one that would run. Open Force Push again to review it."
             return

@@ -150,6 +150,31 @@ public final class GitClient {
         return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// `(major, minor)` from a `git --version` banner, or nil when it doesn't
+    /// look like one. Pure, so the version gate below is testable without a git.
+    ///
+    /// Handles the shapes real gits emit: `git version 2.43.0`,
+    /// `git version 2.39.3 (Apple Git-146)`, `git version 2.30.1.windows.1`.
+    public static func parseVersion(_ banner: String) -> (major: Int, minor: Int)? {
+        for field in banner.split(separator: " ") {
+            let parts = field.split(separator: ".")
+            guard parts.count >= 2,
+                  let major = Int(parts[0]), let minor = Int(parts[1]) else { continue }
+            return (major, minor)
+        }
+        return nil
+    }
+
+    /// Whether this git understands `--force-if-includes` (2.30, Dec 2020).
+    ///
+    /// Resolved once per process. `pushArguments` stays referentially
+    /// transparent within a run, which is what the confirmation dialog needs:
+    /// it and the client call the same function and get the same command.
+    static let supportsForceIfIncludes: Bool = {
+        guard let banner = version(), let v = parseVersion(banner) else { return false }
+        return (v.major, v.minor) >= (2, 30)
+    }()
+
     // MARK: - Status / branches / remotes
 
     public func status() throws -> RepoStatus {
@@ -492,7 +517,27 @@ public final class GitClient {
                                      setUpstream: Bool,
                                      forceWithLease: Bool = false) -> PushCommand {
         var args = ["push"]
-        if forceWithLease { args.append("--force-with-lease") }
+        if forceWithLease {
+            args.append("--force-with-lease")
+            // `--force-with-lease` alone compares against the remote-tracking
+            // ref, which this app updates behind the user's back: auto-fetch
+            // (`AppState.autoFetchIfDue`) runs on a timer when enabled. So a
+            // teammate's commit can arrive in `refs/remotes/origin/main`
+            // *between* the confirmation opening and the user pressing the
+            // button, the lease then matches, and the push destroys work the
+            // user was never shown.
+            //
+            // Reproduced against git 2.43: rewrite locally, fetch, then
+            // `push --force-with-lease` → "forced update", teammate's commit
+            // gone. Adding `--force-if-includes` → rejected, commit survives.
+            // It requires the fetched tip to be reachable from what is being
+            // pushed, which is precisely "you actually integrated what you
+            // fetched".
+            //
+            // Gated because it needs git 2.30+; without the gate an older git
+            // fails every force push with "unknown option".
+            if supportsForceIfIncludes { args.append("--force-if-includes") }
+        }
         if setUpstream { args.append("-u") }
         // `--` ends option parsing. Qualifying the refspec covers the branch
         // names, but the remote is its own operand — and a remote really can be
@@ -505,9 +550,11 @@ public final class GitClient {
     }
 
     /// The argv a force push runs. One definition so the confirmation dialog and
-    /// the command it describes share their *flags* too, not just the refspec —
-    /// otherwise adding, say, `--force-if-includes` would change what runs
-    /// without changing what the user was shown.
+    /// the command it describes share their *flags* too, not just the refspec.
+    ///
+    /// That paid off immediately: `--force-if-includes` was added to
+    /// `pushArguments` after this comment was written, and the dialog picked it
+    /// up with no change here — which is exactly the drift this shape prevents.
     public static func forcePushArguments(remote: String, localBranch: String,
                                           remoteBranch: String) -> PushCommand {
         pushArguments(remote: remote, localBranch: localBranch,
