@@ -130,6 +130,42 @@ final class GitIgnoreTests: XCTestCase {
         XCTAssertEqual(addition[0], UInt8(ascii: "/"))
     }
 
+    /// Pins the platform behaviour `RepoViewModel.ignore` relies on for its
+    /// "no .gitignore yet" branch.
+    ///
+    /// `fileExists(atPath:)` **resolves** symlinks, so a `.gitignore` symlinked
+    /// to a target that doesn't exist yet reports false and lands in that
+    /// branch. `Data.write(to:options:.atomic)` there would replace the user's
+    /// symlink with a regular file; `createFile` opens with `O_CREAT`, which
+    /// follows the final symlink and creates its target instead. Verified at the
+    /// syscall level on Linux; this pins it on macOS too.
+    func testCreatingThroughADanglingSymlinkWritesTheTargetNotTheLink() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitEnough-symlink-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory,
+                                                withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+
+        let link = directory.appendingPathComponent(".gitignore")
+        let target = directory.appendingPathComponent("shared-ignore")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: link.path),
+                       "precondition: fileExists resolves the link, so a dangling one is 'missing'")
+
+        XCTAssertTrue(FileManager.default.createFile(atPath: link.path, contents: nil))
+        let handle = try FileHandle(forWritingTo: link)
+        defer { try? handle.close() }
+        try handle.write(contentsOf: GitIgnore.appendedBytes("build", to: ""))
+
+        // Throws if .gitignore is no longer a symlink, which is the regression.
+        XCTAssertEqual(
+            try FileManager.default.destinationOfSymbolicLink(atPath: link.path),
+            target.path,
+            "the symlink must survive, not be replaced by a regular file")
+        XCTAssertEqual(try String(contentsOf: target, encoding: .utf8), "/build\n",
+                       "and the rule must land in its target")
+    }
+
     func testGeneratedRulesMatchLiteralNamesWithGit() throws {
         guard GitShell.shared.isAvailable else {
             throw XCTSkip("git is not installed")

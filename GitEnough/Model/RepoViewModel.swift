@@ -673,8 +673,21 @@ public final class RepoViewModel: ObservableObject, Identifiable {
             let url = client.worktree.appendingPathComponent(".gitignore")
             guard FileManager.default.fileExists(atPath: url.path) else {
                 // No file yet, so the addition is the whole rule.
-                try GitIgnore.appendedBytes(change.path, to: "")
-                    .write(to: url, options: .atomic)
+                //
+                // `createFile` then `FileHandle`, not `Data.write(to:.atomic)`:
+                // `fileExists` *resolves* symlinks, so a `.gitignore` symlinked
+                // to a target that doesn't exist yet lands here — and an atomic
+                // write would replace the user's symlink with a regular file
+                // instead of creating its target. `createFile` opens with
+                // O_CREAT, which follows the final symlink.
+                guard FileManager.default.createFile(atPath: url.path, contents: nil) else {
+                    throw GitError(
+                        message: "Couldn't create \(url.path) to ignore \(change.path).",
+                        exitCode: -1)
+                }
+                let handle = try FileHandle(forWritingTo: url)
+                defer { try? handle.close() }
+                try handle.write(contentsOf: GitIgnore.appendedBytes(change.path, to: ""))
                 return
             }
             // One handle across the read *and* the append, rather than reading
@@ -703,6 +716,11 @@ public final class RepoViewModel: ObservableObject, Identifiable {
             // A GitError rather than a raw CocoaError, because this surfaces in
             // the banner and "couldn't be opened because the text encoding is
             // not applicable" does not tell anyone which file or what to do.
+            // `readToEnd()` returns nil for "nothing to read", which for a
+            // zero-byte .gitignore is the honest answer and must map to "" —
+            // throwing here would break ignoring a path in a repository whose
+            // .gitignore exists but is empty. A genuine read failure does not
+            // arrive as nil: the call is `throws`, so I/O errors are thrown.
             let bytes = try handle.readToEnd() ?? Data()
             guard let existing = String(data: bytes, encoding: .utf8) else {
                 throw GitError(
