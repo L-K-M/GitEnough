@@ -674,20 +674,18 @@ public final class RepoViewModel: ObservableObject, Identifiable {
             guard FileManager.default.fileExists(atPath: url.path) else {
                 // No file yet, so the addition is the whole rule.
                 //
-                // `createFile` then `FileHandle`, not `Data.write(to:.atomic)`:
                 // `fileExists` *resolves* symlinks, so a `.gitignore` symlinked
-                // to a target that doesn't exist yet lands here — and an atomic
-                // write would replace the user's symlink with a regular file
-                // instead of creating its target. `createFile` opens with
-                // O_CREAT, which follows the final symlink.
-                guard FileManager.default.createFile(atPath: url.path, contents: nil) else {
-                    throw GitError(
-                        message: "Couldn't create \(url.path) to ignore \(change.path).",
-                        exitCode: -1)
-                }
-                let handle = try FileHandle(forWritingTo: url)
-                defer { try? handle.close() }
-                try handle.write(contentsOf: GitIgnore.appendedBytes(change.path, to: ""))
+                // to a target that doesn't exist yet lands here — and writing to
+                // `url` would replace the user's symlink with a regular file
+                // rather than creating what it points at. So resolve one level
+                // explicitly instead of relying on the write to follow the link:
+                // `FileManager.createFile` does follow it on Darwin, but
+                // swift-corelibs-foundation implements it as an atomic replace,
+                // so that behaviour is not portable. (Caught by
+                // `testCreatingThroughADanglingSymlinkWritesTheTargetNotTheLink`,
+                // which fails on Linux against the `createFile` version.)
+                try GitIgnore.appendedBytes(change.path, to: "")
+                    .write(to: RepoViewModel.creationTarget(for: url), options: .atomic)
                 return
             }
             // One handle across the read *and* the append, rather than reading
@@ -734,6 +732,21 @@ public final class RepoViewModel: ObservableObject, Identifiable {
             try handle.seekToEnd()
             try handle.write(contentsOf: addition)
         }
+    }
+
+    /// Where to write when creating `url`: the symlink's target if `url` is a
+    /// symlink, otherwise `url` itself. Relative link destinations resolve
+    /// against the link's own directory, as the kernel resolves them.
+    ///
+    /// Only needed on the creation path. Appending goes through an open handle,
+    /// which follows the link on both platforms without help.
+    static func creationTarget(for url: URL, fileManager: FileManager = .default) -> URL {
+        guard let destination =
+                try? fileManager.destinationOfSymbolicLink(atPath: url.path) else {
+            return url
+        }
+        return URL(fileURLWithPath: destination,
+                   relativeTo: url.deletingLastPathComponent())
     }
 
     /// Tracked paths are restored via git; untracked paths are moved to the Trash

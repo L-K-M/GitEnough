@@ -135,10 +135,15 @@ final class GitIgnoreTests: XCTestCase {
     ///
     /// `fileExists(atPath:)` **resolves** symlinks, so a `.gitignore` symlinked
     /// to a target that doesn't exist yet reports false and lands in that
-    /// branch. `Data.write(to:options:.atomic)` there would replace the user's
-    /// symlink with a regular file; `createFile` opens with `O_CREAT`, which
-    /// follows the final symlink and creates its target instead. Verified at the
-    /// syscall level on Linux; this pins it on macOS too.
+    /// branch, where writing to the link itself would replace it with a regular
+    /// file rather than creating what it points at.
+    ///
+    /// The first attempt used `FileManager.createFile`, on the reasoning that
+    /// `O_CREAT` follows the final symlink — true on Darwin, but
+    /// swift-corelibs-foundation implements `createFile` as an atomic *replace*,
+    /// so it clobbered the link on Linux and this test caught it. Hence the
+    /// explicit `destinationOfSymbolicLink` resolution, which behaves the same
+    /// on both.
     func testCreatingThroughADanglingSymlinkWritesTheTargetNotTheLink() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("GitEnough-symlink-\(UUID().uuidString)", isDirectory: true)
@@ -152,10 +157,9 @@ final class GitIgnoreTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: link.path),
                        "precondition: fileExists resolves the link, so a dangling one is 'missing'")
 
-        XCTAssertTrue(FileManager.default.createFile(atPath: link.path, contents: nil))
-        let handle = try FileHandle(forWritingTo: link)
-        defer { try? handle.close() }
-        try handle.write(contentsOf: GitIgnore.appendedBytes("build", to: ""))
+        // The real resolution `RepoViewModel.ignore` uses, not a copy of it.
+        try GitIgnore.appendedBytes("build", to: "")
+            .write(to: RepoViewModel.creationTarget(for: link), options: .atomic)
 
         // Throws if .gitignore is no longer a symlink, which is the regression.
         XCTAssertEqual(
