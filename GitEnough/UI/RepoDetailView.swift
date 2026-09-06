@@ -185,9 +185,12 @@ struct RepoDetailView: View {
                             isPresented: $showingForcePushConfirmation,
                             titleVisibility: .visible) {
             Button("Force Push (with Lease)", role: .destructive) {
-                viewModel.forcePush(confirming: pendingForcePush)
+                // Consumed, then dropped. The command is passed before the
+                // state is cleared, so the view model still gets its snapshot.
+                if let pendingForcePush { viewModel.forcePush(confirming: pendingForcePush) }
+                pendingForcePush = nil
             }
-            Button("Cancel", role: .cancel) {}
+            Button("Cancel", role: .cancel) { pendingForcePush = nil }
         } message: {
             Text(Self.forcePushWarning)
             if let command = pendingForcePush.map({

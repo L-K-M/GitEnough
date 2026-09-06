@@ -81,9 +81,7 @@ public enum PushCapability: Equatable {
             // `--force-with-lease` a ref on a remote the user never chose.
             // "Only git knows" is an argument for refusing, not for picking the
             // longer prefix.
-            let candidates = Remote.splitCandidates(upstream: upstream, among: remotes)
-            if candidates.count > 1,
-               !candidates.contains(where: { Remote.branchHalf(of: upstream, under: $0) == head }) {
+            if Remote.isAmbiguous(upstream: upstream, among: remotes, localBranch: head) {
                 return .unavailable(.ambiguousUpstream(upstream: upstream, branch: head))
             }
             // A *configured* upstream that no configured remote can account for

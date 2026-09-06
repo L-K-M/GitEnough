@@ -365,7 +365,12 @@ public final class RepoViewModel: ObservableObject, Identifiable {
     /// and a mismatch refuses rather than proceeding. Narrow window, but this is
     /// the one action in the app that destroys work, and "the command shown and
     /// the command run cannot drift apart" is the whole claim being made.
-    public func forcePush(confirming shown: GitClient.PushCommand? = nil) {
+    ///
+    /// Required, not defaulted: with `= nil` a future caller — a keyboard
+    /// shortcut, a context menu — force-pushes with no staleness check at all
+    /// and the compiler says nothing. The parameter being mandatory is what
+    /// makes the guarantee one rather than a convention.
+    public func forcePush(confirming shown: GitClient.PushCommand) {
         let capability = pushCapability
         guard case .push(let remote, let local, let remoteBranch) = capability else {
             // `.unavailable` already carries a reason that names the real
@@ -381,7 +386,7 @@ public final class RepoViewModel: ObservableObject, Identifiable {
         }
         let command = GitClient.forcePushArguments(
             remote: remote, localBranch: local, remoteBranch: remoteBranch)
-        if let shown, shown != command {
+        if shown != command {
             errorMessage = "This branch's upstream changed while the confirmation was open, so the command shown is no longer the one that would run. Open Force Push again to review it."
             return
         }

@@ -13,6 +13,13 @@ final class PushCapabilityTests: XCTestCase {
     }
 
     private let origin = Remote(name: "origin", url: "https://example.com/x/y.git")
+    /// Nested remote names, single-sourced: the whole point of these fixtures is
+    /// that one name is a prefix of another, and four hand-built copies of a
+    /// subtle name is how one of them quietly stops being subtle.
+    private let nestedFeatures = Remote(name: "origin/features",
+                                        url: "https://example.com/f.git")
+    private let up = Remote(name: "up", url: "https://example.com/a.git")
+    private let upStream = Remote(name: "up/stream", url: "https://example.com/b.git")
 
     // MARK: - Unavailable shapes
 
@@ -74,8 +81,6 @@ final class PushCapabilityTests: XCTestCase {
     /// Remote names may contain slashes, so the split is longest-prefix, not
     /// first-slash — the same rule `Remote.preferred` uses.
     func testSlashNamedRemoteSplitsOnTheLongestConfiguredName() {
-        let up = Remote(name: "up", url: "https://example.com/a.git")
-        let upStream = Remote(name: "up/stream", url: "https://example.com/b.git")
         XCTAssertEqual(
             PushCapability.resolve(status: status(head: "port", upstream: "up/stream/port"),
                                    remotes: [up, upStream]),
@@ -186,8 +191,6 @@ final class PushCapabilityTests: XCTestCase {
         XCTAssertEqual(simple?.remote.name, "origin")
         XCTAssertEqual(simple?.branch, "main")
 
-        let up = Remote(name: "up", url: "https://example.com/a.git")
-        let upStream = Remote(name: "up/stream", url: "https://example.com/b.git")
         let nested = Remote.split(upstream: "up/stream/port", among: [up, upStream])
         XCTAssertEqual(nested?.remote.name, "up/stream", "longest prefix wins")
         XCTAssertEqual(nested?.branch, "port")
@@ -201,10 +204,11 @@ final class PushCapabilityTests: XCTestCase {
     /// `x` produces the same upstream string and matches the **other** reading,
     /// so it resolves to `origin` + `features/x`: confidently, and wrongly. The
     /// heuristic has no failure it can detect. Only `%(upstream:remotename)` on
-    /// `RepoStatus` settles nested names for real.
+    /// `RepoStatus` settles nested names for real — tracked as **o-G4** in
+    /// ANALYSIS.md, so this pin of a known-wrong answer has an owner rather than
+    /// sitting in CI defending itself indefinitely.
     func testSplitUsesTheLocalBranchToBreakANestedRemoteTie() {
-        let features = Remote(name: "origin/features", url: "https://example.com/f.git")
-        let remotes = [origin, features]
+        let remotes = [origin, nestedFeatures]
 
         let asOrigin = Remote.split(upstream: "origin/features/x", among: remotes,
                                     localBranch: "features/x")
@@ -225,8 +229,7 @@ final class PushCapabilityTests: XCTestCase {
     /// The tie-break matters because it decides where a push *lands*, so pin it
     /// at the level push actually goes through, not just at `Remote.split`.
     func testResolveCarriesTheNestedRemoteTieBreakThrough() {
-        let features = Remote(name: "origin/features", url: "https://example.com/f.git")
-        let remotes = [origin, features]
+        let remotes = [origin, nestedFeatures]
 
         XCTAssertEqual(
             PushCapability.resolve(
@@ -251,10 +254,9 @@ final class PushCapabilityTests: XCTestCase {
     /// remote the user never chose. And pinning it meant CI would have defended
     /// the wrong answer against the fix.
     func testResolveRefusesAnAmbiguousUpstreamRatherThanGuessing() {
-        let features = Remote(name: "origin/features", url: "https://example.com/f.git")
         let resolved = PushCapability.resolve(
             status: status(head: "trunk", upstream: "origin/features/x"),
-            remotes: [origin, features])
+            remotes: [origin, nestedFeatures])
 
         XCTAssertEqual(resolved, .unavailable(
             .ambiguousUpstream(upstream: "origin/features/x", branch: "trunk")))
@@ -266,11 +268,10 @@ final class PushCapabilityTests: XCTestCase {
 
     /// One candidate remote is not ambiguous, however nested its name looks.
     func testASingleCandidateRemoteResolvesEvenWithoutABranchNameMatch() {
-        let features = Remote(name: "origin/features", url: "https://example.com/f.git")
         XCTAssertEqual(
             PushCapability.resolve(
                 status: status(head: "trunk", upstream: "origin/features/x"),
-                remotes: [features]),
+                remotes: [nestedFeatures]),
             .push(remote: "origin/features", localBranch: "trunk", remoteBranch: "x"))
     }
 

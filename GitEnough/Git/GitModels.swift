@@ -79,6 +79,12 @@ public struct Remote: Identifiable, Hashable {
     /// Selects the remote named by an upstream (`remote/branch`). Remote names
     /// may themselves contain slashes, so split-at-first-slash is ambiguous;
     /// the longest configured prefix is the exact match.
+    ///
+    /// Deliberately **does not** refuse the ambiguous case that
+    /// `PushCapability.resolve` refuses: with no `localBranch` to compare, this
+    /// falls through to longest-prefix. That divergence is intended — this feeds
+    /// labels and other read-only surfaces, where a best guess beats an empty
+    /// field, while Push must not guess about where it writes.
     public static func preferred(for upstream: String?, among remotes: [Remote]) -> Remote? {
         split(upstream: upstream, among: remotes)?.remote
             ?? remotes.first { $0.name == "origin" } ?? remotes.first
@@ -91,6 +97,22 @@ public struct Remote: Identifiable, Hashable {
     public static func splitCandidates(upstream: String?, among remotes: [Remote]) -> [Remote] {
         guard let upstream else { return [] }
         return remotes.filter { upstream.hasPrefix($0.name + "/") }
+    }
+
+    /// Whether `upstream` reads two or more ways under the configured remotes
+    /// with nothing to choose between them.
+    ///
+    /// Lives here, beside `split`, on purpose. `PushCapability.resolve` refuses
+    /// when this is true and otherwise takes what `split` returns — so the two
+    /// have to agree, and the way they stop agreeing is a future edit to one
+    /// tie-break that the other never hears about. Same rule, same file, one
+    /// definition.
+    public static func isAmbiguous(upstream: String, among remotes: [Remote],
+                                   localBranch: String?) -> Bool {
+        let candidates = splitCandidates(upstream: upstream, among: remotes)
+        guard candidates.count > 1 else { return false }
+        guard let localBranch else { return true }
+        return !candidates.contains { branchHalf(of: upstream, under: $0) == localBranch }
     }
 
     /// The branch half of `upstream` under `remote`, or nil when that reading
@@ -125,18 +147,18 @@ public struct Remote: Identifiable, Hashable {
                              among remotes: [Remote],
                              localBranch: String? = nil) -> (remote: Remote, branch: String)? {
         guard let upstream else { return nil }
-        func branchHalf(_ remote: Remote) -> String {
-            String(upstream.dropFirst(remote.name.count + 1))
-        }
-        let matches = remotes.filter { upstream.hasPrefix($0.name + "/") }
+        // `Remote.branchHalf`, not a nested copy of it: the nested version
+        // returned "" where the shared one returns nil, so the same rule had two
+        // spellings that had to be kept in step by hand.
+        let matches = splitCandidates(upstream: upstream, among: remotes)
         let matched = matches.first(where: { remote in
             guard let localBranch else { return false }
-            let branch = branchHalf(remote)
-            return !branch.isEmpty && branch == localBranch
+            return branchHalf(of: upstream, under: remote) == localBranch
         }) ?? matches.max(by: { $0.name.count < $1.name.count })
-        guard let matched else { return nil }
-        let branch = branchHalf(matched)
-        return branch.isEmpty ? nil : (matched, branch)
+        guard let matched, let branch = branchHalf(of: upstream, under: matched) else {
+            return nil
+        }
+        return (matched, branch)
     }
 
     /// Short host-ish label for the status bar, e.g. "github.com/L-K-M/GitEnough".
