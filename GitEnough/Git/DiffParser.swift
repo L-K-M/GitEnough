@@ -22,40 +22,163 @@ public enum DiffParser {
 
     /// Classifies unified-diff output into display lines. Very large diffs are
     /// capped to keep the UI responsive; a synthetic note line marks the cutoff.
+    ///
+    /// **Input contract: git's own diff output**, from `diff`, `diff --no-index`
+    /// or `show` — the last always with `--format=` (`commitFileDiff`), so no
+    /// commit message reaches here. That matters: a message body arrives while
+    /// `inHunk` is false, where a bullet starting `-` would colour as a deletion
+    /// and a quoted `@@` line would open a phantom hunk. Any new `show` caller
+    /// must empty the format too. Every one of those emits a `diff --git` (and `index`) line
+    /// between files, which is what closes a hunk here. A *separator-less*
+    /// multi-file patch — a hand-pasted `diff -u`, an LLM-generated patch —
+    /// would leave the second file's `--- `/`+++ ` headers inside the first
+    /// file's still-open hunk, coloured as a deletion/addition pair.
+    ///
+    /// That is out of contract rather than unnoticed. Closing it means trusting
+    /// the `@@ -a,b +c,d @@` line counts to find the boundary, and a header that
+    /// a truncated or hand-edited patch got wrong then silently swallows or
+    /// spills real lines — a worse failure than a miscoloured header, and one
+    /// this parser cannot detect. The no-`@@` fallback in `classifyOutsideHunk`
+    /// is likewise a degradation path for partial git output, not support for
+    /// arbitrary patches; do not read it as widening this contract.
     public static func parse(_ diff: String, maxLines: Int = 4000) -> [DiffLine] {
         var lines: [DiffLine] = []
         lines.reserveCapacity(min(diff.count / 40, maxLines + 1))
         var count = 0
-        for rawLine in diff.components(separatedBy: "\n") {
+        // Where we are matters, because a diff's line prefixes are ambiguous
+        // out of context. Inside a hunk the leading character belongs to the
+        // diff, not to the content, so a deleted "--- " (every YAML document
+        // separator, every SQL/Lua/Haskell comment) arrives as "----" and an
+        // added "++i;" arrives as "+++i;". Classifying those by prefix alone
+        // painted them as file headers — grey, in the pane whose only job is
+        // showing what changed. File headers only ever appear *outside* a hunk.
+        var inHunk = false
+        // How many marker columns the current hunk's body lines carry. A normal
+        // diff has one; a combined diff (`git diff` on a conflicted path, a
+        // merge under `show -m`) opens with `@@@` and carries one column *per
+        // parent*. Derived from the `@` run rather than assumed, so a three-way
+        // `@@@@` works too.
+        var markerColumns = 1
+        var rawLines = diff.components(separatedBy: "\n")
+        // Git's output always ends in a newline, so the split leaves a phantom
+        // empty final component. Drop exactly that one — an empty line *inside*
+        // the body is a context line whose trailing space some tool stripped,
+        // and the in-hunk branch below still keeps it.
+        if rawLines.last?.isEmpty == true { rawLines.removeLast() }
+        for rawLine in rawLines {
             if count >= maxLines {
                 lines.append(DiffLine(kind: .meta, text: "… diff truncated after \(maxLines) lines …"))
                 break
             }
             count += 1
             let kind: DiffLine.Kind
-            if rawLine.hasPrefix("diff --git") || rawLine.hasPrefix("index ")
-                || rawLine.hasPrefix("---") || rawLine.hasPrefix("+++")
-                || rawLine.hasPrefix("old mode") || rawLine.hasPrefix("new mode")
-                || rawLine.hasPrefix("similarity index") || rawLine.hasPrefix("rename from")
-                || rawLine.hasPrefix("rename to") || rawLine.hasPrefix("copy from")
-                || rawLine.hasPrefix("copy to") {
-                kind = .fileHeader
-            } else if rawLine.hasPrefix("@@") {
+            // Shape, not just prefix. Every git hunk header is an `@` run
+            // followed by " -" — `@@ -1,3 +1,3 @@`, combined `@@@ -1,3 -1,3
+            // +1,7 @@@` (one extra `@` per parent, so an octopus merge's `@@@@`
+            // is a real header too), and the `--function-context` form that
+            // trails a signature after the closing run.
+            //
+            // Requiring the " -" only matters off the happy path, which is
+            // precisely where it is worth having: `parse` is public and
+            // `classifyOutsideHunk` exists for partial output, so a bare `@@`
+            // prefix match would let a stray `@@@@` open a hunk three columns
+            // wide, after which an ordinary context line `" a-b"` reads as a
+            // deletion — one junk line poisoning every line after it.
+            let atRun = rawLine.prefix(while: { $0 == "@" })
+            if atRun.count >= 2, rawLine.dropFirst(atRun.count).hasPrefix(" -") {
+                inHunk = true
+                // "@@" → 1 column, "@@@" → 2, and so on: one per parent.
+                markerColumns = max(1, atRun.count - 1)
                 kind = .hunk
-            } else if rawLine.hasPrefix("+") {
-                kind = .addition
-            } else if rawLine.hasPrefix("-") {
-                kind = .deletion
-            } else if rawLine.hasPrefix("new file mode") || rawLine.hasPrefix("deleted file mode")
-                        || rawLine.hasPrefix("Binary files") || rawLine.hasPrefix("GIT binary patch")
-                        || rawLine.hasPrefix("\\") || rawLine.hasPrefix("Submodule") {
-                kind = .meta
-            } else {
+            } else if inHunk, rawLine.hasPrefix("\\") {
+                kind = .meta                     // "\ No newline at end of file"
+            } else if inHunk, !rawLine.isEmpty {
+                // Every line git emits inside a hunk carries a marker in each
+                // column. Anything else is the next file's header, so the hunk
+                // has ended and the line falls through to the header rules.
+                //
+                // A combined diff's columns are read together: ` +OURS` is an
+                // *addition* relative to the second parent even though its first
+                // column is a space. Classifying on `rawLine.first` alone called
+                // that a context line — i.e. told the user, mid-conflict, that
+                // their own side's new line was unchanged.
+                let columns = rawLine.prefix(markerColumns)
+                if columns.contains(where: { $0 == "+" }) {
+                    kind = .addition
+                } else if columns.contains(where: { $0 == "-" }) {
+                    kind = .deletion
+                } else if columns.allSatisfy({ $0 == " " }) {
+                    kind = .context
+                } else {
+                    // In git's output the only thing that can appear here is the
+                    // next file's section, which always opens with `diff --git`,
+                    // `diff --cc` or `index`. A plain `diff -u` patch without
+                    // those separators would need the `@@` line counts to find
+                    // the boundary; every producer feeding this parser is git
+                    // (`diff`, `diff --no-index`, `show`), so it does not.
+                    inHunk = false
+                    kind = Self.classifyOutsideHunk(rawLine)
+                }
+            } else if inHunk {
+                // An empty line: a context line whose trailing space some tool
+                // stripped. Still hunk content, so stay in the hunk.
                 kind = .context
+            } else {
+                kind = Self.classifyOutsideHunk(rawLine)
             }
             lines.append(DiffLine(kind: kind, text: rawLine))
         }
         return emphasizeIntralineChanges(lines)
+    }
+
+    /// Classification for a line that is not inside a hunk, where a leading
+    /// `---`/`+++` really is a file header rather than content.
+    ///
+    /// The `--- `/`+++ ` forms require the space git always writes after them
+    /// (`--- a/path`, `--- /dev/null`, and `--- path` under `--no-prefix`). That
+    /// costs nothing on real output and, in a hand-fed fragment with no `@@`
+    /// line — where the hunk state cannot help — keeps a deleted `--x` comment
+    /// from reading as a header. Only the unspaced form: a deleted `-- x`
+    /// arrives as `--- x`, which is indistinguishable from a header there and
+    /// still shows grey.
+    private static func classifyOutsideHunk(_ rawLine: String) -> DiffLine.Kind {
+        // `diff --cc` (and the older `diff --combined`) open a *combined* diff,
+        // which is what `git diff` emits for a conflicted path. Without them the
+        // boundary line renders as hunk content in the one state — mid-merge —
+        // where the diff pane is doing the most work.
+        if rawLine.hasPrefix("diff --git") || rawLine.hasPrefix("diff --cc")
+            || rawLine.hasPrefix("diff --combined") || rawLine.hasPrefix("index ")
+            || rawLine.hasPrefix("--- ") || rawLine.hasPrefix("+++ ")
+            || rawLine.hasPrefix("old mode") || rawLine.hasPrefix("new mode")
+            || rawLine.hasPrefix("similarity index") || rawLine.hasPrefix("dissimilarity index")
+            || rawLine.hasPrefix("rename from") || rawLine.hasPrefix("rename to")
+            || rawLine.hasPrefix("copy from") || rawLine.hasPrefix("copy to") {
+            return .fileHeader
+        }
+        if rawLine.hasPrefix("new file mode") || rawLine.hasPrefix("deleted file mode")
+            || rawLine.hasPrefix("Binary files") || rawLine.hasPrefix("GIT binary patch")
+            // The payload headers `GIT binary patch` introduces. Without these
+            // the section opener renders as diff content between two meta
+            // lines; the base85 rows after them already fall to context.
+            //
+            // They fall there for a structural reason, not a lucky one, and
+            // it is worth writing down because git's base85 alphabet does
+            // contain `+`, `-` and `@`. Column 0 of a payload row is never
+            // part of the payload: it is a length prefix, `A`–`Z` for 1–26
+            // bytes and `a`–`z` for 27–52 (`emit_binary_diff_body` in git's
+            // diff.c). Measured on a real `git diff --binary`, 19 rows
+            // contained one of those three characters and none began with
+            // one. So no payload row can open a phantom hunk or colour as a
+            // change, however the alphabet reads.
+            || rawLine.hasPrefix("literal ") || rawLine.hasPrefix("delta ")
+            || rawLine.hasPrefix("\\") || rawLine.hasPrefix("Submodule") {
+            return .meta
+        }
+        // A fragment handed to the parser without its `@@` line still colours
+        // its changes, rather than falling silently to context.
+        if rawLine.hasPrefix("+") { return .addition }
+        if rawLine.hasPrefix("-") { return .deletion }
+        return .context
     }
 
     // MARK: - Intraline (word-level) emphasis
