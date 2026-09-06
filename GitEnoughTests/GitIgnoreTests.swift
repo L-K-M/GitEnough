@@ -104,8 +104,9 @@ final class GitIgnoreTests: XCTestCase {
             ("", "notes.md"),
             ("build/\n", "dist/"),
             ("build/", "dist/"),                 // no trailing newline
-            ("a\r", "x"),
-            ("a\r\n", "x"),                        // CR at the join
+            ("a\r", "x"),                          // bare CR at the join
+            ("a\r\n", "x"),                        // already CRLF-terminated
+            ("/build\n", "build"),                 // already covered: no bytes
             ("\u{1F600}", "emoji.txt"),          // multi-byte final character
             ("e\u{301}", "combining.txt"),       // combining mark at the join
         ]
@@ -232,7 +233,13 @@ final class GitIgnoreTests: XCTestCase {
         try FileManager.default.createSymbolicLink(at: other, withDestinationURL: link)
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: other)
 
-        XCTAssertThrowsError(try RepoViewModel.creationTarget(for: link))
+        XCTAssertThrowsError(try RepoViewModel.creationTarget(for: link)) { error in
+            // Not just "something threw": a sandbox EACCES or a future refactor
+            // failing for another reason would satisfy a bare assertion while
+            // the cycle went undetected.
+            XCTAssertTrue("\(error)".contains("loop of symbolic links"),
+                          "expected the cycle refusal, got \(error)")
+        }
 
         // The link is still a link: nothing was written through it.
         XCTAssertEqual(

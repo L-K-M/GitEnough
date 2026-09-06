@@ -919,6 +919,14 @@ final class GitIntegrationTests: XCTestCase {
             ["-C", repoURL.path, "symbolic-ref", "--short", "HEAD"], in: nil).stdout
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let headRef = repoURL.appendingPathComponent(".git/refs/heads/\(branch)")
+        // The directory chain, not just the file: a nested default branch name
+        // (`feature/x`) has no `refs/heads/feature` in a fresh fixture, and a
+        // reftable-backed repository may have no `refs/heads` at all. Without
+        // this the write throws an opaque Cocoa error *before* the skip guard
+        // below can classify the situation — turning the graceful degradation
+        // this helper is built around into the red suite it exists to avoid.
+        try FileManager.default.createDirectory(
+            at: headRef.deletingLastPathComponent(), withIntermediateDirectories: true)
         let originalHead = try GitShell.shared.runChecked(
             ["-C", repoURL.path, "rev-parse", "HEAD"], in: nil).stdout
         addTeardownBlock {

@@ -737,8 +737,11 @@ public final class RepoViewModel: ObservableObject, Identifiable {
             guard !addition.isEmpty else { return }
             try handle.seekToEnd()
             try handle.write(contentsOf: addition)
-            try handle.close()
+            // Flagged before the call, not after: if `close()` throws, POSIX has
+            // already released the descriptor, and the `defer` must not close a
+            // number that may since have been handed to something else.
             closed = true
+            try handle.close()
         }
     }
 
@@ -778,15 +781,23 @@ public final class RepoViewModel: ObservableObject, Identifiable {
             // the wrong branch of the same function.
             guard visited.insert(current.path).inserted else {
                 throw GitError(
-                    message: "Can't ignore this path: “\(url.lastPathComponent)” "
+                    message: "Can't create “\(url.lastPathComponent)”: the path "
                         + "resolves through a loop of symbolic links, so there is no "
                         + "file to create. Fix the link and try again.",
                     exitCode: -1)
             }
             guard let destination = try? fileManager.destinationOfSymbolicLink(
                 atPath: current.path) else { return current }
-            current = URL(fileURLWithPath: destination,
-                          relativeTo: current.deletingLastPathComponent())
+            // `appendingPathComponent` rather than `relativeTo:`. The latter
+            // does RFC 3986 path merging, which resolves against the base's
+            // *parent* when the base does not read as a directory — and whether
+            // `deletingLastPathComponent()` returns a directory-flavoured URL
+            // has differed between Darwin and swift-corelibs-foundation. This
+            // builds the same path without depending on that.
+            current = (destination.hasPrefix("/")
+                ? URL(fileURLWithPath: destination)
+                : current.deletingLastPathComponent()
+                    .appendingPathComponent(destination))
                 .standardizedFileURL
         }
     }

@@ -77,9 +77,16 @@ public enum GitIgnore {
         // the front. Nothing else enforces it, and a future edit there —
         // normalizing line endings, trimming trailing space, re-escaping the
         // existing text — would slice at the wrong place and hand the caller
-        // garbage to append to the user's file. Debug-only, but loud.
+        // garbage to append to the user's file.
+        //
+        // Loud in debug, harmless in release. `precondition` was the other
+        // candidate, and it trades one user's corrupted `.gitignore` for every
+        // user's crashed app; returning nothing instead makes a broken
+        // invariant show up as "the rule wasn't added" — a visible no-op the
+        // user can retry, rather than a file they have to restore from git.
         assert(updated.utf8.starts(with: existing.utf8),
                "appending(_:to:) must return `existing` as a byte-for-byte prefix")
+        guard updated.utf8.starts(with: existing.utf8) else { return Data() }
         return Data(updated.utf8.dropFirst(existing.utf8.count))
     }
 

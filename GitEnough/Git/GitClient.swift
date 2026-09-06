@@ -437,6 +437,20 @@ public final class GitClient {
     /// a corrupt target exits 128. A repository in that state therefore reaches
     /// `restore --staged` and fails loudly, which is what it should do.
     private func isUnbornHEAD() -> Bool {
+        // `hasHEAD()` first, and it carries more weight than it looks. Raised in
+        // review: a `refs/heads/<branch>` file holding a well-formed SHA whose
+        // *object* is missing would be read as unborn and routed to
+        // `rm --cached`. It is not — `rev-parse --verify` checks that the ref
+        // resolves to a well-formed object name, not that the object exists, so
+        // that state exits 0 and stops here. Measured across all four states on
+        // git 2.43 (rev-parse / symbolic-ref exit codes):
+        //
+        //     healthy                     0 / 0    → not unborn
+        //     garbage ref contents        1 / 128  → not unborn
+        //     well-formed SHA, no object  0 / 0    → not unborn
+        //     genuinely unborn            1 / 0    → unborn
+        //
+        // Only the last reaches the index surgery below, which is the contract.
         guard !hasHEAD() else { return false }
         return (try? runReadChecked(
             ["-C", worktree.path, "symbolic-ref", "--quiet", "HEAD"], in: nil)) != nil
