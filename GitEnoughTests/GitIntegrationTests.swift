@@ -878,7 +878,13 @@ final class GitIntegrationTests: XCTestCase {
         // bit and works on a runner whose TMPDIR is mounted noexec. Verified
         // against git 2.43 with the exec bit cleared — the direct form fails
         // "cannot exec … Permission denied", this form produces the output.
-        try run(["config", "diff.external", "sh \(script.path)"])
+        //
+        // Quoted because that shell splits on whitespace and TMPDIR is not
+        // ours to choose. Measured against git 2.43 with a space in the temp
+        // path: the bare form hands `sh` a truncated path and every patch read
+        // in this test dies `fatal: external diff died`, so the test fails on
+        // an environmental quirk it does not cover. The quoted form runs.
+        try run(["config", "diff.external", "sh \"\(script.path)\""])
 
         try write("changed\n", to: "a.txt")
         try client.stage(paths: ["a.txt"])
@@ -891,8 +897,15 @@ final class GitIntegrationTests: XCTestCase {
         //
         let hijacked = try GitShell.shared.runChecked(
             ["-C", repoURL.path, "diff", "--staged"], in: nil).stdout
-        XCTAssertTrue(hijacked.contains("EXTERNAL-TOOL-OUTPUT"),
-                      "precondition: diff.external replaces an unguarded patch read")
+        guard hijacked.contains("EXTERNAL-TOOL-OUTPUT") else {
+            // Return, don't just record: every assertion below is a "must not
+            // contain", so an unhijacked baseline passes all of them. Failing
+            // and continuing would bury the one real failure under a dozen
+            // green checks that prove nothing.
+            XCTFail("precondition: diff.external did not replace an unguarded "
+                    + "patch read, so the guards below cannot be tested. Got: \(hijacked)")
+            return
+        }
 
         let staged = try client.stagedDiff()
         XCTAssertFalse(staged.contains("EXTERNAL-TOOL-OUTPUT"),

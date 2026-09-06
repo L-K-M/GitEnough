@@ -12,12 +12,15 @@ final class DiffParserTests: XCTestCase {
     /// Line text → kind for assertions. Fails when two identical texts classify
     /// differently, which plain first-wins would silently hide.
     private func kindsByText(_ lines: [DiffLine]) -> [String: DiffLine.Kind] {
-        Dictionary(lines.map { ($0.text, $0.kind) },
-                   uniquingKeysWith: { first, second in
-                       XCTAssertEqual(first, second,
-                                      "duplicate line text classified inconsistently")
-                       return first
-                   })
+        var result: [String: DiffLine.Kind] = [:]
+        for line in lines {
+            if let existing = result[line.text] {
+                XCTAssertEqual(existing, line.kind,
+                               "\(line.text.debugDescription) classified two ways")
+            }
+            result[line.text] = line.kind
+        }
+        return result
     }
 
     private func first(_ lines: [DiffLine], kind: DiffLine.Kind) -> DiffLine? {
@@ -151,6 +154,10 @@ index 111..222 100644
 """
         let lines = DiffParser.parse(diff)
         let byText = kindsByText(lines)
+        // Counted, because `kindsByText` collapses the fixture into a
+        // dictionary: a parser that dropped a line entirely would still
+        // satisfy every lookup below.
+        XCTAssertEqual(lines.count, 10, "the whole fixture should survive parsing")
         XCTAssertEqual(byText["diff --git a/b.txt b/b.txt"], .fileHeader)
         XCTAssertEqual(byText["--- a/b.txt"], .fileHeader,
                        "the second file's header must not be read as hunk content")
@@ -169,11 +176,17 @@ diff --git a/f b/f
 +b
 \\ No newline at end of file
 diff --git a/img.png b/img.png
+index 4d04a58..91dc45e 100644
 Binary files a/img.png and b/img.png differ
 """
         let lines = DiffParser.parse(diff)
         let byText = kindsByText(lines)
+        XCTAssertEqual(lines.count, 10, "the whole fixture should survive parsing")
         XCTAssertEqual(byText["\\ No newline at end of file"], .meta)
+        // git puts an `index` line between the header and the notice (verified
+        // against 2.43), so the notice is never the line right after `diff
+        // --git`. Omitting it made the fixture pin an ordering git never emits.
+        XCTAssertEqual(byText["index 4d04a58..91dc45e 100644"], .fileHeader)
         XCTAssertEqual(byText["Binary files a/img.png and b/img.png differ"], .meta)
     }
 
@@ -291,6 +304,60 @@ index 5a7db94,a79868b..f7628f4
             .deletion,     // " -THEIRS"        ← second column
             .addition,     // "++RESOLVED"
         ])
+    }
+
+    /// The single-column analogue is `testASecondFileClosesTheFirstFilesHunk`;
+    /// the combined case is where it bites hardest. Inside a `@@@` hunk the
+    /// classifier reads *two* columns, so the second file's `--- a/b.txt`
+    /// presents `--` and reads as removed content for as long as the hunk is
+    /// still open. It closes on `diff --cc b.txt` — the first line whose
+    /// columns are not markers — which then has to classify as a header rather
+    /// than falling through to context, so this covers both halves at once.
+    /// Captured verbatim from git 2.43: two files conflicted by one merge.
+    func testACombinedDiffHeaderClosesThePreviousCombinedHunk() {
+        let diff = """
+diff --cc a.txt
+index daf31e1,594dc4f..0000000
+--- a/a.txt
++++ b/a.txt
+@@@ -1,3 -1,3 +1,7 @@@
+  one
+++<<<<<<< HEAD
+ +OURS
+++=======
++ THEIRS
+++>>>>>>> other
+  three
+diff --cc b.txt
+index d91eb2d,5a70c8a..0000000
+--- a/b.txt
++++ b/b.txt
+@@@ -1,3 -1,3 +1,7 @@@
+  x
+++<<<<<<< HEAD
+ +OURS-B
+++=======
++ THEIRS-B
+++>>>>>>> other
+  z
+"""
+        let lines = DiffParser.parse(diff)
+        XCTAssertEqual(lines.count, 24, "the whole fixture should survive parsing")
+
+        // The four header lines of the *second* file are the whole point.
+        let second = lines[12..<16]
+        XCTAssertEqual(second.map(\.text), ["diff --cc b.txt",
+                                            "index d91eb2d,5a70c8a..0000000",
+                                            "--- a/b.txt",
+                                            "+++ b/b.txt"])
+        XCTAssertEqual(second.map(\.kind), [.fileHeader, .fileHeader, .fileHeader, .fileHeader],
+                       "the second file's headers must not inherit the first file's hunk")
+
+        // And the second file's body still classifies by both columns, so
+        // closing the hunk did not leave the marker width stale either.
+        XCTAssertEqual(lines[16...].map(\.kind),
+                       [.hunk, .context, .addition, .addition, .addition,
+                        .addition, .addition, .context])
     }
 
     /// The next file's `diff --git` closes an open hunk, so its `--- `/`+++ `

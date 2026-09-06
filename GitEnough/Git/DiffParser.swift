@@ -72,10 +72,23 @@ public enum DiffParser {
             }
             count += 1
             let kind: DiffLine.Kind
-            if rawLine.hasPrefix("@@") {
+            // Shape, not just prefix. Every git hunk header is an `@` run
+            // followed by " -" — `@@ -1,3 +1,3 @@`, combined `@@@ -1,3 -1,3
+            // +1,7 @@@` (one extra `@` per parent, so an octopus merge's `@@@@`
+            // is a real header too), and the `--function-context` form that
+            // trails a signature after the closing run.
+            //
+            // Requiring the " -" only matters off the happy path, which is
+            // precisely where it is worth having: `parse` is public and
+            // `classifyOutsideHunk` exists for partial output, so a bare `@@`
+            // prefix match would let a stray `@@@@` open a hunk three columns
+            // wide, after which an ordinary context line `" a-b"` reads as a
+            // deletion — one junk line poisoning every line after it.
+            let atRun = rawLine.prefix(while: { $0 == "@" })
+            if atRun.count >= 2, rawLine.dropFirst(atRun.count).hasPrefix(" -") {
                 inHunk = true
                 // "@@" → 1 column, "@@@" → 2, and so on: one per parent.
-                markerColumns = max(1, rawLine.prefix(while: { $0 == "@" }).count - 1)
+                markerColumns = max(1, atRun.count - 1)
                 kind = .hunk
             } else if inHunk, rawLine.hasPrefix("\\") {
                 kind = .meta                     // "\ No newline at end of file"
@@ -123,9 +136,11 @@ public enum DiffParser {
     ///
     /// The `--- `/`+++ ` forms require the space git always writes after them
     /// (`--- a/path`, `--- /dev/null`, and `--- path` under `--no-prefix`). That
-    /// costs nothing on real output and keeps a hand-fed fragment with no `@@`
-    /// line — where the hunk state cannot help — from reading a deleted `--`
-    /// comment as a header.
+    /// costs nothing on real output and, in a hand-fed fragment with no `@@`
+    /// line — where the hunk state cannot help — keeps a deleted `--x` comment
+    /// from reading as a header. Only the unspaced form: a deleted `-- x`
+    /// arrives as `--- x`, which is indistinguishable from a header there and
+    /// still shows grey.
     private static func classifyOutsideHunk(_ rawLine: String) -> DiffLine.Kind {
         // `diff --cc` (and the older `diff --combined`) open a *combined* diff,
         // which is what `git diff` emits for a conflicted path. Without them the
