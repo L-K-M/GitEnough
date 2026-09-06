@@ -73,11 +73,32 @@ final class PushCapabilityTests: XCTestCase {
 
     /// Remote names may contain slashes, so the split is longest-prefix, not
     /// first-slash — the same rule `Remote.preferred` uses.
+    /// A remote whose own name contains a slash still splits on the longest
+    /// configured name, rather than at the first slash.
+    ///
+    /// Two remotes or one changes only whether the answer is a guess. With just
+    /// `up/stream` configured there is a single reading of `up/stream/port`, so
+    /// this is knowledge and force push stays armed.
     func testSlashNamedRemoteSplitsOnTheLongestConfiguredName() {
         XCTAssertEqual(
             PushCapability.resolve(status: status(head: "port", upstream: "up/stream/port"),
-                                   remotes: [up, upStream]),
+                                   remotes: [upStream]),
             .push(remote: "up/stream", localBranch: "port", remoteBranch: "port"))
+
+        // Add `up` and the same string reads two ways — `up` + `stream/port`,
+        // or `up/stream` + `port`. The local branch name settles it, and the
+        // branch half is still resolved correctly, which is what this test is
+        // about; the remote half is now a tie-break match, so force push is
+        // withheld until `o-G4` can ask git which remote the branch tracks.
+        let contested = PushCapability.resolve(
+            status: status(head: "port", upstream: "up/stream/port"),
+            remotes: [up, upStream])
+        XCTAssertEqual(
+            contested,
+            .pushToGuessedRemote(remote: "up/stream", localBranch: "port",
+                                 remoteBranch: "port"))
+        XCTAssertFalse(contested.allowsForcePush)
+        XCTAssertTrue(contested.tracksAnUpstream)
     }
 
     func testOnlyAnUpstreamBranchCanBeForcePushed() {
