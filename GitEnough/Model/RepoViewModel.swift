@@ -678,12 +678,12 @@ public final class RepoViewModel: ObservableObject, Identifiable {
                 // to a target that doesn't exist yet lands here — and writing to
                 // `url` would replace the user's symlink with a regular file
                 // rather than creating what it points at. So resolve one level
-                // explicitly instead of relying on the write to follow the link:
-                // `FileManager.createFile` does follow it on Darwin, but
-                // swift-corelibs-foundation implements it as an atomic replace,
-                // so that behaviour is not portable. (Caught by
-                // `testCreatingThroughADanglingSymlinkWritesTheTargetNotTheLink`,
-                // which fails on Linux against the `createFile` version.)
+                // explicitly rather than expecting any create call to follow the
+                // link for us: `FileManager.createFile(atPath:contents:)` looks
+                // like it would — `O_CREAT` follows a final symlink — but it
+                // replaces the link on **both** platforms, measured, not assumed
+                // (`testCreatingThroughADanglingSymlinkWritesTheTargetNotTheLink`
+                // failed identically on macOS and Linux against that version).
                 try GitIgnore.appendedBytes(change.path, to: "")
                     .write(to: RepoViewModel.creationTarget(for: url), options: .atomic)
                 return

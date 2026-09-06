@@ -138,12 +138,12 @@ final class GitIgnoreTests: XCTestCase {
     /// branch, where writing to the link itself would replace it with a regular
     /// file rather than creating what it points at.
     ///
-    /// The first attempt used `FileManager.createFile`, on the reasoning that
-    /// `O_CREAT` follows the final symlink — true on Darwin, but
-    /// swift-corelibs-foundation implements `createFile` as an atomic *replace*,
-    /// so it clobbered the link on Linux and this test caught it. Hence the
-    /// explicit `destinationOfSymbolicLink` resolution, which behaves the same
-    /// on both.
+    /// The first attempt used `FileManager.createFile(atPath:contents:)`, on the
+    /// reasoning that `O_CREAT` follows a final symlink. `open(2)` does; that
+    /// `FileManager` method does not — it clobbered the link on **both**
+    /// platforms, and this test caught it with the same two failures on macOS
+    /// and Linux. Hence the explicit `destinationOfSymbolicLink` resolution,
+    /// which depends on no create-time symlink semantics at all.
     func testCreatingThroughADanglingSymlinkWritesTheTargetNotTheLink() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("GitEnough-symlink-\(UUID().uuidString)", isDirectory: true)
