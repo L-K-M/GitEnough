@@ -189,7 +189,7 @@ Binary files a/img.png and b/img.png differ
         // An empty line inside the body is still content and must survive.
         let withBlank = DiffParser.parse("@@ -1,3 +1,3 @@\n a\n\n b\n")
         XCTAssertEqual(withBlank.map(\.text), ["@@ -1,3 +1,3 @@", " a", "", " b"])
-        XCTAssertEqual(withBlank[2].kind, .context)
+        XCTAssertEqual(withBlank.map(\.kind), [.hunk, .context, .context, .context])
     }
 
     func testDissimilarityIndexIsAFileHeader() {
@@ -247,6 +247,42 @@ index daf31e1,594dc4f..0000000
         ])
     }
 
+    /// Removals in a combined diff, which the addition test above cannot reach.
+    /// Captured from git 2.43: a merge resolved by dropping lines both parents
+    /// had, shown with `git show --cc --format=`.
+    ///
+    /// ` -THEIRS` is the exact mirror of the ` +OURS` case — marked removed by
+    /// its *second* column while its first is a space. A fix that only promoted
+    /// lines containing `+` would leave it reading as unchanged content.
+    func testACombinedDiffMarksRemovalsInEitherColumn() {
+        let diff = """
+diff --cc a.txt
+index 5a7db94,a79868b..f7628f4
+--- a/a.txt
++++ b/a.txt
+@@@ -1,4 -1,4 +1,2 @@@
+  keep
+--doomed
+--both-had
+- OURS
+ -THEIRS
+++RESOLVED
+"""
+        XCTAssertEqual(DiffParser.parse(diff).map(\.kind), [
+            .fileHeader,   // diff --cc a.txt
+            .fileHeader,   // index …
+            .fileHeader,   // --- a/a.txt
+            .fileHeader,   // +++ b/a.txt
+            .hunk,         // @@@ … @@@
+            .context,      // "  keep"
+            .deletion,     // "--doomed"        both parents
+            .deletion,     // "--both-had"      both parents
+            .deletion,     // "- OURS"          first column
+            .deletion,     // " -THEIRS"        ← second column
+            .addition,     // "++RESOLVED"
+        ])
+    }
+
     /// The next file's `diff --git` closes an open hunk, so its `--- `/`+++ `
     /// lines are headers again rather than content.
     func testASecondFileClosesTheFirstFilesHunk() {
@@ -271,9 +307,9 @@ index 0000000..1111111 100644
 
     func testAFragmentWithoutAHunkHeaderStillColoursItsChanges() {
         let lines = DiffParser.parse("----\n+++i;\n-- sql\n")
-        XCTAssertEqual(lines[0].kind, .deletion)
-        XCTAssertEqual(lines[1].kind, .addition)
-        XCTAssertEqual(lines[2].kind, .deletion)
+        // The whole array, not subscripts: a parser regression that returns
+        // fewer lines should fail this test, not trap and abort the run.
+        XCTAssertEqual(lines.map(\.kind), [.deletion, .addition, .deletion])
     }
 
     func testUnpairedDeletionRunIsLeftPlain() {

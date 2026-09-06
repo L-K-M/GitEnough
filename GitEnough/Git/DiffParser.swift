@@ -24,7 +24,11 @@ public enum DiffParser {
     /// capped to keep the UI responsive; a synthetic note line marks the cutoff.
     ///
     /// **Input contract: git's own diff output**, from `diff`, `diff --no-index`
-    /// or `show`. Every one of those emits a `diff --git` (and `index`) line
+    /// or `show` — the last always with `--format=` (`commitFileDiff`), so no
+    /// commit message reaches here. That matters: a message body arrives while
+    /// `inHunk` is false, where a bullet starting `-` would colour as a deletion
+    /// and a quoted `@@` line would open a phantom hunk. Any new `show` caller
+    /// must empty the format too. Every one of those emits a `diff --git` (and `index`) line
     /// between files, which is what closes a hunk here. A *separator-less*
     /// multi-file patch — a hand-pasted `diff -u`, an LLM-generated patch —
     /// would leave the second file's `--- `/`+++ ` headers inside the first
@@ -138,6 +142,10 @@ public enum DiffParser {
         }
         if rawLine.hasPrefix("new file mode") || rawLine.hasPrefix("deleted file mode")
             || rawLine.hasPrefix("Binary files") || rawLine.hasPrefix("GIT binary patch")
+            // The payload headers `GIT binary patch` introduces. Without these
+            // the section opener renders as diff content between two meta
+            // lines; the base85 rows after them already fall to context.
+            || rawLine.hasPrefix("literal ") || rawLine.hasPrefix("delta ")
             || rawLine.hasPrefix("\\") || rawLine.hasPrefix("Submodule") {
             return .meta
         }
