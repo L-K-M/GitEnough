@@ -903,6 +903,12 @@ final class GitIntegrationTests: XCTestCase {
         try write("one\nfrom-main\n", to: "a.txt")
         try run(["commit", "-am", "Main edit"])
         _ = try GitShell.shared.run(["-C", repoURL.path, "merge", "conflicting"], in: nil)
+        // Without this, a merge that silently succeeded (or a fixture drift that
+        // stopped the two edits from overlapping) would leave every conflict
+        // test passing vacuously — including the ones asserting that a guard
+        // *fired*, which would then be asserting nothing at all.
+        XCTAssertEqual(try client.conflictedPaths(), ["a.txt"],
+                       "precondition: the fixture merge really conflicts")
     }
 
     func testCreateTagLightweightAndAnnotated() throws {

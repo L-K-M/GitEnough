@@ -345,6 +345,14 @@ public final class GitClient {
 
     // MARK: - Staging
 
+    /// Stages the named paths. Unlike `stageAll`, this takes no view on conflicts:
+    /// naming a path *is* the user saying "this one is resolved", which is what
+    /// git's own `add` means during a merge. The UI never routes a conflicted
+    /// path here — porcelain v2 `u` entries land in `RepoStatus.conflicted`
+    /// alone, so they are absent from the staged/unstaged lists these actions
+    /// read — and the deliberate gesture goes through `markResolved`, which
+    /// refuses while conflict markers are still in the file. A new caller that
+    /// can reach an unmerged path should call `markResolved` instead.
     public func stage(paths: [String]) throws {
         guard !paths.isEmpty else { return }
         try runChecked(
@@ -373,7 +381,7 @@ public final class GitClient {
             let names = conflicted.prefix(3).joined(separator: ", ")
             let more = conflicted.count > 3 ? " and \(conflicted.count - 3) more" : ""
             throw GitError(
-                message: "Can't stage everything while \(conflicted.count) file\(conflicted.count == 1 ? " is" : "s are") still conflicted (\(names)\(more)). Staging a conflicted file as-is would commit its conflict markers — resolve each one first, or use Ours/Theirs/Mark Resolved.",
+                message: "Can't stage everything while \(conflicted.count) file\(conflicted.count == 1 ? " is" : "s are") still conflicted (\(names)\(more)). Staging a conflicted file as-is would commit its conflict markers. Resolve each one first — edit it, or take one side wholesale — then stage it.",
                 exitCode: -1)
         }
         try runChecked(["-C", worktree.path, "add", "-A"], in: nil)
