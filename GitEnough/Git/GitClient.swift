@@ -658,14 +658,28 @@ public final class GitClient {
     /// because `GitShell.run` gives every child `/dev/null` on stdin) didn't
     /// stage the file, the UI still offers “Mark Resolved”.
     ///
-    /// **`--no-prompt` below is load-bearing, not tidiness.** `mergetool.prompt`
-    /// defaults to true, and git then asks "Hit return to start merge resolution
-    /// tool" *before* launching anything. With stdin at `/dev/null` that read
-    /// hits EOF and git gives up on the file — verified against git 2.43 with a
-    /// fake tool: prompting on, the tool is **never launched**; with
-    /// `--no-prompt` it launches. Removing the flag would make this feature a
-    /// silent no-op (exit 0, no tool, nothing staged, no error), and the prompt
-    /// text would be invisible because it goes to the captured stdout pipe.
+    /// **`--no-prompt` below is load-bearing, not tidiness.** When
+    /// `mergetool.prompt` is on, git asks "Hit return to start merge resolution
+    /// tool" *before* launching anything; with stdin at `/dev/null` that read
+    /// hits EOF and git gives up on the file. Measured against git 2.43 with a
+    /// fake tool, stdin redirected from `/dev/null`:
+    ///
+    ///     mergetool.prompt=true,  no flag       → tool NEVER launched
+    ///     mergetool.prompt=true,  --no-prompt   → tool launched
+    ///     mergetool.prompt unset, no flag       → tool launched
+    ///
+    /// So the flag protects users who set `mergetool.prompt` themselves rather
+    /// than a default: unset behaves as false here, because git only prompts
+    /// unprompted-for when it *guessed* the tool, and this call always passes
+    /// `--tool=`. For those users, removing the flag would turn the feature
+    /// into a no-op whose explanation is invisible — the prompt text goes to
+    /// the stdout pipe this client captures.
+    ///
+    /// Either way the exit code is 1 when the file comes back unresolved, so
+    /// `runChecked` throws and the user gets an error banner. That is the
+    /// user-visible change on this path: before every git child got
+    /// `/dev/null`, the same situation blocked forever on the launching
+    /// terminal's tty instead.
     public func runMergeTool(_ tool: String, path: String) throws {
         // git-mergetool is a shell script. Even after its initial git command
         // selects a literal path, it expands the returned filename with an
