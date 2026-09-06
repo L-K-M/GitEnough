@@ -353,6 +353,11 @@ public final class GitClient {
     /// read — and the deliberate gesture goes through `markResolved`, which
     /// refuses while conflict markers are still in the file. A new caller that
     /// can reach an unmerged path should call `markResolved` instead.
+    ///
+    /// The invariant is pinned by `GitParsersTests`
+    /// (`testEveryUnmergedShapeStaysOutOfTheStagedAndUnstagedLists`) rather than
+    /// asserted here, so it fails at the point of drift — the parser — instead
+    /// of costing a `git diff` subprocess on every stage.
     public func stage(paths: [String]) throws {
         guard !paths.isEmpty else { return }
         try runChecked(
@@ -367,6 +372,11 @@ public final class GitClient {
     /// merge, `git add -A` turns `u UU … f.txt` into `1 M. … f.txt`, the commit
     /// then succeeds, and the committed file contains
     /// `<<<<<<< HEAD … ======= … >>>>>>> other`.
+    ///
+    /// The check and the `add` are two separate git processes, so a conflict
+    /// created *between* them — by a terminal, an editor integration — can still
+    /// slip through. This narrows the window to milliseconds; it does not close
+    /// it, and only an index lock would.
     ///
     /// In the app that is worse than the raw command, because the conflict UI is
     /// rendered from the unmerged entries: staging them makes the warning

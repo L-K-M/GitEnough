@@ -875,7 +875,12 @@ final class GitIntegrationTests: XCTestCase {
             guard let gitError = error as? GitError else {
                 return XCTFail("expected the guard's GitError, got \(type(of: error)): \(error)")
             }
-            XCTAssertEqual(gitError.exitCode, -1, "synthesized by the guard, not by git")
+            // `-1` marks "synthesized, not from git", but it is not unique to
+            // this guard — GitShell uses it for "git isn't installed" and
+            // "failed to launch" too. The message prefix is what discriminates.
+            XCTAssertEqual(gitError.exitCode, -1, "synthesized, not git's own exit code")
+            XCTAssertTrue(gitError.message.hasPrefix("Can't stage everything"),
+                          "the guard refused, not some other GitError: \(gitError.message)")
             XCTAssertTrue(gitError.message.contains("a.txt"),
                           "the refusal must name what to resolve, got \(gitError.message)")
         }
