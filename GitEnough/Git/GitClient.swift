@@ -391,7 +391,7 @@ public final class GitClient {
             let names = conflicted.prefix(3).joined(separator: ", ")
             let more = conflicted.count > 3 ? " and \(conflicted.count - 3) more" : ""
             throw GitError(
-                message: "Can't stage everything while \(conflicted.count) file\(conflicted.count == 1 ? " is" : "s are") still conflicted (\(names)\(more)). Staging a conflicted path accepts whatever is in the worktree as the resolution — the conflict markers in a content conflict, or one side silently winning in a modify/delete. Resolve each one first, then stage it.",
+                message: "Can't stage everything while \(conflicted.count) file\(conflicted.count == 1 ? " is" : "s are") still conflicted (\(names)\(more)). Staging one accepts whatever is in the worktree — markers and all, or one side silently winning. Resolve each first, then stage it.",
                 exitCode: -1)
         }
         try runChecked(["-C", worktree.path, "add", "-A"], in: nil)

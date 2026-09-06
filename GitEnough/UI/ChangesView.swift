@@ -197,7 +197,7 @@ struct ChangesView: View {
                             .disabled(viewModel.isBusy || !conflicts.isEmpty)
                             .help(conflicts.isEmpty
                                   ? "Stage every change"
-                                  : "Resolve the conflicted files first — staging them accepts whatever is in the worktree as the resolution")
+                                  : "Resolve the conflicted files first — staging them accepts whatever is in the worktree")
                     }
                 }
             } footer: {
