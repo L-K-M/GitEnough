@@ -276,7 +276,7 @@ public final class GitShell {
         // `runMergeTool`'s own comment already assumes the answer it gets here
         // is EOF. It is now. Hooks that read stdin during commit/pull/push get
         // the same treatment, which is what `GIT_TERMINAL_PROMPT=0` intends and
-        // what `ProcessRunner` (Platform/ProcessRunner.swift:82) already does.
+        // what `ProcessRunner` (Platform/ProcessRunner.swift) already does.
         process.standardInput = FileHandle.nullDevice
 
         do {

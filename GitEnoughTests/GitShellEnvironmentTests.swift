@@ -1,4 +1,11 @@
 import XCTest
+// dup/dup2/STDIN_FILENO for the inherited-stdin regression test. Same
+// conditional import Platform/ProcessRunner.swift uses.
+#if canImport(Glibc)
+import Glibc
+#elseif canImport(Darwin)
+import Darwin
+#endif
 @testable import GitEnough
 
 /// PATH augmentation for git child processes: apps launched from Finder get
@@ -127,8 +134,12 @@ final class GitShellEnvironmentTests: XCTestCase {
     /// invisible because it goes to the captured stdout.
     ///
     /// `git hash-object --stdin` reads stdin to EOF and prints the hash of what
-    /// it read, so matching the empty file's digest is a direct assertion that
-    /// the child saw EOF rather than an inherited descriptor.
+    /// it read, so matching the empty file's digest says the child saw EOF.
+    ///
+    /// On its own that is **not** a regression test: CI runs with the runner's
+    /// own stdin already at EOF, so an inherited fd 0 hashes empty too and this
+    /// passes with or without the fix. `testAnInheritedStdinWouldBeVisible`
+    /// below is the one that can actually fail; this one pins the ordinary case.
     func testGitChildrenSeeAnEmptyStdin() throws {
         guard GitShell.shared.isAvailable else {
             throw XCTSkip("git is not installed on this machine")
@@ -138,6 +149,55 @@ final class GitShellEnvironmentTests: XCTestCase {
         XCTAssertEqual(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines),
                        try expectedHash(of: ""),
                        "the child must read an empty stdin, not the parent's")
+    }
+
+    /// The regression test with teeth: put **non-empty** bytes on the test
+    /// runner's own fd 0, so inheriting it is distinguishable from `/dev/null`.
+    ///
+    /// Without this, every stdin assertion in this file passes whether or not
+    /// `GitShell.run` sets `standardInput` — CI runs with stdin already at EOF,
+    /// so an inherited descriptor hashes empty exactly like the null device
+    /// does. The failure would only appear from an interactive terminal, and
+    /// there it manifests as a hang rather than a red test.
+    ///
+    /// `dup2` a file of sentinel bytes over fd 0 for the duration of one call
+    /// and restore it afterwards. With the fix, the child hashes empty; without
+    /// it, the child hashes the sentinel and both assertions below fail.
+    func testAnInheritedStdinWouldBeVisible() throws {
+        guard GitShell.shared.isAvailable else {
+            throw XCTSkip("git is not installed on this machine")
+        }
+        let sentinelText = "SENTINEL-\(UUID().uuidString)\n"
+        // Both digests computed before fd 0 is touched, to keep that window to
+        // the single call under test.
+        let emptyHash = try expectedHash(of: "")
+        let sentinelHash = try expectedHash(of: sentinelText)
+        XCTAssertNotEqual(emptyHash, sentinelHash, "precondition: the two differ")
+
+        let sentinel = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitEnough-stdin-\(UUID().uuidString)")
+        try sentinelText.write(to: sentinel, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: sentinel) }
+        let reader = try FileHandle(forReadingFrom: sentinel)
+        defer { try? reader.close() }
+
+        let savedStdin = dup(STDIN_FILENO)
+        try XCTSkipIf(savedStdin < 0, "cannot duplicate this runner's stdin")
+        // Restored before anything else runs: leaving the suite's fd 0 pointing
+        // at a deleted temp file would be a very confusing thing to debug.
+        defer {
+            dup2(savedStdin, STDIN_FILENO)
+            close(savedStdin)
+        }
+        XCTAssertGreaterThanOrEqual(dup2(reader.fileDescriptor, STDIN_FILENO), 0,
+                                    "could not place the sentinel on fd 0")
+
+        let result = try GitShell.shared.run(["hash-object", "--stdin"], in: nil)
+        let hashed = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        XCTAssertEqual(hashed, emptyHash,
+                       "the child must read /dev/null, not the parent's fd 0")
+        XCTAssertNotEqual(hashed, sentinelHash,
+                          "the child read the sentinel — standardInput is not being set")
     }
 
     /// `runChecked` without a `stdin:` delegates to `run`, so it must inherit the
