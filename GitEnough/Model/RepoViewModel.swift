@@ -692,7 +692,7 @@ public final class RepoViewModel: ObservableObject, Identifiable {
             // holds an advisory lock, so a writer landing between `readToEnd`
             // and `seekToEnd` is still possible. Closing it properly needs
             // `flock`, which .gitignore does not warrant.
-            let handle = try FileHandle(forUpdatingTo: url)
+            let handle = try FileHandle(forUpdating: url)
             // Closed on every exit: a throwing read, seek or write (disk full,
             // permissions revoked mid-flight) would otherwise leak the
             // descriptor for the life of the process.
@@ -700,9 +700,14 @@ public final class RepoViewModel: ObservableObject, Identifiable {
             // Only a genuinely empty file maps to "": non-UTF-8 bytes must
             // throw rather than let the append below treat the file as blank
             // and write a rule that reads as the continuation of a real one.
+            // A GitError rather than a raw CocoaError, because this surfaces in
+            // the banner and "couldn't be opened because the text encoding is
+            // not applicable" does not tell anyone which file or what to do.
             let bytes = try handle.readToEnd() ?? Data()
             guard let existing = String(data: bytes, encoding: .utf8) else {
-                throw CocoaError(.fileReadInapplicableStringEncoding)
+                throw GitError(
+                    message: "\(url.path) isn't valid UTF-8, so GitEnough can't safely append to it. Edit it by hand to ignore \(change.path).",
+                    exitCode: -1)
             }
             // The bytes to add, computed once in `GitIgnore` — see
             // `appendedBytes` for why this must not be a Character-count slice.
