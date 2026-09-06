@@ -197,7 +197,7 @@ struct ChangesView: View {
                             .disabled(viewModel.isBusy || !conflicts.isEmpty)
                             .help(conflicts.isEmpty
                                   ? "Stage every change"
-                                  : "Resolve the conflicted files first — staging them accepts whatever is in the worktree")
+                                  : Self.stageAllBlockedHelp(conflicts))
                     }
                 }
             } footer: {
@@ -349,6 +349,18 @@ struct ChangesView: View {
             }
         }
         .padding(20)
+    }
+}
+
+private extension ChangesView {
+    /// The disabled Stage All tooltip. Because the button is disabled whenever
+    /// anything is unmerged, `GitClient.stageAll`'s refusal — which names the
+    /// count and the files — almost never reaches this front end; this is where
+    /// that information has to appear instead.
+    static func stageAllBlockedHelp(_ conflicts: [FileChange]) -> String {
+        let names = conflicts.prefix(3).map(\.path).joined(separator: ", ")
+        let more = conflicts.count > 3 ? " and \(conflicts.count - 3) more" : ""
+        return "Resolve \(conflicts.count) conflicted file\(conflicts.count == 1 ? "" : "s") first (\(names)\(more)) — staging them accepts whatever is in the worktree"
     }
 }
 
