@@ -868,9 +868,16 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertEqual(before, ["a.txt"], "precondition: a real conflict")
 
         XCTAssertThrowsError(try client.stageAll()) { error in
-            let message = (error as? GitError)?.message ?? "\(error)"
-            XCTAssertTrue(message.contains("a.txt"),
-                          "the refusal must name what to resolve, got \(message)")
+            // The *type* matters: `stageAll` calls `conflictedPaths()` first, so
+            // a parse failure there could throw an error whose text happens to
+            // embed the path, and this assertion would pass while the guard
+            // itself never fired.
+            guard let gitError = error as? GitError else {
+                return XCTFail("expected the guard's GitError, got \(type(of: error)): \(error)")
+            }
+            XCTAssertEqual(gitError.exitCode, -1, "synthesized by the guard, not by git")
+            XCTAssertTrue(gitError.message.contains("a.txt"),
+                          "the refusal must name what to resolve, got \(gitError.message)")
         }
 
         // The unmerged entry survives, so the conflict UI still shows and the
@@ -879,6 +886,33 @@ final class GitIntegrationTests: XCTestCase {
         let staged = try client.status().staged
         XCTAssertFalse(staged.contains { $0.path == "a.txt" },
                        "a conflicted path must not become a staged modification")
+    }
+
+    /// A modify/delete conflict has **no conflict markers anywhere** — the
+    /// worktree simply holds the surviving side's content. `git add -A` there
+    /// doesn't commit markers; it silently picks a winner and clears the
+    /// unmerged state, which is the quieter and arguably worse failure. Verified
+    /// against git 2.43: the entry is `u UD`, `diff --diff-filter=U` reports it,
+    /// and `a.txt` contains no `<<<<<<<`.
+    func testStageAllRefusesAModifyDeleteConflictThatHasNoMarkers() throws {
+        try run(["checkout", "-b", "deleting", "main"])
+        try run(["rm", "-q", "a.txt"])
+        try run(["commit", "-m", "Delete a.txt"])
+        try run(["checkout", "main"])
+        try write("one\nedited\n", to: "a.txt")
+        try run(["commit", "-am", "Edit a.txt"])
+        _ = try GitShell.shared.run(["-C", repoURL.path, "merge", "deleting"], in: nil)
+
+        XCTAssertEqual(try client.conflictedPaths(), ["a.txt"],
+                       "precondition: a modify/delete conflict")
+        let contents = try String(contentsOf: repoURL.appendingPathComponent("a.txt"),
+                                  encoding: .utf8)
+        XCTAssertFalse(contents.contains("<<<<<<<"),
+                       "precondition: this conflict shape has no markers")
+
+        XCTAssertThrowsError(try client.stageAll())
+        XCTAssertEqual(try client.conflictedPaths(), ["a.txt"],
+                       "the unmerged entry must survive, not be silently resolved")
     }
 
     /// The guard is about unmerged paths, not about being mid-merge: once every

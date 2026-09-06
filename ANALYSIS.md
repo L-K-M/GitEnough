@@ -2,14 +2,25 @@
 
 A living, shovel-ready backlog for GitEnough: every entry below is a concrete,
 self-contained task with suggested approach and test plan, ready for an LLM (or
-human) to pick up. This document consolidates seven independent full-codebase
-reviews (`glm.md` ×2 — the wave-4 record lives on `docs/glm-review-2` — plus
-`kimi.md`, `fable.md`, `flash.md`, `sol.md`, and `k3.md`, each kept unedited on
-its review branch as the record) with everything learned while implementing the
-first four waves of fixes.
+human) to pick up. This document consolidates eight independent full-codebase
+reviews — `glm.md` ×2 (the wave-4 record lives on `docs/glm-review-2`), plus
+`kimi.md`, `fable.md`, `flash.md`, `sol.md`, `k3.md`, and `opus.md` (wave 5,
+2026-09-06, on `claude/git-client-review-j5cut4`), each kept unedited on its
+review branch as the record — with everything learned while implementing the
+first five waves of fixes.
+
 **Maintenance rule:** when an entry ships, delete it here (the git history
 preserves it); when a new issue is found, add it with the same level of
 concreteness.
+
+**Confidence marking.** Entries carry the evidence behind them. Anything stated
+as "verified against git 2.x" or citing a `file:line` was checked directly.
+Wave-5 entries that were *not* put through an adversarial verification pass are
+marked **(unverified lead)** — read those as a place to start looking, not as a
+confirmed defect. That pass completed for only 3 of 13 review dimensions
+(19 verdicts against 185 raised findings) because the reviewing session hit its
+limit mid-run, so the marking is about what was checked, not about how likely
+each one is.
 
 Effort: **S** ≤ ~30 min · **M** half a day · **L** multi-day.
 
@@ -17,75 +28,29 @@ Effort: **S** ≤ ~30 min · **M** half a day · **L** multi-day.
 
 ## Status snapshot (do not re-implement)
 
-Wave-1 work represented by PRs #1–#35 is integrated into `main`; several of
-those PRs were closed and superseded by later equivalents rather than merged
-literally. Waves 2–3 are **open and deliberately unmerged**. Rows below are
-implemented or actively being repaired/reviewed; do not start a duplicate
-unless the linked PR is closed or abandoned. Check its current checks, feedback,
-base, and dependencies before relying on it:
+**Waves 1–3 are integrated into `main`.** PRs #1–#35 (wave 1) and the 51
+non-superseded PRs of #36–#90 (waves 2–3) are merged; #36, #56, #74 and #85 were
+superseded duplicates closed in favour of #77, #59, #47 and #63. The seven
+cross-PR defects that merged without a conflict marker — invisible to every PR's
+own CI — were fixed in the integration merge rather than deferred (X1–X5, since
+removed as shipped).
 
-**Waves 2–3 are now integrated** (2026-08-22). All 51 non-superseded PRs of
-#36–#90 are merged into one conflict-resolved branch; #36, #56, #74 and #85 are
-superseded duplicates whose fixes arrive via #77, #59, #47 and #63 respectively,
-so they can simply be closed. The seven cross-PR defects that merge without a
-conflict marker — invisible to every PR's own CI — were fixed in the merge, not
-deferred (X1–X5 below, now shipped).
+The per-PR index of what each of those changes covers, the verified landing
+order, and the reasoning behind each judgement-call resolution live in
+**`docs/open-pr-review.md`**. It is not duplicated here; consult it before
+assuming anything below is unimplemented.
 
-The full record, including the verified landing order and the reasoning behind
-each judgement-call resolution, is `docs/open-pr-review.md`. Rows below stay as
-the per-PR index of what each change covers. X6 records why the GLM review check
-is red on ~40 PRs (an API timeout, not a code signal) — still open.
+**Wave 5 (2026-09-06)** shipped six changes from `opus.md`, each on its own
+branch:
 
 | PR | Covers |
 |----|--------|
-| #36/#77 | **Close #36.** `pr/36` is a literal git ancestor of `pr/77` — #77 already contains it, plus `ChangeSelection` and the commit-file-diff loading state. Land #77 alone |
-| #37 | `Remote.displayHost` strips only a trailing `.git` (was mangling `user.github.io` and `.git`-containing hostnames) |
-| #38 | `GitParsers.parseDate` formatter data race (configure-once) |
-| #39 | Cherry-pick/revert merge commits via `--mainline` (per-parent menu items; 1-based precondition) |
-| #40 | `[gone]` upstream parsed + "upstream gone" badge in Branches |
-| #41 | Commit-detail load-failure state (kills the eternal spinner; real git error in the pane; superseded-load guard) |
-| #42 | Unpushed-commit markers: hollow graph dots from `rev-list @{upstream}..HEAD` |
-| #43 | Force Push (with lease) as a Push split-button + confirmation |
-| #44 | Make Stash reachable with staged-only changes |
-| #45 | Skip bare repositories and submodules during watch-folder discovery |
-| #46 | Let the Settings window size to content instead of clipping |
-| #47/#74 | **Close #74.** Near-identical diffs; #47 additionally puts the cheap hash-prefix check ahead of the two localized folds |
-| #48 | Name the real Git command in synthesized GitShell errors |
-| #49 | Add a visible New Branch action to the Branches tab |
-| #50 | Squash / no-fast-forward merge options in the merge dialog |
-| #51 | Error banner: expandable long output + copy button |
-| #52 | Relative dates tick via per-minute TimelineView |
-| #53 | Copy Name on branch rows; Copy Hash and Subject on commits; shared `NSPasteboard.copyString` |
-| #54 | Per-repo commit-draft persistence (restore on launch, cleanup on repo removal, injectable defaults); restore must never overwrite fresh typing (glm-M4) |
-| #55 | Empty states: zero-commit History, empty Remote Branches section |
-| #56/#59 | **Close #56.** #59 is the preferred superset (full-ref parsing, remote HEAD suppression, `HEAD -> tag:`, forge namespaces) and needs no `remoteNames` plumbing. Ordering hazard: plain numeric merge order lands #56 first and permanently blocks #59 |
-| #57/#71/#80/#83 | Complementary guardrail series: menu/toolbar state, context-aware Push/Publish, unborn amend, and central mutation admission. **None is an ancestor of another** (verified) — see X1 for the #57×#83 merge that turns CI red, and X2 for #71/#83's duplicate menu-invalidation mechanisms |
-| #58 | Remove inherited repository-routing Git environment variables from child processes |
-| #60 | Correct literal `.gitignore` escaping, trailing whitespace, and duplicate detection |
-| #61 | Treat conflict-only repositories as dirty and count unique changed paths |
-| #62 | Show useful content instead of “No diff” for an untracked directory |
-| #63/#85 | **Close #85.** Confirmed: #63 covers stage/unstage/discard via `affectedPaths` and excludes copies (`if isRename`); #85 is discard-only with the same guard |
-| #64 | Copy structured activity argv as POSIX-shell-safe commands; disable unsafe legacy copies |
-| #65 | Suppress duplicate activation and post-operation refreshes |
-| #66 | Preserve canonical branch identities across local/tag/remote short-name collisions |
-| #67 | Expand long commit bodies, label merges, and navigate parents in commit detail |
-| #68 | Force literal pathspec semantics for every UI-supplied repository path |
-| #69 | Preserve detected self-hosted forge type when no open PR exists |
-| #70 | Load AI models only after an explicit user action, matching the privacy copy |
-| #72 | Use normal reachable-tag following for Fetch/Pull instead of forcing all tags |
-| #73 | Select the longest matching configured remote name, including slash-named remotes |
-| #75 | Validate Trash targets and report partial/complete untracked-file Trash failures |
-| #76 | Prevent an early-exiting Git child from terminating GitEnough with SIGPIPE |
-| #78 | Fail closed when a conflict-marker scan cannot read the file |
-| #79 | Add `--no-optional-locks` centrally to every read-only repository query |
-| #81 | Reject late AI results after edits/newer requests/commit success; recheck staged-diff identity and surface staged-diff read failures |
-| #82 | Validate persisted repository selection and fall back to the first valid repository |
-| #84 | Remote-branch deletion (remote-HEAD rejection, qualified refspec, longest-match slash-named remote parsing, empty-component validation — all landed, with negative + slash-remote integration tests) |
-| #86 | Copy a paste-ready cherry-pick command from a history row |
-| #87 | Confirm before aborting an in-progress merge/rebase/cherry-pick/revert (resolutions not yet committed are lost) |
-| #88 | Renames/copies render as "old → new" in the Changes and commit-detail file rows (`FilePathText`, a11y label "Was x, now y") |
-| #89 | Status bar shows the preferred remote (upstream's remote, else origin, else first) with a URL tooltip; pure tested selector. **Its new static selector re-introduces the split-at-first-slash bug #73 removes** — see X3 |
-| #90 | Branch lists carry each tip's committer date (`%(committerdate:iso8601-strict)`) and render relative recency next to ahead/behind |
+| #96 | Push sends an explicit `refs/heads/x:refs/heads/y` refspec instead of letting `push.default` decide — and Force Push can no longer rewrite every matching branch. `PushCapability` rewritten around it |
+| #97 | A failed `restore --staged` no longer leaves a staged *deletion*; unborn HEAD unstages via `rm --cached`; `.gitignore` appends are computed in bytes so a bare CR at the join can't destroy the preceding rule |
+| #98 | Diff classification is a hunk state machine, so a diff line whose content starts with `--` or `++` stops rendering as a file header; every patch read passes `--no-color --no-ext-diff`, so a configured `diff.external` can no longer replace what the pane shows and what the model is handed |
+| #99 | GTK lists no longer stage, check out, and apply stashes on a *single* click (`activate-on-single-click = 0`), matching the macOS front end's double-click; per-row tooltips |
+| #100 | "Stage All" refuses while any path is unmerged, instead of `git add -A` staging conflict markers and clearing the unmerged state |
+| #101 | Every git child gets `/dev/null` on stdin, so a command that asks a question fails fast instead of blocking forever on the launching terminal's tty |
 
 Verified non-issues, kept for the record (don't re-audit):
 - **Graph width never includes trailing free lanes** — every lane is either
@@ -119,17 +84,6 @@ Verified non-issues, kept for the record (don't re-audit):
 ---
 
 ## Correctness & safety
-
-### X1–X5 · Cross-PR defects — **shipped** (fixed in the integration merge)
-
-The five cross-PR defects found in the wave-2/3 review no longer exist as
-backlog: the integration branch merges all 51 non-superseded PRs and fixes each
-one in the merge itself. Kept here only as a pointer, since the resolutions were
-judgement calls a future reader will want explained —
-`docs/open-pr-review.md` §8 records which side won and why for the #57×#83 pull
-guard, the #71×#83 duplicate invalidation mechanisms and push surface, the
-#73×#89 slash-remote regression, the #48×#79 error message, and the #54×#81
-single `didSet`.
 
 ### X6 · The GLM review check times out on anything but a small diff — S
 
@@ -165,6 +119,25 @@ over the observed worst case — and raise that job's `timeout-minutes` above
 workflow holding repository secrets, so treat the edit as privileged: keep the
 existing same-repo `if:` gate, and re-pin the action SHA deliberately rather
 than tracking a tag.
+
+**Status: blocked on that upstream release, not on anything in this repository.**
+
+**Do not confuse this with the other red GLM check — `HTTP 429`.** Wave 5 opened
+five PRs in quick succession and two of their review runs failed like this:
+
+```
+Processing 2 file(s) in 1 chunk(s) … 25000 max patch characters
+API call failed … (attempt 1/1) after 804ms: Z.ai API: HTTP 429.
+API call failed … (attempt 2/3) after 443ms: Z.ai API: HTTP 429.
+API call failed … (attempt 3/3) after 429ms: Z.ai API: HTTP 429.
+```
+
+That is account-level rate limiting: it fails in **under a second** per attempt
+on a 2,733-character patch, where X6 sits at exactly 300 s on a large one. The
+two are told apart by the timing, not the outcome. The practical mitigation is
+operational rather than code: **pace pushes across PRs**, since concurrent runs
+against one account are what triggers it. Raising `REQUEST_TIMEOUT_MS` will do
+nothing for a 429.
 
 ### C1 · Make sidebar summaries generation-safe — S/M
 
@@ -239,16 +212,24 @@ a provider/base change. Migrate without logging secrets. Tests cover every
 loopback spelling, lookalike hosts, ports, paths/spaces, userinfo/query/fragment,
 normalization collisions, and provider changes behind an injectable Keychain.
 
-### C5b · Redact and protect persistent activity history — S/M
+### C5b · Create the activity history `0600` — S  ·  *rescoped: half shipped*
 
-Activity JSONL can include user-provided stash/tag text and sensitive option
-values. Define redaction at the structured-argv boundary and create/repair the
-history file with user-only permissions. #64 disables its copy button for
-unstructured legacy rows but leaves raw text persisted and selectable; migrate,
-redact, quarantine, or delete those on load so secrets are absent from both UI
-and disk. Tests inspect raw files after quoted values, URL credentials, arbitrary
-messages, migration, and restart; assert mode `0600` after creation, append,
-migration, permission repair, and atomic compaction.
+**Redaction already shipped.** `GitActivityLog.redactCredentials` exists and is
+applied to argv (`GitActivityLog.swift:172`, `:200`) and to stderr tails
+(`:127`). The original entry asked for redaction *and* file permissions; only
+the second half remains, and it is three lines rather than the S/M implied.
+
+The JSONL is written with `Data.write(to:options:.atomic)` and no
+`.posixPermissions`, so it lands at `0644 & ~umask`. Because `.atomic` renames a
+fresh temp file over the old one, a user who chmods it to `600` has that undone
+by the next compaction. On macOS the containing directory is usually `0700`, so
+the exposure is limited; on Linux `~/.local/share` is `0755`, so the file is
+genuinely world-readable.
+
+Fix: pass `.posixPermissions: 0o600` on create, and re-apply the mode after
+every atomic compaction (the rename is what loses it). Test: assert mode `0600`
+after creation, after append, and after compaction — the third is the one that
+regresses.
 
 ### C5c · Detect Git and signing stalls honestly — M
 
@@ -411,6 +392,11 @@ read-in-flight → mutation → late-read-completion ordering.
 
 ### P4 · Reduce snapshot process launches without turning failures into empty data — M
 
+**One item here needs none of the restructuring and can be done today:**
+`GitClient.gitDir()` shells out for a value that is fixed for the life of a
+`GitClient`, and is re-run on every snapshot. Memoizing it is an independent S
+with no coupling to the rest of this entry.
+
 A full snapshot launches roughly eight Git processes: status, branches,
 remotes, stash, Git-dir/operation probes, a redundant conflict query, and log.
 Cache immutable/common Git directories, inspect operation markers directly,
@@ -484,7 +470,13 @@ commit. Add signposts and use P0's 10k-commit fixture to report phase/body count
 and assert that a draft keystroke does not re-evaluate History and an activity
 event does not republish unrelated snapshot domains.
 
-### P8 · Make history pagination incremental and memory-bounded — M/L
+### P8 · Make history pagination incremental and memory-bounded — M
+
+**Cheaper than this entry has read since it was written.**
+`GitClient.log(limit:skip:)` **already takes `skip:`**, and no caller passes it
+(verified by grep). The process plumbing exists; what is missing is only
+`loadMoreHistory` using it and the graph layout carrying resume state. See
+**P4-opus** for the layout half, which is the real work.
 
 Load More raises a limit, refetches from zero, and recomputes the whole graph
 prefix; the larger limit then applies to every later refresh. Work becomes
@@ -929,6 +921,12 @@ operation and error banners. Acceptance: complete ordinary commit/push and
 branch-checkout flows with VoiceOver and Full Keyboard Access; audit Increase
 Contrast, Reduce Motion, color filters, larger text, and pseudo-localization.
 
+**There is one structural cause under most of this, worth fixing first.**
+History is a `LazyVStack`, not a `List` — so it has no list semantics for
+VoiceOver and no keyboard selection at all, and no amount of per-row labelling
+fixes that. Doing **U1** first is most of V12, U1, U4, F16 and F30 at once, and
+doing V12 before U1 means labelling rows that are about to be rebuilt.
+
 ### V13 · Restore the main window from every app lifecycle state — S/M
 
 Runtime-test closing the main window while Activity or Settings remains open,
@@ -984,13 +982,18 @@ branch. Prefer a stable single control whose *menu* grows a “Publish branch to
 disable the inapplicable one. Must stay consistent with the shared
 `pushOrPublish()` entry point (#57) and #43's force-push menu.
 
-### glm-V7 · Lane squeeze has no minimum width — S (low priority)
+### glm-V7 · Lane squeeze has no minimum width — M  ·  *upgraded: it is a correctness bug, not only aesthetics*
 
 `GraphMetrics.laneWidth(for:)` divides by column count with no floor; at 40+
-lanes, lanes collide into an unreadable smear under `maxGraphWidth`. Consider
-a ~4 pt floor with horizontal scrolling of the graph column (the width cap
-becomes the viewport), or collapse ultra-deep lane sets behind a zoom control.
-Low priority — document the chosen trade-off either way.
+lanes, lanes collide into an unreadable smear under `maxGraphWidth`.
+
+**This entry read "S, low priority" and both halves were wrong.** Only the dot
+scales with lane compression — stroke widths and the hollow-dot inset do not —
+so past roughly 66 concurrent lanes `nodeRadius` drops *below* the hollow-dot
+inset. On macOS the unpushed-commit dot is then **not drawn at all**, and on
+Linux Cairo is asked for a negative radius. An invisible unpushed marker is a
+correctness failure in the one signal the graph exists to carry. See **H3**,
+which is this entry with the mechanism worked out.
 
 ### glm-A3 · Diff pane lacks a sticky header — S
 
@@ -1245,17 +1248,47 @@ logical-filter affordances.
 
 ## Novel / delightful
 
-### Q1 · Reflog-powered Undo (⌘Z) — M/L — the killer feature
+### Q1 · The Safety Net — undo built on the app's own command log — L — the killer feature
 
-`git reflog` is right there, but blindly assuming `HEAD@{1}` is not safe because
-hooks, tools, and external Git can add entries. First design an app-owned journal
-recording operation kind plus exact pre/post HEAD/index/worktree identities and
-whether the post-state was pushed. Phase 1 previews Undo for commit/reset/
-checkout performed by GitEnough, refuses pushed or externally-diverged state,
-and shows exactly what becomes staged/unstaged. Execute only after confirmation
-and journal the undo itself; test external intervening refs, detached/unborn
-HEAD, dirty trees, app restart, partial failures, and redo refusal. Phase 2 is a
-read-only Safety Timeline combining that journal with reflog.
+*This entry was "reflog-powered Undo". It is re-pointed: the reflog is the wrong
+substrate, and the right one already exists in the app.*
+
+A raw reflog is a poor undo stack. It is **HEAD-only**, so it cannot see Discard
+or any staging change; it is full of entries the user did not cause (hooks,
+external git, other tools); and its names are git's rather than the app's.
+Assuming `HEAD@{1}` is the last thing *you* did is unsafe for exactly that
+reason.
+
+GitEnough has better material. Every mutating operation already funnels through
+`RepoViewModel.perform(_ activity:…)` carrying a human display name —
+"Committing…", "Resetting…", "Discarding changes…" — and `GitActivityLog`
+already records the exact argv, start and end times, and exit code.
+
+**Approach.** At the top of `perform`, capture a **pre-image** and store it
+beside the activity entry:
+
+- `HEAD`'s hash (`rev-parse HEAD`),
+- the index tree (`git write-tree` — cheap, and it makes staging undoable),
+- for Discard, the Trash paths `TrashMover` already returns.
+
+The Edit menu then gets a real `⌘Z Undo "Reset to 4f81c3a"`, naming the
+operation the way the user saw it, implemented as the specific inverse:
+`reset --hard <pre-image>` for a reset, `read-tree` for a staging change,
+restore-from-Trash for a discard, `branch <name> <hash>` for a branch delete.
+
+**Force Push is the one that cannot be undone locally.** The honest thing is to
+say so in its confirmation rather than offer an Undo that would lie.
+
+**Why this is more than "expose the reflog":** it is scoped to what *this app*
+did, named in the app's own words, and covers operations the reflog cannot see.
+It also turns the five destructive confirmations from "are you sure?" into "you
+can take this back", which is a different product.
+
+Phase 1: commit / reset / checkout / stage / discard, previewed before it runs,
+refusing pushed or externally-diverged state. Journal the undo itself. Test
+external intervening refs, detached and unborn HEAD, dirty trees, app restart,
+partial failures, and redo refusal. Phase 2: a read-only Safety Timeline
+combining that journal with the reflog.
 
 ### Q2 · Command palette (⌘⇧P) — M
 
@@ -1423,7 +1456,11 @@ When the last ~20 subjects match `type(scope): …`, show one row of chips
 Zero config, self-detecting, invisible in repos that don't use the convention.
 (Pure-parse helper + tiny UI; unit-test the detector.)
 
-### F42 · `.gitmessage` template support — S
+### F42 · `.gitmessage` template support — S  ·  **fold into A10**
+
+*Both are "tell the model what this repository expects". Doing them separately
+means two passes over the same prompt builder; A10 is the larger of the two and
+should absorb this.*
 
 If `commit.template` is configured (or `.gitmessage` exists), prefill the
 empty commit box with it instead of a placeholder. Respects existing user
