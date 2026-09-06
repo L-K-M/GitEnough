@@ -684,8 +684,9 @@ public final class RepoViewModel: ObservableObject, Identifiable {
                 // replaces the link on **both** platforms, measured, not assumed
                 // (`testCreatingThroughADanglingSymlinkWritesTheTargetNotTheLink`
                 // failed identically on macOS and Linux against that version).
+                let target = try RepoViewModel.creationTarget(for: url)
                 try GitIgnore.appendedBytes(change.path, to: "")
-                    .write(to: RepoViewModel.creationTarget(for: url), options: .atomic)
+                    .write(to: target, options: .atomic)
                 return
             }
             // One handle across the read *and* the append, rather than reading
@@ -707,7 +708,12 @@ public final class RepoViewModel: ObservableObject, Identifiable {
             // Closed on every exit: a throwing read, seek or write (disk full,
             // permissions revoked mid-flight) would otherwise leak the
             // descriptor for the life of the process.
-            defer { try? handle.close() }
+            // Backstop for the throwing paths only. Closing is where a delayed
+            // write error surfaces on some filesystems, so the success path
+            // closes explicitly below and lets that error reach the banner
+            // rather than reporting a rule written that may not be on disk.
+            var closed = false
+            defer { if !closed { try? handle.close() } }
             // Only a genuinely empty file maps to "": non-UTF-8 bytes must
             // throw rather than let the append below treat the file as blank
             // and write a rule that reads as the continuation of a real one.
@@ -731,6 +737,8 @@ public final class RepoViewModel: ObservableObject, Identifiable {
             guard !addition.isEmpty else { return }
             try handle.seekToEnd()
             try handle.write(contentsOf: addition)
+            try handle.close()
+            closed = true
         }
     }
 
@@ -750,22 +758,37 @@ public final class RepoViewModel: ObservableObject, Identifiable {
     ///
     /// Only needed on the creation path. Appending goes through an open handle,
     /// which follows the chain on both platforms without help.
-    static func creationTarget(for url: URL, fileManager: FileManager = .default) -> URL {
+    static func creationTarget(for url: URL, fileManager: FileManager = .default) throws -> URL {
         var current = url.standardizedFileURL
-        // Bounded by the visited set, so a symlink cycle returns instead of
-        // spinning. A cycle is pathological — the write that follows would fail
-        // with ELOOP — and this only has to reach that failure rather than hang.
-        // Standardized paths, so the key is absolute and one path cannot be
-        // visited twice under two spellings.
+        // Standardized paths, so the visited key is absolute and one file
+        // cannot be seen twice under two spellings.
         var visited: Set<String> = []
-        while visited.insert(current.path).inserted,
-              let destination = try? fileManager.destinationOfSymbolicLink(
-                atPath: current.path) {
+        while true {
+            // A repeat visit is a cycle, and it has to throw rather than
+            // return. Returning the revisited path hands back a *symlink*, and
+            // the atomic write that follows renames over it — replacing the
+            // user's link with a regular file, which is the exact damage this
+            // function exists to prevent.
+            //
+            // An earlier version returned it, on the reasoning that the write
+            // would fail with ELOOP anyway. `open(O_CREAT)` does raise ELOOP;
+            // measured. But `Data.write(options: .atomic)` is a rename, and
+            // rename does not traverse the final symlink at all — the same
+            // mechanism that makes the chain case above dangerous, applied to
+            // the wrong branch of the same function.
+            guard visited.insert(current.path).inserted else {
+                throw GitError(
+                    message: "Can't ignore this path: “\(url.lastPathComponent)” "
+                        + "resolves through a loop of symbolic links, so there is no "
+                        + "file to create. Fix the link and try again.",
+                    exitCode: -1)
+            }
+            guard let destination = try? fileManager.destinationOfSymbolicLink(
+                atPath: current.path) else { return current }
             current = URL(fileURLWithPath: destination,
                           relativeTo: current.deletingLastPathComponent())
                 .standardizedFileURL
         }
-        return current
     }
 
     /// Tracked paths are restored via git; untracked paths are moved to the Trash

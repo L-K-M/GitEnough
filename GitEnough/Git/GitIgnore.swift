@@ -72,6 +72,14 @@ public enum GitIgnore {
     /// that today, and none should have to know not to.
     public static func appendedBytes(_ path: String, to existing: String) -> Data {
         let updated = appending(path, to: existing)
+        // The whole function is a byte offset into `updated`, and that offset
+        // is only meaningful while `appending` returns `existing` unchanged at
+        // the front. Nothing else enforces it, and a future edit there —
+        // normalizing line endings, trimming trailing space, re-escaping the
+        // existing text — would slice at the wrong place and hand the caller
+        // garbage to append to the user's file. Debug-only, but loud.
+        assert(updated.utf8.starts(with: existing.utf8),
+               "appending(_:to:) must return `existing` as a byte-for-byte prefix")
         return Data(updated.utf8.dropFirst(existing.utf8.count))
     }
 

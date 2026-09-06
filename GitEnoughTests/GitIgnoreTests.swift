@@ -104,7 +104,8 @@ final class GitIgnoreTests: XCTestCase {
             ("", "notes.md"),
             ("build/\n", "dist/"),
             ("build/", "dist/"),                 // no trailing newline
-            ("a\r", "x"),                        // CR at the join
+            ("a\r", "x"),
+            ("a\r\n", "x"),                        // CR at the join
             ("\u{1F600}", "emoji.txt"),          // multi-byte final character
             ("e\u{301}", "combining.txt"),       // combining mark at the join
         ]
@@ -127,7 +128,7 @@ final class GitIgnoreTests: XCTestCase {
         let addition = GitIgnore.appendedBytes("x", to: "build/\ndist/\n")
         XCTAssertFalse(addition.isEmpty, "precondition: there is something to append")
         XCTAssertEqual(addition.startIndex, 0)
-        XCTAssertEqual(addition[0], UInt8(ascii: "/"))
+        XCTAssertEqual(addition.first, UInt8(ascii: "/"))
     }
 
     /// Pins the platform behaviour `RepoViewModel.ignore` relies on for its
@@ -159,7 +160,7 @@ final class GitIgnoreTests: XCTestCase {
 
         // The real resolution `RepoViewModel.ignore` uses, not a copy of it.
         try GitIgnore.appendedBytes("build", to: "")
-            .write(to: RepoViewModel.creationTarget(for: link), options: .atomic)
+            .write(to: try RepoViewModel.creationTarget(for: link), options: .atomic)
 
         // Throws if .gitignore is no longer a symlink, which is the regression.
         XCTAssertEqual(
@@ -195,7 +196,7 @@ final class GitIgnoreTests: XCTestCase {
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: intermediate)
 
         try GitIgnore.appendedBytes("build", to: "")
-            .write(to: RepoViewModel.creationTarget(for: link), options: .atomic)
+            .write(to: try RepoViewModel.creationTarget(for: link), options: .atomic)
 
         // Each throws if that link was replaced by a regular file — the
         // intermediate one is what a single-hop resolution destroys.
@@ -207,6 +208,37 @@ final class GitIgnoreTests: XCTestCase {
             real.path, "and so must the intermediate one")
         XCTAssertEqual(try String(contentsOf: real, encoding: .utf8), "/build\n",
                        "the rule lands at the end of the chain, not part-way along it")
+    }
+
+    /// A cycle has no end of chain, so there is nothing to create — and the
+    /// answer has to be an error rather than a path.
+    ///
+    /// The first version of the chain fix returned the revisited path, on the
+    /// reasoning that the write would fail with `ELOOP`. `open(O_CREAT)` does
+    /// raise `ELOOP`, measured — but `Data.write(options: .atomic)` is a
+    /// rename, and rename replaces the final symlink instead of traversing it.
+    /// So returning the path destroyed the very link this code protects, by the
+    /// same mechanism the chain case documents.
+    func testASymlinkCycleThrowsRatherThanReturningTheLink() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitEnough-symlink-cycle-\(UUID().uuidString)",
+                                    isDirectory: true)
+        try FileManager.default.createDirectory(at: directory,
+                                                withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+
+        let link = directory.appendingPathComponent(".gitignore")
+        let other = directory.appendingPathComponent("loop")
+        try FileManager.default.createSymbolicLink(at: other, withDestinationURL: link)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: other)
+
+        XCTAssertThrowsError(try RepoViewModel.creationTarget(for: link))
+
+        // The link is still a link: nothing was written through it.
+        XCTAssertEqual(
+            try FileManager.default.destinationOfSymbolicLink(atPath: link.path),
+            other.path,
+            "a refused resolution must leave the cycle exactly as it found it")
     }
 
     func testGeneratedRulesMatchLiteralNamesWithGit() throws {

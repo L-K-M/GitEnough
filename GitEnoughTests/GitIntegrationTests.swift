@@ -926,13 +926,20 @@ final class GitIntegrationTests: XCTestCase {
         }
         try "not a sha\n".write(to: headRef, atomically: true, encoding: .utf8)
 
-        // Precondition, so a future fixture change fails here with its own
-        // message rather than downstream with a misleading one.
-        XCTAssertNotEqual(try GitShell.shared.run(
-            ["-C", repoURL.path, "rev-parse", "--verify", "--quiet", "HEAD"], in: nil).exitCode, 0,
-            "precondition: HEAD must no longer resolve after corrupting \(branch). "
-            + "If it still resolves, this repository is probably not on loose refs — "
-            + "the reftable backend (git 2.45+) ignores the file this helper writes.")
+        // Skip rather than fail. The branch name comes from `symbolic-ref`, so
+        // the path cannot be wrong — a HEAD that still resolves means the write
+        // was a no-op, and the realistic cause is the reftable backend
+        // (git 2.45+, increasingly the default), which does not read loose ref
+        // files at all. That is "not applicable here", not "broken": failing
+        // would give contributors on newer git a permanently red suite with a
+        // message that reads like a product regression.
+        guard try GitShell.shared.run(
+            ["-C", repoURL.path, "rev-parse", "--verify", "--quiet", "HEAD"],
+            in: nil).exitCode != 0 else {
+            throw XCTSkip("HEAD still resolves after corrupting \(branch), so this "
+                          + "repository is not on loose refs — the corrupt-ref tests "
+                          + "need the files backend.")
+        }
     }
 
     /// `discard` shares `isUnbornHEAD()` with `unstage`, so it is pinned too —
@@ -952,13 +959,19 @@ final class GitIntegrationTests: XCTestCase {
         try client.stage(paths: ["a.txt"])
         try corruptHeadRef()
 
-        // Verified on git 2.43: `reset` treats an unresolvable HEAD like an
-        // unborn one and falls back to the empty tree. That is incidental
-        // behaviour rather than a documented promise, so if this line ever
-        // fails, check `git --version` before reading it as a regression — the
-        // contract that matters is the file assertions below, not the throw.
-        XCTAssertNoThrow(try client.discard(paths: ["a.txt"]),
-                         "reset against an unresolvable HEAD succeeds; see the note above")
+        // Recorded, not asserted. On git 2.43 `reset` treats an unresolvable
+        // HEAD like an unborn one and falls back to the empty tree, but that is
+        // incidental rather than promised — and asserting it would fail the
+        // test *before* the assertions that carry the real contract, in exactly
+        // the environments where you most want to know that nothing was
+        // destroyed. Both outcomes are acceptable; only the state afterwards
+        // is not negotiable.
+        var discardSucceeded = true
+        do {
+            try client.discard(paths: ["a.txt"])
+        } catch {
+            discardSucceeded = false
+        }
 
         let file = repoURL.appendingPathComponent("a.txt")
         XCTAssertTrue(FileManager.default.fileExists(atPath: file.path),
@@ -972,8 +985,14 @@ final class GitIntegrationTests: XCTestCase {
         // `ls-files` reads the index without consulting it.
         let indexed = try GitShell.shared.runChecked(
             ["-C", repoURL.path, "ls-files", "--", "a.txt"], in: nil).stdout
-        XCTAssertTrue(indexed.isEmpty,
-                      "discard must degrade to an unstage, not to a no-op")
+        if discardSucceeded {
+            XCTAssertTrue(indexed.isEmpty,
+                          "discard must degrade to an unstage, not to a no-op")
+        } else {
+            XCTAssertFalse(indexed.isEmpty,
+                           "a discard that failed outright must leave the index alone "
+                           + "rather than half-applying")
+        }
     }
 
     /// The case the blanket catch was written for still works: on an unborn
