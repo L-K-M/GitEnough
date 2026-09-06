@@ -494,11 +494,17 @@ same value.
 
 Raised on PR #98 about `diff.<driver>.textconv`, which is an **arbitrary
 executable named by the repository being viewed** — so rendering a diff in a repo
-that arrived with a hostile `.git/config` or `.gitattributes` runs it. That is
-real, but it is the smallest instance of the actual gap: GitEnough shells out to
-the user's own git, which runs **that repository's hooks** on commit, checkout
-and merge regardless. `.git/hooks/pre-commit` is a strictly larger hole than
-textconv, and both arrive together in a downloaded zip or bundle.
+that arrived with a hostile `.git/config` or `.gitattributes` runs it.
+
+**Corrected after measuring** (an earlier version of this entry had the asymmetry
+backwards): git also runs that repository's *hooks*, but only when the user
+commits, checks out or merges — a deliberate action. **textconv runs on render.**
+Against git 2.43, a single `git diff --no-color --no-ext-diff -- <path>` with no
+hooks present and no mutating command executed the filter **twice**, once per
+side; `--no-ext-diff` does not suppress it, being a different mechanism. So for
+the most common untrusted-repo case — clone it, look at it — textconv is the
+*first* repo-named executable reached, not a smaller addition to the hooks hole.
+Both still arrive together in a downloaded zip or bundle.
 
 So "opening an untrusted working copy is safe" is not a property this app has,
 and suppressing textconv alone would not give it one — it would only cost every
