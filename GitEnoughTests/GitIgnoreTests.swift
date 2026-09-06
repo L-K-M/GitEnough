@@ -120,6 +120,16 @@ final class GitIgnoreTests: XCTestCase {
         XCTAssertTrue(GitIgnore.appendedBytes("build", to: "/build\n").isEmpty)
     }
 
+    /// The returned `Data` is zero-based, not a slice of the whole updated file.
+    /// Appending works either way, but a slice indexed as `addition[0]` traps —
+    /// the API shouldn't hand callers that edge.
+    func testAppendedBytesAreZeroBased() {
+        let addition = GitIgnore.appendedBytes("x", to: "build/\ndist/\n")
+        XCTAssertFalse(addition.isEmpty, "precondition: there is something to append")
+        XCTAssertEqual(addition.startIndex, 0)
+        XCTAssertEqual(addition[0], UInt8(ascii: "/"))
+    }
+
     func testGeneratedRulesMatchLiteralNamesWithGit() throws {
         guard GitShell.shared.isAvailable else {
             throw XCTSkip("git is not installed")

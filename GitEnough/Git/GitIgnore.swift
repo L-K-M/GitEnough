@@ -65,9 +65,14 @@ public enum GitIgnore {
     /// than `existing` does, and `updated.dropFirst(existing.count)` drops the
     /// separator along with it. The file becomes "a\r/x\n": the previous rule
     /// destroyed, the new one matching nothing, and the caller reporting success.
+    /// The slicing happens on the UTF-8 *view* rather than on a materialized
+    /// `Data`, so the result is a fresh zero-based `Data` rather than a slice
+    /// whose `startIndex` is the byte count of `existing`. Both are equally
+    /// correct to append, but a slice traps on `addition[0]` — no caller does
+    /// that today, and none should have to know not to.
     public static func appendedBytes(_ path: String, to existing: String) -> Data {
         let updated = appending(path, to: existing)
-        return Data(updated.utf8).dropFirst(Data(existing.utf8).count)
+        return Data(updated.utf8.dropFirst(existing.utf8.count))
     }
 
     /// git ignores unescaped trailing whitespace in patterns (and nothing
