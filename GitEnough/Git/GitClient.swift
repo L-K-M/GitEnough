@@ -256,9 +256,57 @@ public final class GitClient {
 
     // MARK: - Diffs
 
+    /// Flags every patch-producing read passes. `--no-ext-diff` is the one that
+    /// matters: `diff.external` (what difftastic's own install instructions set,
+    /// `git config --global diff.external difft`) replaces the patch with the
+    /// external tool's rendered output. Parsing that as a unified diff colours
+    /// it at random, and feeding it to the commit-message model describes the
+    /// wrong thing entirely. It is also a process launched on the repo's serial
+    /// queue, so a pager-ish tool would block every repository operation behind
+    /// it. Harmless on `--stat`, which never invokes the driver — passed there
+    /// anyway so no reader has to work out which reads are exposed.
+    ///
+    /// Deliberately *not* `--no-textconv`. A `diff.<driver>.textconv` filter,
+    /// configured through gitattributes, is a different mechanism and usually a
+    /// wanted one: it is how a repository makes a binary format readable in a
+    /// diff at all. Suppressing it would hand the diff pane — and the
+    /// commit-message model — raw binary where the repository has arranged for
+    /// prose. `--no-ext-diff` removes a *replacement* for the patch; textconv
+    /// only changes what the patch is computed over.
+    ///
+    /// The security half of that tradeoff, stated so it is a decision rather
+    /// than an omission: a textconv filter is an **arbitrary executable named by
+    /// the repository being viewed**, so rendering a diff in a repo that arrived
+    /// with a hostile `.git/config` runs it.
+    ///
+    /// Note the asymmetry, because it is easy to get backwards: git also runs
+    /// that repository's *hooks*, but only when the user commits, checks out or
+    /// merges — a deliberate action. **textconv runs on render.** Measured
+    /// against git 2.43: one `git diff --no-color --no-ext-diff -- <path>`, with
+    /// no hooks present and no mutating command, executed the filter twice (once
+    /// per side). `--no-ext-diff` does not suppress it; it is a different
+    /// mechanism. So for someone who merely opens a hostile clone and looks at
+    /// it, textconv is the *first* repo-named executable reached, not a small
+    /// addition to a larger existing hole.
+    ///
+    /// Keeping it is still the right call — suppressing it costs every
+    /// legitimate binary-format diff and would not make opening an untrusted
+    /// working copy safe, which is not a property this app has. But that is a
+    /// reason to do the trust work, not to treat this as minor. Tracked as
+    /// `o-L14` in ANALYSIS.md.
+    ///
+    /// That trust work has a second half worth naming here, because it is easy
+    /// to miss when the risk is filed under "runs code": the filter's *output*
+    /// is what `stagedDiff()` hands the commit-message model. An untrusted
+    /// textconv therefore also writes directly into an LLM prompt. File
+    /// contents already reach that prompt, so this widens no boundary on its
+    /// own — but a per-repo trust gate that only stops process execution and
+    /// leaves the model input alone would be solving half the problem.
+    private static let patchReadFlags = ["--no-color", "--no-ext-diff"]
+
     /// Unified diff for one worktree/index path.
     public func diff(path: String, staged: Bool) throws -> String {
-        var args = ["-C", worktree.path, "diff", "--no-color", "--no-ext-diff"]
+        var args = ["-C", worktree.path, "diff"] + Self.patchReadFlags
         if staged { args.append("--staged") }
         args.append(contentsOf: ["--", Self.literalPathspec(path)])
         return try runReadChecked(args, in: nil).stdout
@@ -275,8 +323,8 @@ public final class GitClient {
             return try untrackedDirectoryListing(path: path)
         }
         let result = try runRead(
-            ["-C", worktree.path, "diff", "--no-color", "--no-index",
-             "--", "/dev/null", path],
+            ["-C", worktree.path, "diff"] + Self.patchReadFlags
+                + ["--no-index", "--", "/dev/null", path],
             in: nil)
         // --no-index exits 1 when files differ (i.e. always, here); 0/1 are both OK.
         guard result.exitCode == 0 || result.exitCode == 1 else {
@@ -317,21 +365,27 @@ public final class GitClient {
     /// Patch of one file within a commit (for the detail pane).
     public func commitFileDiff(hash: String, path: String) throws -> String {
         try runReadChecked(
-            ["-C", worktree.path, "show", "-m", "--first-parent",
-             "--format=", "--no-color", hash, "--", Self.literalPathspec(path)],
+            // `--format=` is load-bearing, not tidiness: `DiffParser`'s input
+            // contract is patch-only output. A commit message reaching it would
+            // arrive while the parser is outside a hunk, where a bullet starting
+            // "-" colours as a deletion and a quoted "@@" opens a phantom hunk.
+            ["-C", worktree.path, "show", "-m", "--first-parent", "--format="]
+                + Self.patchReadFlags + [hash, "--", Self.literalPathspec(path)],
             in: nil).stdout
     }
 
     /// Full staged patch — the input for LLM commit-message generation.
     public func stagedDiff() throws -> String {
         try runReadChecked(
-            ["-C", worktree.path, "diff", "--staged", "--no-color"], in: nil).stdout
+            ["-C", worktree.path, "diff", "--staged"] + Self.patchReadFlags,
+            in: nil).stdout
     }
 
     /// `--stat` summary of the staged changes (always sent to the model in full).
     public func stagedDiffStat() throws -> String {
         try runReadChecked(
-            ["-C", worktree.path, "diff", "--staged", "--stat", "--no-color"], in: nil).stdout
+            ["-C", worktree.path, "diff", "--staged", "--stat"] + Self.patchReadFlags,
+            in: nil).stdout
     }
 
     /// True when an existing gitignore rule already covers `path`
