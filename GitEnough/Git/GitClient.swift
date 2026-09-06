@@ -185,7 +185,12 @@ public final class GitClient {
     /// git version rather than promising a protection that is not there.
     /// `RepoViewModel.init` warms it on the repo queue so the first touch is
     /// not a subprocess on the main thread.
-    static let supportsForceIfIncludes: Bool = {
+    /// Public because `pushArguments` and `forcePushArguments` are public and
+    /// name it as a default argument value — Swift requires a default on a
+    /// public function to be visible wherever that function is. It sits beside
+    /// `version()` and `parseVersion(_:)`, which were already public; internal
+    /// was the anomaly.
+    public static let supportsForceIfIncludes: Bool = {
         guard let banner = version(), let v = parseVersion(banner) else { return false }
         return (v.major, v.minor) >= (2, 30)
     }()
