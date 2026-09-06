@@ -63,6 +63,10 @@ final class BranchesPane {
                 let label = UI.label(entry.message, ellipsize: true)
                 UI.expand(label, vertical: false)
                 UI.append(box, UI.label(entry.ref, dim: true, monospace: true), label)
+                // On the row, not the list: a tooltip on the container also
+                // fires over the blank space below the last row, and over an
+                // empty list — advertising an action that isn't there.
+                gtk_widget_set_tooltip_text(box, "Double-click to apply this stash")
                 return box
             })
         }
@@ -79,6 +83,13 @@ final class BranchesPane {
         if !tracking.isEmpty {
             UI.append(box, UI.label(tracking.joined(separator: " "), dim: true))
         }
+        // Activation is a double click (see UI.listBox) and these rows have no
+        // other affordance for it, so they say so. Per row rather than per
+        // list: a container tooltip also fires over blank space and over an
+        // empty list.
+        gtk_widget_set_tooltip_text(box, branch.isRemote
+            ? "Double-click to check out a local tracking branch"
+            : "Double-click to check out this branch")
         return box
     }
 

@@ -970,6 +970,95 @@ final class GitIntegrationTests: XCTestCase {
                        "the same-named remote branch is untouched")
     }
 
+    // MARK: - External diff drivers
+
+    /// `diff.external` is what difftastic's own install instructions set
+    /// (`git config --global diff.external difft`). Without `--no-ext-diff`
+    /// every patch the app reads becomes that tool's rendered stdout — parsed
+    /// as a unified diff by the diff pane, and handed to the commit-message
+    /// model as though it were the change.
+    ///
+    /// Verified against git 2.43: `git diff --staged` and `git diff --no-index`
+    /// are replaced; `git show` and `git diff --stat` are not.
+    func testDiffReadsIgnoreAConfiguredExternalDiffDriver() throws {
+        let script = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitEnough-fake-difftool-\(UUID().uuidString).sh")
+        defer { try? FileManager.default.removeItem(at: script) }
+        try "#!/bin/sh\necho EXTERNAL-TOOL-OUTPUT\n"
+            .write(to: script, atomically: true, encoding: .utf8)
+        // `sh <script>` rather than the script itself: git runs diff.external
+        // through a shell, so passing the path as an *argument* needs no exec
+        // bit and works on a runner whose TMPDIR is mounted noexec. Verified
+        // against git 2.43 — the direct form fails "cannot exec … Permission
+        // denied" without the bit, this form produces the output with or
+        // without it.
+        //
+        // Which is why the file is left at its default 0644 rather than
+        // chmodded to 0755. A chmod here would be inert on both mounts and
+        // would quietly undo the demonstration: the test now *is* the evidence
+        // that the exec bit is not needed, instead of asserting it in a
+        // comment while arranging for it not to matter.
+        //
+        // Quoted because that shell splits on whitespace and TMPDIR is not
+        // ours to choose. Measured against git 2.43 with a space in the temp
+        // path: the bare form hands `sh` a truncated path and every patch read
+        // in this test dies `fatal: external diff died`, so the test fails on
+        // an environmental quirk it does not cover. The quoted form runs.
+        try run(["config", "diff.external", "sh \"\(script.path)\""])
+
+        try write("changed\n", to: "a.txt")
+        try client.stage(paths: ["a.txt"])
+        try write("brand new\n", to: "fresh.txt")
+
+        // Precondition: the driver really is being invoked. Without this, a
+        // fixture that never ran the script — a noexec TMPDIR, a git that
+        // stopped honouring diff.external — would leave every "must not
+        // contain" assertion below passing for the wrong reason.
+        //
+        let hijacked = try GitShell.shared.runChecked(
+            ["-C", repoURL.path, "diff", "--staged"], in: nil).stdout
+        guard hijacked.contains("EXTERNAL-TOOL-OUTPUT") else {
+            // Return, don't just record: every assertion below is a "must not
+            // contain", so an unhijacked baseline passes all of them. Failing
+            // and continuing would bury the one real failure under a dozen
+            // green checks that prove nothing.
+            XCTFail("precondition: diff.external did not replace an unguarded "
+                    + "patch read, so the guards below cannot be tested. Got: \(hijacked)")
+            return
+        }
+
+        let staged = try client.stagedDiff()
+        XCTAssertFalse(staged.contains("EXTERNAL-TOOL-OUTPUT"),
+                       "the model must be handed a patch, not a diff tool's rendering")
+        XCTAssertTrue(staged.contains("@@"), "…and that patch must be a real one")
+
+        let untracked = try client.diffForUntracked(path: "fresh.txt")
+        XCTAssertFalse(untracked.contains("EXTERNAL-TOOL-OUTPUT"))
+        XCTAssertTrue(untracked.contains("brand new"))
+
+        // Already carried the flag before this change; pinned so it stays.
+        XCTAssertFalse(try client.diff(path: "a.txt", staged: true)
+            .contains("EXTERNAL-TOOL-OUTPUT"))
+
+        // Plain `git diff <path>` is the invocation diff.external hijacks most
+        // readily, so pin it too. The worktree has to diverge from the index
+        // first: after staging they are identical, and an empty diff never
+        // invokes the driver — the assertion would pass for the wrong reason.
+        try write("changed again\n", to: "a.txt")
+        let unstaged = try client.diff(path: "a.txt", staged: false)
+        XCTAssertTrue(unstaged.contains("@@"), "precondition: a non-empty diff")
+        XCTAssertFalse(unstaged.contains("EXTERNAL-TOOL-OUTPUT"))
+
+        // git does not apply the driver to these two, but they pass the flag
+        // for consistency — assert they still return what they always did.
+        XCTAssertTrue(try client.stagedDiffStat().contains("a.txt"))
+        try client.commit(message: "Change a.txt")
+        let head = try XCTUnwrap(try client.log(limit: 1).first?.hash)
+        let commitDiff = try client.commitFileDiff(hash: head, path: "a.txt")
+        XCTAssertTrue(commitDiff.contains("diff --git"), "got \(commitDiff)")
+        XCTAssertFalse(commitDiff.contains("EXTERNAL-TOOL-OUTPUT"))
+    }
+
     /// A fresh bare remote with `main` and `topic` published to it, and
     /// `push.default = matching` in effect. Shared by the two tests that guard
     /// the `matching` hazard, so the scenario cannot drift between them and
