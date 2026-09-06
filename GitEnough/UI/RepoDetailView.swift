@@ -22,6 +22,10 @@ struct RepoDetailView: View {
     /// against a freshly resolved one when the user confirms, so a refresh
     /// between opening and confirming cannot swap the refspec underneath them.
     @State private var pendingForcePush: GitClient.PushCommand?
+    /// The branch name as it read when the force-push dialog opened. Frozen
+    /// alongside `pendingForcePush` because the dialog's *title* closure is the
+    /// one place `presenting:` cannot reach.
+    @State private var pendingForcePushBranch: String?
 
     /// Lowercase noun of the in-progress operation for the abort dialog's
     /// sentence text ("… before the merge started").
@@ -144,6 +148,16 @@ struct RepoDetailView: View {
                         switch viewModel.forcePushResolution {
                         case .command(let command):
                             pendingForcePush = command
+                            // Snapshotted with the command, for the same reason
+                            // the command is: the title closure does not receive
+                            // the `presenting:` value, so left interpolating
+                            // `viewModel.status.head` it would re-render live
+                            // while the refspec below stayed frozen — and the
+                            // user could confirm a title naming one branch over
+                            // a command pushing another. That is the drift this
+                            // whole flow exists to prevent, one line up from
+                            // where it was fixed.
+                            pendingForcePushBranch = viewModel.status.head
                             showingForcePushConfirmation = true
                         case .refused(let reason):
                             viewModel.errorMessage = reason
@@ -202,15 +216,19 @@ struct RepoDetailView: View {
         // and do nothing at all: a silent no-op on the one button whose whole
         // claim is that the command shown and the command run cannot drift
         // apart. Handing the value to the closures removes the question.
-        .confirmationDialog("Force push “\(viewModel.status.head ?? "")”?",
+        .confirmationDialog("Force push “\(pendingForcePushBranch ?? "")”?",
                             isPresented: $showingForcePushConfirmation,
                             titleVisibility: .visible,
                             presenting: pendingForcePush) { command in
             Button("Force Push (with Lease)", role: .destructive) {
                 viewModel.forcePush(confirming: command)
                 pendingForcePush = nil
+                pendingForcePushBranch = nil
             }
-            Button("Cancel", role: .cancel) { pendingForcePush = nil }
+            Button("Cancel", role: .cancel) {
+                pendingForcePush = nil
+                pendingForcePushBranch = nil
+            }
         } message: { command in
             Text(Self.forcePushWarning(for: command))
             // Monospaced, because the refspec is the one part of this dialog
@@ -230,7 +248,10 @@ struct RepoDetailView: View {
         // refspec in view state is exactly the staleness this flow exists to
         // eliminate.
         .onChange(of: showingForcePushConfirmation) { _, showing in
-            if !showing { pendingForcePush = nil }
+            if !showing {
+                pendingForcePush = nil
+                pendingForcePushBranch = nil
+            }
         }
     }
 
@@ -266,7 +287,7 @@ struct RepoDetailView: View {
         // monospaced line directly below this sentence shows the user the
         // flags — so if they ever disagreed, the dialog would promise a
         // protection its own command visibly does not carry.
-        command.arguments.contains("--force-if-includes")
+        command.refusesUnfetchedRemoteWork
             ? "This rewrites the remote branch to match your local history. It refuses if the remote has commits you haven't merged in — including ones GitEnough fetched for you in the background — so a teammate's new work can't be lost silently. Anyone who already pulled the old history will still have to recover."
             : "This rewrites the remote branch to match your local history. GitEnough can't confirm your git is 2.30 or newer, so it can only check that the remote still points where your last fetch left it: a teammate's commits that GitEnough has already fetched in the background will be overwritten without warning. Update git to 2.30 or newer — and make sure GitEnough can read its version — to be protected from that. Anyone who already pulled the old history will still have to recover."
     }

@@ -437,7 +437,7 @@ public final class RepoViewModel: ObservableObject, Identifiable {
             return
         }
         if shown != command {
-            errorMessage = "This branch's upstream changed while the confirmation was open, so the command shown is no longer the one that would run. Open Force Push again to review it."
+            errorMessage = "The force push changed while the confirmation was open, so the command shown is no longer the one that would run. Open Force Push again to review it."
             return
         }
         perform("Force pushing…", invalidatesMessageGeneration: false) {

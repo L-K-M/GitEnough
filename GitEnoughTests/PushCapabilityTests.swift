@@ -74,6 +74,15 @@ final class PushCapabilityTests: XCTestCase {
     /// Every reason is phrased for Push, and Force Push re-phrases rather than
     /// duplicating them — which only works while they all share the prefix.
     func testEveryUnavailableReasonCarriesThePushPrefix() {
+        // Compiler-enforced, because the list below is hand-maintained and the
+        // whole point is that no case escapes the contract. An eighth case
+        // breaks this switch rather than slipping past a still-green test.
+        // No `default:` — that would defeat it.
+        switch PushCapability.UnavailableReason.noCurrentBranch {
+        case .detachedHead, .unbornHead, .noRemotes, .noCurrentBranch,
+             .upstreamRemoteMissing, .ambiguousUpstream, .localUpstream:
+            break
+        }
         let reasons: [PushCapability.UnavailableReason] = [
             .detachedHead, .unbornHead, .noRemotes, .noCurrentBranch,
             .upstreamRemoteMissing(upstream: "origin/main", branch: "main"),
@@ -287,11 +296,23 @@ final class PushCapabilityTests: XCTestCase {
     /// The gate is a version comparison on git's banner, so pin the shapes real
     /// gits emit — Apple's and Windows' both carry extra components.
     func testGitVersionParsing() {
-        XCTAssertTrue(GitClient.parseVersion("git version 2.43.0").map { $0 >= (2, 30) } == true)
-        XCTAssertTrue(GitClient.parseVersion("git version 2.39.3 (Apple Git-146)")
-            .map { $0 >= (2, 30) } == true)
-        XCTAssertTrue(GitClient.parseVersion("git version 2.30.1.windows.1")
-            .map { $0 >= (2, 30) } == true)
+        // Components, not `>= (2, 30)`. Reducing through the gate conflates
+        // "parsed" with "parsed correctly": a regression concatenating the
+        // minor digits so "2.39.3" reads (2, 393) stays above the boundary and
+        // passes every gate-shaped assertion.
+        XCTAssertEqual(GitClient.parseVersion("git version 2.43.0")?.major, 2)
+        XCTAssertEqual(GitClient.parseVersion("git version 2.43.0")?.minor, 43)
+        XCTAssertEqual(GitClient.parseVersion("git version 2.39.3 (Apple Git-146)")?.minor, 39)
+        XCTAssertEqual(GitClient.parseVersion("git version 2.30.1.windows.1")?.minor, 30)
+        XCTAssertEqual(GitClient.parseVersion("git version 2.29.2")?.minor, 29)
+
+        // A bare version, which some wrappers print instead of a banner, and a
+        // banner with numeric noise before the real version — the case the
+        // anchored scan exists for.
+        XCTAssertEqual(GitClient.parseVersion("2.43.0")?.minor, 43)
+        XCTAssertEqual(GitClient.parseVersion("shim 1.2: git version 2.43.0")?.major, 2)
+        XCTAssertEqual(GitClient.parseVersion("shim 1.2: git version 2.43.0")?.minor, 43,
+                       "a numeric token before the banner must not be read as the version")
         XCTAssertTrue(GitClient.parseVersion("git version 2.29.2").map { $0 >= (2, 30) } == false)
         XCTAssertNil(GitClient.parseVersion("git version banana"))
         XCTAssertNil(GitClient.parseVersion(""))
@@ -487,6 +508,26 @@ final class PushCapabilityTests: XCTestCase {
                 status: status(head: "trunk", upstream: "origin/features/x"),
                 remotes: [nestedFeatures]),
             .push(remote: "origin/features", localBranch: "trunk", remoteBranch: "x"))
+    }
+
+    /// `git push` stops parsing options at `--`; anything after it is a
+    /// refspec. The equivalence test between the two builders cannot catch a
+    /// flag drifting past the separator — it would compare two identically
+    /// wrong lists — and the literal-argv test uses no flags at all. So pin the
+    /// ordering directly, on the one path where getting it wrong is
+    /// destructive.
+    func testForceFlagStaysBeforeTheOperandSeparator() {
+        let args = GitClient.forcePushArguments(remote: "-f", localBranch: "main",
+                                                remoteBranch: "main",
+                                                forceIfIncludes: true).arguments
+        guard let separator = args.firstIndex(of: "--") else {
+            return XCTFail("an option-shaped remote requires the `--` separator")
+        }
+        XCTAssertTrue(args[..<separator].contains("--force-with-lease"))
+        XCTAssertTrue(args[..<separator].contains("--force-if-includes"),
+                      "a flag after `--` is read as a refspec, not an option")
+        XCTAssertEqual(Array(args[separator...]),
+                       ["--", "-f", "refs/heads/main:refs/heads/main"])
     }
 
     func testTheRemoteOperandCannotBeReadAsAnOption() {

@@ -37,7 +37,7 @@ public enum PushCapability: Equatable {
         /// Derived from `message` rather than written twice, so the two cannot
         /// drift — and guarded rather than assumed, so a future case that
         /// starts differently degrades to the plain sentence instead of losing
-        /// its first eleven characters. `PushCapabilityTests` pins that every
+        /// its first twelve characters. `PushCapabilityTests` pins that every
         /// case carries the prefix, which is what keeps the guard from
         /// silently becoming the normal path.
         public var forcePushMessage: String {
@@ -135,6 +135,17 @@ public enum PushCapability: Equatable {
                 // upstream with no remote half at all. Verified against git
                 // 2.43 — `git branch --track topic main` writes `remote = "."`
                 // and porcelain v2 emits `# branch.upstream main`.
+                //
+                // A heuristic, not a proof, and the limit is worth naming: a
+                // local upstream whose *branch* name contains a slash is
+                // reported just as bare. `git branch --track topic feature/foo`
+                // gives `# branch.upstream feature/foo` with `remote = "."`
+                // (measured, same version), and that reads identically to a
+                // vanished remote called `feature`. Nothing in the string
+                // separates them — only `%(upstream:remotename)` (o-G4) can,
+                // and until it lands the slash-bearing case falls through to
+                // `.upstreamRemoteMissing` below. Push stays blocked either
+                // way; only the advice is wrong.
                 guard upstream.contains("/") else {
                     return .unavailable(
                         .localUpstream(upstream: upstream, branch: head))

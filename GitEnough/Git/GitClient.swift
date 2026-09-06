@@ -156,7 +156,16 @@ public final class GitClient {
     /// Handles the shapes real gits emit: `git version 2.43.0`,
     /// `git version 2.39.3 (Apple Git-146)`, `git version 2.30.1.windows.1`.
     public static func parseVersion(_ banner: String) -> (major: Int, minor: Int)? {
-        for field in banner.split(separator: " ") {
+        let fields = banner.split(separator: " ")
+        // Anchored on git's literal `version` token when the banner has one, so
+        // a numeric token in wrapper output ("shim 1.2: git version 2.43.0")
+        // cannot be misread as the version and cached as "too old" for the life
+        // of the process. Falling back to scanning every field keeps a bare
+        // `2.43.0` — which some wrappers print instead of a full banner —
+        // parsing as it did. That fallback is why the anchored form is worth
+        // having at all: a purely anchored parse would return nil there.
+        let start = fields.firstIndex(of: "version").map { $0 + 1 } ?? fields.startIndex
+        for field in fields[start...] {
             let parts = field.split(separator: ".")
             guard parts.count >= 2,
                   let major = Int(parts[0]), let minor = Int(parts[1]) else { continue }
@@ -580,6 +589,18 @@ public final class GitClient {
     /// straight through anyway. The type makes the contract structural.
     public struct PushCommand: Equatable {
         public let arguments: [String]
+
+        /// Whether this command carries `--force-if-includes`, i.e. whether it
+        /// refuses when the remote has commits the local branch never had.
+        ///
+        /// Lives here, beside the builder that appends the flag, because the
+        /// confirmation dialog picks its wording from it. A literal
+        /// `contains("--force-if-includes")` at the view would be a second
+        /// spelling of the emitter's decision, and the one that produces the
+        /// user-facing safety claim.
+        public var refusesUnfetchedRemoteWork: Bool {
+            arguments.contains("--force-if-includes")
+        }
         fileprivate init(_ arguments: [String]) { self.arguments = arguments }
     }
 

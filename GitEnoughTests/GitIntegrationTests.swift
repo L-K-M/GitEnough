@@ -829,12 +829,21 @@ final class GitIntegrationTests: XCTestCase {
         // A plain push is refused (non-fast-forward)…
         let remoteMainBeforeRefusal = try remoteRef("refs/heads/main", in: remoteURL)
         XCTAssertThrowsError(try client.push(remote: "origin", localBranch: "main",
-                                             remoteBranch: "main", setUpstream: false))
-        // `XCTAssertThrowsError` alone accepts *any* failure — a bad refspec, an
-        // unknown remote, a shell error — so it would keep passing while proving
-        // something other than "the push was refused as non-fast-forward". The
-        // remote ref standing still is the observable that only a refusal
-        // produces.
+                                             remoteBranch: "main",
+                                             setUpstream: false)) { error in
+            // `XCTAssertThrowsError` alone accepts *any* failure — a bad
+            // refspec, an unknown remote, a client bug that throws before git
+            // runs — and every one of those also leaves the remote ref
+            // untouched, so the state check below cannot tell them apart
+            // either. git's own rejection text is what distinguishes a refusal
+            // from a caller error.
+            let described = String(describing: error)
+            XCTAssertTrue(described.contains("non-fast-forward")
+                          || described.contains("fetch first"),
+                          "expected git's non-fast-forward refusal, got: \(described)")
+        }
+        // Kept as a state check alongside it: whatever the error said, the
+        // remote must not have moved.
         XCTAssertEqual(try remoteRef("refs/heads/main", in: remoteURL),
                        remoteMainBeforeRefusal,
                        "a refused push must leave the remote ref untouched")
@@ -912,8 +921,9 @@ final class GitIntegrationTests: XCTestCase {
         // Repo-local only while `setUpWithError` builds a fresh repository per
         // test. A linked worktree shares its main repo's config, so restore the
         // value rather than resting the isolation on a comment.
+        let priorPushDefault = currentPushDefault()
         try run(["config", "push.default", "nothing"])
-        addTeardownBlock { try? self.run(["config", "--unset", "push.default"]) }
+        addTeardownBlock { self.restorePushDefault(priorPushDefault) }
 
         try client.push(remote: "origin", localBranch: "main", remoteBranch: "main",
                         setUpstream: true)
@@ -1070,8 +1080,9 @@ final class GitIntegrationTests: XCTestCase {
         // shared or linked-worktree fixture would leak `matching` into every
         // later test, and the leak would surface as order-dependent failures
         // far from here rather than as anything pointing back at this line.
+        let priorPushDefault = currentPushDefault()
         try run(["config", "push.default", "matching"])
-        addTeardownBlock { try? self.run(["config", "--unset", "push.default"]) }
+        addTeardownBlock { self.restorePushDefault(priorPushDefault) }
         try client.push(remote: "origin", localBranch: "main", remoteBranch: "main",
                         setUpstream: true)
         try run(["checkout", "-b", "topic"])
@@ -1109,6 +1120,32 @@ final class GitIntegrationTests: XCTestCase {
         try GitShell.shared.runChecked(
             ["-C", remoteURL.path, "rev-parse", "--verify", ref], in: nil)
             .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// `push.default` as it stands now, or nil when unset. `--get` exits
+    /// non-zero for a missing key, which `try?` turns into exactly that nil.
+    private func currentPushDefault() -> String? {
+        guard let value = try? GitShell.shared.runChecked(
+            ["config", "--get", "push.default"], in: repoURL)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines),
+              !value.isEmpty else { return nil }
+        return value
+    }
+
+    /// Puts back what was there, rather than deleting the key.
+    ///
+    /// `--unset` and "restore" are the same thing only while every test gets a
+    /// fresh repository — which is the assumption these teardowns exist to stop
+    /// relying on. In the shared-fixture world they anticipate, unsetting would
+    /// silently drop a value the fixture had set, and every later test would run
+    /// under git's built-in default instead: the same order-dependent leak,
+    /// arriving through the cleanup meant to prevent it.
+    private func restorePushDefault(_ prior: String?) {
+        if let prior {
+            try? run(["config", "push.default", prior])
+        } else {
+            try? run(["config", "--unset", "push.default"])
+        }
     }
 
     /// The local-side mirror of `remoteRef`. The push tests compare one against
