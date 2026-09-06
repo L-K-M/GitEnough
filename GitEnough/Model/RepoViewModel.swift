@@ -734,19 +734,38 @@ public final class RepoViewModel: ObservableObject, Identifiable {
         }
     }
 
-    /// Where to write when creating `url`: the symlink's target if `url` is a
-    /// symlink, otherwise `url` itself. Relative link destinations resolve
-    /// against the link's own directory, as the kernel resolves them.
+    /// Where to write when creating `url`: the end of its symlink chain if it is
+    /// a symlink, otherwise `url` itself. Relative link destinations resolve
+    /// against their own link's directory, as the kernel resolves them.
+    ///
+    /// The *whole* chain, not one hop. `Data.write(options: .atomic)` renames a
+    /// temp file over the path it is given, and a rename replaces a symlink
+    /// rather than following it — so stopping after one hop on
+    /// `.gitignore -> shared -> real` writes over `shared`, destroying the
+    /// user's intermediate link while `real` is still never created. Measured
+    /// on that exact chain: one hop leaves `shared` a regular file and `real`
+    /// missing, where the kernel's own `open(O_CREAT)` creates `real` and keeps
+    /// both links intact. That is the bug this function exists to prevent,
+    /// one level further down.
     ///
     /// Only needed on the creation path. Appending goes through an open handle,
-    /// which follows the link on both platforms without help.
+    /// which follows the chain on both platforms without help.
     static func creationTarget(for url: URL, fileManager: FileManager = .default) -> URL {
-        guard let destination =
-                try? fileManager.destinationOfSymbolicLink(atPath: url.path) else {
-            return url
+        var current = url.standardizedFileURL
+        // Bounded by the visited set, so a symlink cycle returns instead of
+        // spinning. A cycle is pathological — the write that follows would fail
+        // with ELOOP — and this only has to reach that failure rather than hang.
+        // Standardized paths, so the key is absolute and one path cannot be
+        // visited twice under two spellings.
+        var visited: Set<String> = []
+        while visited.insert(current.path).inserted,
+              let destination = try? fileManager.destinationOfSymbolicLink(
+                atPath: current.path) {
+            current = URL(fileURLWithPath: destination,
+                          relativeTo: current.deletingLastPathComponent())
+                .standardizedFileURL
         }
-        return URL(fileURLWithPath: destination,
-                   relativeTo: url.deletingLastPathComponent())
+        return current
     }
 
     /// Tracked paths are restored via git; untracked paths are moved to the Trash

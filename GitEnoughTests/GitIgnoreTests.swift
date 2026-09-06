@@ -170,6 +170,45 @@ final class GitIgnoreTests: XCTestCase {
                        "and the rule must land in its target")
     }
 
+    /// One hop is not enough. `.gitignore -> shared -> real`, with `real` still
+    /// missing, is the shape a shared ignore file behind a per-machine alias
+    /// takes — and resolving one level hands the atomic write `shared`, whose
+    /// rename replaces that intermediate link with a regular file while `real`
+    /// is never created.
+    ///
+    /// Measured on this exact chain before the fix: `shared` became a regular
+    /// file and `real` stayed missing, where the kernel's own `open(O_CREAT)`
+    /// through the chain creates `real` and leaves both links intact. Both
+    /// links surviving is the assertion that separates the two.
+    func testCreatingThroughAChainOfDanglingSymlinksWritesTheEndOfTheChain() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitEnough-symlink-chain-\(UUID().uuidString)",
+                                    isDirectory: true)
+        try FileManager.default.createDirectory(at: directory,
+                                                withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+
+        let link = directory.appendingPathComponent(".gitignore")
+        let intermediate = directory.appendingPathComponent("shared-ignore")
+        let real = directory.appendingPathComponent("real-ignore")
+        try FileManager.default.createSymbolicLink(at: intermediate, withDestinationURL: real)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: intermediate)
+
+        try GitIgnore.appendedBytes("build", to: "")
+            .write(to: RepoViewModel.creationTarget(for: link), options: .atomic)
+
+        // Each throws if that link was replaced by a regular file — the
+        // intermediate one is what a single-hop resolution destroys.
+        XCTAssertEqual(
+            try FileManager.default.destinationOfSymbolicLink(atPath: link.path),
+            intermediate.path, "the outer link must survive")
+        XCTAssertEqual(
+            try FileManager.default.destinationOfSymbolicLink(atPath: intermediate.path),
+            real.path, "and so must the intermediate one")
+        XCTAssertEqual(try String(contentsOf: real, encoding: .utf8), "/build\n",
+                       "the rule lands at the end of the chain, not part-way along it")
+    }
+
     func testGeneratedRulesMatchLiteralNamesWithGit() throws {
         guard GitShell.shared.isAvailable else {
             throw XCTSkip("git is not installed")
