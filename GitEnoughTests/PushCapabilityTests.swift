@@ -41,10 +41,13 @@ final class PushCapabilityTests: XCTestCase {
     /// chosen: `head` is nil on a freshly-created view model, before the first
     /// snapshot lands.
     func testMissingCurrentBranchIsItsOwnReason() {
-        var status = RepoStatus()
-        status.headHash = nil
-        XCTAssertEqual(PushCapability.resolve(status: status, remotes: [origin]),
-                       .unavailable(.noCurrentBranch))
+        // Neither unborn (headHash would be "(initial)") nor detached (headHash
+        // would be an OID) — the shape a half-read status snapshot produces, and
+        // its own reason rather than a fallback into one of the other two.
+        XCTAssertEqual(
+            PushCapability.resolve(status: status(head: nil, headHash: nil),
+                                   remotes: [origin]),
+            .unavailable(.noCurrentBranch))
     }
 
     // MARK: - Push
@@ -190,6 +193,40 @@ final class PushCapabilityTests: XCTestCase {
         XCTAssertEqual(
             Remote.split(upstream: "origin/features/x", among: remotes)?.remote.name,
             "origin/features")
+    }
+
+    /// The tie-break matters because it decides where a push *lands*, so pin it
+    /// at the level push actually goes through, not just at `Remote.split`.
+    func testResolveCarriesTheNestedRemoteTieBreakThrough() {
+        let features = Remote(name: "origin/features", url: "https://example.com/f.git")
+        let remotes = [origin, features]
+
+        XCTAssertEqual(
+            PushCapability.resolve(
+                status: status(head: "x", upstream: "origin/features/x"), remotes: remotes),
+            .push(remote: "origin/features", localBranch: "x", remoteBranch: "x"))
+
+        XCTAssertEqual(
+            PushCapability.resolve(
+                status: status(head: "features/x", upstream: "origin/features/x"),
+                remotes: remotes),
+            .push(remote: "origin", localBranch: "features/x", remoteBranch: "features/x"))
+    }
+
+    /// The residual hole, pinned rather than papered over: when the local branch
+    /// name matches *neither* reading — a branch tracking a differently-named
+    /// upstream under nested remote names — nothing in the string settles it and
+    /// longest-prefix decides. `origin/features/x` here could equally be
+    /// `origin` + `features/x`; only git knows, because only git stores
+    /// `branch.trunk.remote`. Closing this needs `%(upstream:remotename)` on
+    /// `RepoStatus`, which is a bigger change than a push refspec.
+    func testResolveFallsBackToLongestPrefixWhenNoReadingMatchesTheBranch() {
+        let features = Remote(name: "origin/features", url: "https://example.com/f.git")
+        XCTAssertEqual(
+            PushCapability.resolve(
+                status: status(head: "trunk", upstream: "origin/features/x"),
+                remotes: [origin, features]),
+            .push(remote: "origin/features", localBranch: "trunk", remoteBranch: "x"))
     }
 
     func testTheRemoteOperandCannotBeReadAsAnOption() {
