@@ -80,10 +80,12 @@ final class PushCapabilityTests: XCTestCase {
     /// `up/stream` configured there is a single reading of `up/stream/port`, so
     /// this is knowledge and force push stays armed.
     func testSlashNamedRemoteSplitsOnTheLongestConfiguredName() {
+        let known = PushCapability.resolve(
+            status: status(head: "port", upstream: "up/stream/port"), remotes: [upStream])
         XCTAssertEqual(
-            PushCapability.resolve(status: status(head: "port", upstream: "up/stream/port"),
-                                   remotes: [upStream]),
-            .push(remote: "up/stream", localBranch: "port", remoteBranch: "port"))
+            known, .push(remote: "up/stream", localBranch: "port", remoteBranch: "port"))
+        XCTAssertTrue(known.allowsForcePush,
+                      "a single reading is knowledge, so force push stays armed")
 
         // Add `up` and the same string reads two ways — `up` + `stream/port`,
         // or `up/stream` + `port`. The local branch name settles it, and the
@@ -239,9 +241,17 @@ final class PushCapabilityTests: XCTestCase {
         XCTAssertEqual(simple?.remote.name, "origin")
         XCTAssertEqual(simple?.branch, "main")
 
+        // Ambiguous, and this overload has no local branch name to settle it, so
+        // longest-prefix decides. Pinned *as a guess*: `remoteWasGuessed` is how
+        // a caller learns that, and the only reason this result is acceptable is
+        // that `Remote.preferred` — the sole caller of the no-localBranch form —
+        // feeds labels rather than refspecs.
         let nested = Remote.split(upstream: "up/stream/port", among: [up, upStream])
         XCTAssertEqual(nested?.remote.name, "up/stream", "longest prefix wins")
         XCTAssertEqual(nested?.branch, "port")
+        XCTAssertEqual(nested?.remoteWasGuessed, true,
+                       "two readings and nothing to choose between them is a guess, "
+                       + "however plausible the answer")
     }
 
     /// Nested remote names make the string genuinely ambiguous: with `origin`

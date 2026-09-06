@@ -170,6 +170,21 @@ public final class GitClient {
     /// Resolved once per process. `pushArguments` stays referentially
     /// transparent within a run, which is what the confirmation dialog needs:
     /// it and the client call the same function and get the same command.
+    ///
+    /// That is also why an *indeterminate* probe — `version()` nil, or a banner
+    /// `parseVersion` cannot read — is cached as `false` rather than retried.
+    /// Retrying looks safer and is not: a probe that failed when the dialog
+    /// opened and succeeded when the user confirmed would build a different
+    /// command, and `forcePush(confirming:)` would refuse a legitimate push
+    /// with "the upstream changed while the confirmation was open". The
+    /// staleness guarantee needs this constant within a run more than it needs
+    /// a second chance at the answer.
+    ///
+    /// The user-visible half is handled where it belongs: the confirmation
+    /// dialog reads this flag and, when it is false, says it cannot confirm the
+    /// git version rather than promising a protection that is not there.
+    /// `RepoViewModel.init` warms it on the repo queue so the first touch is
+    /// not a subprocess on the main thread.
     static let supportsForceIfIncludes: Bool = {
         guard let banner = version(), let v = parseVersion(banner) else { return false }
         return (v.major, v.minor) >= (2, 30)

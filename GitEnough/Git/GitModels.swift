@@ -85,6 +85,11 @@ public struct Remote: Identifiable, Hashable {
     /// falls through to longest-prefix. That divergence is intended — this feeds
     /// labels and other read-only surfaces, where a best guess beats an empty
     /// field, while Push must not guess about where it writes.
+    ///
+    /// So `split`'s `remoteWasGuessed` is deliberately ignored here rather than
+    /// overlooked: a label naming the wrong one of two plausible remotes is a
+    /// cosmetic error. Any caller that *writes* must read that flag —
+    /// `PushCapability.resolve` does, and withholds force push on it.
     public static func preferred(for upstream: String?, among remotes: [Remote]) -> Remote? {
         split(upstream: upstream, among: remotes)?.remote
             ?? remotes.first { $0.name == "origin" } ?? remotes.first
@@ -149,9 +154,20 @@ public struct Remote: Identifiable, Hashable {
     /// `%(upstream:remotename)` from the `for-each-ref` that already builds the
     /// branch list. Carrying it through would remove the guess entirely; see
     /// ANALYSIS.md.
+    ///
+    /// `remoteWasGuessed` reports which of those two things happened, because
+    /// the caller cannot tell from the result and the difference decides
+    /// whether force push is offered. It is true whenever more than one reading
+    /// existed — the tie-break and the longest-prefix fallback are both guesses,
+    /// however plausible. Returning it rather than letting callers recompute
+    /// `splitCandidates` keeps the rule in one place: a future `split` that
+    /// resolves multiple readings *definitively* (o-G4) reports `false` here and
+    /// every caller follows, where a caller counting candidates itself would
+    /// still be withholding force push on knowledge.
     public static func split(upstream: String?,
                              among remotes: [Remote],
-                             localBranch: String? = nil) -> (remote: Remote, branch: String)? {
+                             localBranch: String? = nil)
+        -> (remote: Remote, branch: String, remoteWasGuessed: Bool)? {
         guard let upstream else { return nil }
         // `Remote.branchHalf`, not a nested copy of it: the nested version
         // returned "" where the shared one returns nil, so the same rule had two
@@ -164,7 +180,7 @@ public struct Remote: Identifiable, Hashable {
         guard let matched, let branch = branchHalf(of: upstream, under: matched) else {
             return nil
         }
-        return (matched, branch)
+        return (matched, branch, matches.count > 1)
     }
 
     /// Short host-ish label for the status bar, e.g. "github.com/L-K-M/GitEnough".

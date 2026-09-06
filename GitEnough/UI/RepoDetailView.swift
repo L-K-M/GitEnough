@@ -193,38 +193,42 @@ struct RepoDetailView: View {
             Text("Aborting returns the repository to the state before the \(inProgressNoun) started. Any conflict resolutions you haven't committed will be lost.")
         }
 
+        // `presenting:` rather than reading `pendingForcePush` inside the
+        // closures. Both are captured from the same snapshot, so the two
+        // spellings agree today — but only because SwiftUI happens to run a
+        // dialog button's action before the dismissal propagates `isPresented =
+        // false` to the `onChange` below. Nothing in the API contract promises
+        // that order, and if it ever flipped, confirm would read a nil snapshot
+        // and do nothing at all: a silent no-op on the one button whose whole
+        // claim is that the command shown and the command run cannot drift
+        // apart. Handing the value to the closures removes the question.
         .confirmationDialog("Force push “\(viewModel.status.head ?? "")”?",
                             isPresented: $showingForcePushConfirmation,
-                            titleVisibility: .visible) {
+                            titleVisibility: .visible,
+                            presenting: pendingForcePush) { command in
             Button("Force Push (with Lease)", role: .destructive) {
-                // Consumed, then dropped. The command is passed before the
-                // state is cleared, so the view model still gets its snapshot.
-                if let pendingForcePush { viewModel.forcePush(confirming: pendingForcePush) }
+                viewModel.forcePush(confirming: command)
                 pendingForcePush = nil
             }
             Button("Cancel", role: .cancel) { pendingForcePush = nil }
-        } message: {
+        } message: { command in
             Text(Self.forcePushWarning)
-            if let command = pendingForcePush.map({
-                GitActivityLog.displayCommand(for: $0.arguments)
-            }) {
-                // Monospaced, because the refspec is the one part of this dialog
-                // the user has to actually read, and `local:remote` with its
-                // colon is exactly what proportional type renders worst.
-                //
-                // Interpolated rather than concatenated: `Text(someString)` picks
-                // the verbatim initializer, so building this with `+` would take
-                // the sentence out of localization while leaving the dialog
-                // around it in. The command itself stays verbatim, as it should.
-                Text("Will run in this repository:\ngit \(command)")
-                    .font(.system(.footnote, design: .monospaced))
-            }
+            // Monospaced, because the refspec is the one part of this dialog
+            // the user has to actually read, and `local:remote` with its
+            // colon is exactly what proportional type renders worst.
+            //
+            // Interpolated rather than concatenated: `Text(someString)` picks
+            // the verbatim initializer, so building this with `+` would take
+            // the sentence out of localization while leaving the dialog
+            // around it in. The command itself stays verbatim, as it should.
+            Text("Will run in this repository:\ngit \(GitActivityLog.displayCommand(for: command.arguments))")
+                .font(.system(.footnote, design: .monospaced))
         }
-        // Cancel and confirm both clear this, but dismissing a confirmation
-        // dialog by clicking outside it runs neither action — which would leave
-        // a destructive refspec sitting in view state after the dialog closed.
-        // Benign today (the open path always overwrites it) and exactly the
-        // staleness this whole flow exists to eliminate.
+        // Hygiene now rather than correctness: with `presenting:` the dialog
+        // can no longer show a stale command, but dismissing by clicking
+        // outside runs neither button action, and leaving a destructive
+        // refspec in view state is exactly the staleness this flow exists to
+        // eliminate.
         .onChange(of: showingForcePushConfirmation) { _, showing in
             if !showing { pendingForcePush = nil }
         }
@@ -246,6 +250,12 @@ struct RepoDetailView: View {
     /// most destructive dialog in the app, confidently wrong. So it says the
     /// weaker, true thing instead.
     ///
+    /// And the weak branch says "can't confirm", not "your git is old", because
+    /// those are different facts and only one of them is knowable here. Telling
+    /// someone on a modern git whose banner merely failed to parse that their
+    /// git is out of date hands them a remedy that cannot work, which is the
+    /// same failure this whole property exists to avoid — one dialog down.
+    ///
     /// Typed as `LocalizedStringKey`, and each a single literal rather than a
     /// concatenation, so `Text` takes the localizing initializer. A `String`
     /// constant here would silently make the app's most safety-critical
@@ -253,7 +263,7 @@ struct RepoDetailView: View {
     private static var forcePushWarning: LocalizedStringKey {
         GitClient.supportsForceIfIncludes
             ? "This rewrites the remote branch to match your local history. It refuses if the remote has commits you haven't merged in — including ones GitEnough fetched for you in the background — so a teammate's new work can't be lost silently. Anyone who already pulled the old history will still have to recover."
-            : "This rewrites the remote branch to match your local history. Your git is older than 2.30, so GitEnough can only check that the remote still points where your last fetch left it: a teammate's commits that GitEnough has already fetched in the background will be overwritten without warning. Update git to be protected from that. Anyone who already pulled the old history will still have to recover."
+            : "This rewrites the remote branch to match your local history. GitEnough can't confirm your git is 2.30 or newer, so it can only check that the remote still points where your last fetch left it: a teammate's commits that GitEnough has already fetched in the background will be overwritten without warning. Update git to 2.30 or newer — and make sure GitEnough can read its version — to be protected from that. Anyone who already pulled the old history will still have to recover."
     }
 
     /// The command a confirmed force push would run, as of right now.

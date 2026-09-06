@@ -827,13 +827,22 @@ final class GitIntegrationTests: XCTestCase {
         try client.commit(message: "Amended tip", amend: true)
 
         // A plain push is refused (non-fast-forward)…
+        let remoteMainBeforeRefusal = try remoteRef("refs/heads/main", in: remoteURL)
         XCTAssertThrowsError(try client.push(remote: "origin", localBranch: "main",
                                              remoteBranch: "main", setUpstream: false))
+        // `XCTAssertThrowsError` alone accepts *any* failure — a bad refspec, an
+        // unknown remote, a shell error — so it would keep passing while proving
+        // something other than "the push was refused as non-fast-forward". The
+        // remote ref standing still is the observable that only a refusal
+        // produces.
+        XCTAssertEqual(try remoteRef("refs/heads/main", in: remoteURL),
+                       remoteMainBeforeRefusal,
+                       "a refused push must leave the remote ref untouched")
+
         // …the lease push succeeds, and the remote tip matches local HEAD.
         try client.push(remote: "origin", localBranch: "main", remoteBranch: "main",
                         setUpstream: false, forceWithLease: true)
-        let localHead = try GitShell.shared.runChecked(["rev-parse", "HEAD"], in: repoURL)
-            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let localHead = try localRef("HEAD")
         let remoteHead = try remoteRef("refs/heads/main", in: remoteURL)
         XCTAssertEqual(localHead, remoteHead)
     }
@@ -860,8 +869,7 @@ final class GitIntegrationTests: XCTestCase {
         try client.push(remote: "origin", localBranch: "topic", remoteBranch: "topic",
                         setUpstream: false, forceWithLease: true)
 
-        let localTopic = try GitShell.shared.runChecked(["rev-parse", "topic"], in: repoURL)
-            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let localTopic = try localRef("topic")
         XCTAssertEqual(try remoteRef("refs/heads/topic", in: remoteURL), localTopic,
                        "the named branch is the one that moves")
         XCTAssertEqual(try remoteRef("refs/heads/main", in: remoteURL), remoteMainBefore,
@@ -893,8 +901,7 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertEqual(try remoteRef("refs/heads/main", in: remoteURL), remoteMainBefore,
                        "a plain push must not publish branches the user didn't name")
         XCTAssertEqual(try remoteRef("refs/heads/topic", in: remoteURL),
-                       try GitShell.shared.runChecked(["rev-parse", "topic"], in: repoURL)
-                           .stdout.trimmingCharacters(in: .whitespacesAndNewlines),
+                       try localRef("topic"),
                        "and the named one must actually move")
     }
 
@@ -902,13 +909,15 @@ final class GitIntegrationTests: XCTestCase {
     /// specify any refspecs to push". An explicit refspec is immune.
     func testPushWorksUnderPushDefaultNothing() throws {
         let remoteURL = try makeBareRemote()
+        // Repo-local, on a worktree `setUpWithError` creates fresh per test,
+        // so there is nothing to unset — but say so, because a future move to
+        // a shared fixture would turn this into order-dependent leakage.
         try run(["config", "push.default", "nothing"])
 
         try client.push(remote: "origin", localBranch: "main", remoteBranch: "main",
                         setUpstream: true)
 
-        let localHead = try GitShell.shared.runChecked(["rev-parse", "main"], in: repoURL)
-            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let localHead = try localRef("main")
         XCTAssertEqual(try remoteRef("refs/heads/main", in: remoteURL), localHead)
 
         // The `-u` half, which this test asked for and never checked. Other
@@ -954,8 +963,7 @@ final class GitIntegrationTests: XCTestCase {
         try client.push(remote: remote, localBranch: local, remoteBranch: remoteBranch,
                         setUpstream: false)
 
-        let localHead = try GitShell.shared.runChecked(["rev-parse", "sidecar"], in: repoURL)
-            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let localHead = try localRef("sidecar")
         XCTAssertEqual(try remoteRef("refs/heads/main", in: remoteURL), localHead,
                        "the configured upstream is what moves")
         XCTAssertEqual(try remoteRef("refs/heads/sidecar", in: remoteURL), sidecarBefore,
@@ -968,6 +976,7 @@ final class GitIntegrationTests: XCTestCase {
     /// quietly weaken one of the guards. Leaves `topic` checked out.
     private func matchingRemoteWithMainAndTopic() throws -> URL {
         let remoteURL = try makeBareRemote()
+        // Same as above: per-test worktree, so no teardown needed.
         try run(["config", "push.default", "matching"])
         try client.push(remote: "origin", localBranch: "main", remoteBranch: "main",
                         setUpstream: true)
@@ -999,8 +1008,20 @@ final class GitIntegrationTests: XCTestCase {
         return remoteURL
     }
 
+    /// `--verify` on both, because every caller means "this exact ref": without
+    /// it `rev-parse` will happily resolve a short or ambiguous argument to
+    /// something surprising instead of failing.
     private func remoteRef(_ ref: String, in remoteURL: URL) throws -> String {
-        try GitShell.shared.runChecked(["-C", remoteURL.path, "rev-parse", ref], in: nil)
+        try GitShell.shared.runChecked(
+            ["-C", remoteURL.path, "rev-parse", "--verify", ref], in: nil)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// The local-side mirror of `remoteRef`. The push tests compare one against
+    /// the other constantly, and hand-rolling this at each site is how the two
+    /// halves of the same comparison drift apart.
+    private func localRef(_ ref: String) throws -> String {
+        try GitShell.shared.runChecked(["rev-parse", "--verify", ref], in: repoURL)
             .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 

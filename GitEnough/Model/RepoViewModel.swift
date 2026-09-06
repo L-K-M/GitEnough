@@ -160,6 +160,13 @@ public final class RepoViewModel: ObservableObject, Identifiable {
         activityLog.onChange = { [weak self] entries in
             DispatchQueue.main.async { self?.activityEntries = entries }
         }
+        // Resolve the `--force-if-includes` probe off the main thread, before
+        // anything can ask for it there. It is a `static let`, so the first
+        // touch runs `git --version` — and the first touch would otherwise be
+        // the Push menu evaluating `.disabled(forcePushCommand == nil)` during
+        // a view body, putting a subprocess on the main thread. `swift_once`
+        // makes this exactly one probe however many repos open at once.
+        queue.async { _ = GitClient.supportsForceIfIncludes }
     }
 
     deinit {

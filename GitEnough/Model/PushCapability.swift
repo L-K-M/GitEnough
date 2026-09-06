@@ -112,12 +112,13 @@ public enum PushCapability: Equatable {
                 return .unavailable(
                     .upstreamRemoteMissing(upstream: upstream, branch: head))
             }
-            // Reaching here with more than one candidate means `isAmbiguous`
-            // was satisfied by the local-branch tie-break rather than by the
-            // string being unambiguous. Same command either way; only force
-            // push is withheld.
-            let readings = Remote.splitCandidates(upstream: upstream, among: remotes).count
-            return readings > 1
+            // Asked, not re-derived. Counting candidates here would be a second
+            // spelling of `split`'s own tie-break rule, and the two would part
+            // company at exactly the moment that matters: once `split` can
+            // resolve multiple readings definitively from `%(upstream:remotename)`
+            // (o-G4), a candidate count would still be withholding force push on
+            // an answer git had just given us.
+            return match.remoteWasGuessed
                 ? .pushToGuessedRemote(remote: match.remote.name,
                                        localBranch: head,
                                        remoteBranch: match.branch)
