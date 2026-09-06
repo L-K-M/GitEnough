@@ -871,13 +871,18 @@ final class GitIntegrationTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: script) }
         try "#!/bin/sh\necho EXTERNAL-TOOL-OUTPUT\n"
             .write(to: script, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes([.posixPermissions: 0o755],
-                                              ofItemAtPath: script.path)
         // `sh <script>` rather than the script itself: git runs diff.external
         // through a shell, so passing the path as an *argument* needs no exec
         // bit and works on a runner whose TMPDIR is mounted noexec. Verified
-        // against git 2.43 with the exec bit cleared — the direct form fails
-        // "cannot exec … Permission denied", this form produces the output.
+        // against git 2.43 — the direct form fails "cannot exec … Permission
+        // denied" without the bit, this form produces the output with or
+        // without it.
+        //
+        // Which is why the file is left at its default 0644 rather than
+        // chmodded to 0755. A chmod here would be inert on both mounts and
+        // would quietly undo the demonstration: the test now *is* the evidence
+        // that the exec bit is not needed, instead of asserting it in a
+        // comment while arranging for it not to matter.
         //
         // Quoted because that shell splits on whitespace and TMPDIR is not
         // ours to choose. Measured against git 2.43 with a space in the temp

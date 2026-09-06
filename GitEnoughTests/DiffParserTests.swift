@@ -11,14 +11,20 @@ final class DiffParserTests: XCTestCase {
 
     /// Line text → kind for assertions. Fails when two identical texts classify
     /// differently, which plain first-wins would silently hide.
-    private func kindsByText(_ lines: [DiffLine]) -> [String: DiffLine.Kind] {
+    private func kindsByText(
+        _ lines: [DiffLine],
+        file: StaticString = #filePath, line: UInt = #line
+    ) -> [String: DiffLine.Kind] {
         var result: [String: DiffLine.Kind] = [:]
-        for line in lines {
-            if let existing = result[line.text] {
-                XCTAssertEqual(existing, line.kind,
-                               "\(line.text.debugDescription) classified two ways")
+        // `entry`, not `line`: the parameter above owns that name now, and
+        // shadowing it here would point every failure at the helper again.
+        for entry in lines {
+            if let existing = result[entry.text] {
+                XCTAssertEqual(existing, entry.kind,
+                               "\(entry.text.debugDescription) classified two ways",
+                               file: file, line: line)
             }
-            result[line.text] = line.kind
+            result[entry.text] = entry.kind
         }
         return result
     }
@@ -146,6 +152,10 @@ index 1234567..89abcde 100644
  kind: Deployment
 """
         let lines = DiffParser.parse(diff)
+        // Three of this fixture's lines have no lookup below — `index …`, the
+        // `@@` header, and the trailing ` kind: Deployment` — so a parser that
+        // dropped one entirely would satisfy every assertion here.
+        XCTAssertEqual(lines.count, 12, "the whole fixture should survive parsing")
         let byText = kindsByText(lines)
 
         // The real file headers, which appear before the first @@.
