@@ -579,6 +579,39 @@ half-migrated, so `-1` would then mean "synthesized, except sometimes", which is
 worse than one uniform magic number. Reconsider with urgency the day any UI does
 branch on it, e.g. to show an install-git screen.
 
+### o-G4 · Carry git's own upstream remote name instead of parsing the shorthand — S/M
+
+`RepoStatus.upstream` holds only the shorthand (`origin/main`), so every consumer
+has to split it back into a remote and a branch — and remote names may contain
+slashes, which makes that split genuinely ambiguous. With `origin` and
+`origin/features` both configured, `origin/features/x` is two well-formed
+readings and the string cannot say which.
+
+`Remote.split` guesses by preferring the reading whose branch half equals the
+local branch name, then longest prefix. PR #96 made `PushCapability.resolve`
+**refuse** when neither reading matches, because the guess resolved to `.push`
+and `.push` enables force push — one confirmation could `--force-with-lease` a
+ref on a remote the user never chose.
+
+**What remains is the case where a match is wrong.** A local `features/x`
+tracking `origin/features`'s branch `x` produces the same shorthand and matches
+the *other* reading, so it resolves confidently to `origin` + `features/x`. The
+heuristic cannot detect its own failure, and
+`PushCapabilityTests.testSplitUsesTheLocalBranchToBreakANestedRemoteTie` pins
+that wrong answer — deliberately, but it means CI defends it until this lands.
+
+**Fix:** git already knows. Add `%(upstream:remotename)` (and
+`%(push:remotename)` where they differ) to the `for-each-ref` that builds the
+branch list, carry it on `RepoStatus` as `upstreamRemote: String?`, and have
+`resolve` prefer it whenever present. `Remote.split` stays as the fallback for
+snapshots that lack the field, and the two tie-break tests become coverage of
+that fallback rather than of the primary path.
+
+**Also closes** the `.ambiguousUpstream` refusal as a user-facing state: with an
+authoritative remote name there is nothing left to be ambiguous about, so the
+refusal becomes unreachable in normal operation rather than something a user with
+nested remote names has to work around.
+
 ### o-R1 · `GitShell.gitURL` is written on main and read from every repo queue — S
 
 `reprobe()` writes `gitURL` from the main thread while every repo's serial queue
