@@ -240,6 +240,8 @@ final class PushCapabilityTests: XCTestCase {
         let simple = Remote.split(upstream: "origin/main", among: [origin])
         XCTAssertEqual(simple?.remote.name, "origin")
         XCTAssertEqual(simple?.branch, "main")
+        XCTAssertEqual(simple?.remoteWasGuessed, false,
+                       "one candidate is the whole reading, so nothing was guessed")
 
         // Ambiguous, and this overload has no local branch name to settle it, so
         // longest-prefix decides. Pinned *as a guess*: `remoteWasGuessed` is how
@@ -277,6 +279,13 @@ final class PushCapabilityTests: XCTestCase {
                                     localBranch: "x")
         XCTAssertEqual(asNested?.remote.name, "origin/features")
         XCTAssertEqual(asNested?.branch, "x")
+
+        // Both readings are guesses, including the one that happens to be
+        // right. A tie-break that *matched* is still a match on a name, not on
+        // `branch.<name>.remote` — which is the whole reason `resolve` maps
+        // this to `.pushToGuessedRemote` and withholds force push.
+        XCTAssertEqual(asOrigin?.remoteWasGuessed, true)
+        XCTAssertEqual(asNested?.remoteWasGuessed, true)
 
         // With no local branch to compare, longest prefix still decides — a
         // *guess* on the same ambiguity `resolve` refuses. Safe only for callers
