@@ -106,6 +106,20 @@ final class GitShellEnvironmentTests: XCTestCase {
 
     // MARK: - Child stdin
 
+    /// The digest git itself would produce for `contents`, so these tests assert
+    /// "the child read exactly these bytes" rather than "SHA-1 of these bytes is
+    /// this constant". `hash-object` uses the *effective* object format, so a
+    /// machine with `GIT_DEFAULT_HASH=sha256` would fail a hardcoded SHA-1
+    /// expectation for a reason that has nothing to do with stdin.
+    private func expectedHash(of contents: String) throws -> String {
+        let file = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitEnough-hash-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: file) }
+        try contents.write(to: file, atomically: true, encoding: .utf8)
+        return try GitShell.shared.runChecked(["hash-object", "--", file.path], in: nil)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     /// Every git child gets `/dev/null` on stdin. Without it Foundation's
     /// `Process` hands the child *our* fd 0 — the launching terminal's tty when
     /// the app is started from a shell — and a git command that asks a question
@@ -113,8 +127,8 @@ final class GitShellEnvironmentTests: XCTestCase {
     /// invisible because it goes to the captured stdout.
     ///
     /// `git hash-object --stdin` reads stdin to EOF and prints the hash of what
-    /// it read, so the empty-blob hash is a direct assertion that the child saw
-    /// EOF rather than an inherited descriptor.
+    /// it read, so matching the empty file's digest is a direct assertion that
+    /// the child saw EOF rather than an inherited descriptor.
     func testGitChildrenSeeAnEmptyStdin() throws {
         guard GitShell.shared.isAvailable else {
             throw XCTSkip("git is not installed on this machine")
@@ -122,12 +136,25 @@ final class GitShellEnvironmentTests: XCTestCase {
         let result = try GitShell.shared.run(["hash-object", "--stdin"], in: nil)
         XCTAssertEqual(result.exitCode, 0, result.stderr)
         XCTAssertEqual(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines),
-                       "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
+                       try expectedHash(of: ""),
                        "the child must read an empty stdin, not the parent's")
     }
 
-    /// The explicit-stdin path still delivers its payload — the null device is
-    /// only the default for `run`.
+    /// `runChecked` without a `stdin:` delegates to `run`, so it must inherit the
+    /// null device. Pins the delegation itself: giving `runChecked` its own
+    /// `Process` — the one refactor that would silently reopen this — fails here.
+    func testRunCheckedWithoutStdinAlsoSeesAnEmptyStdin() throws {
+        guard GitShell.shared.isAvailable else {
+            throw XCTSkip("git is not installed on this machine")
+        }
+        let result = try GitShell.shared.runChecked(["hash-object", "--stdin"], in: nil)
+        XCTAssertEqual(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines),
+                       try expectedHash(of: ""))
+    }
+
+    /// The explicit-stdin path still delivers its payload. `runWithStdin` is the
+    /// only other `Process` in this file and assigns its own pipe, so between
+    /// this test and the two above, both spawn sites are covered.
     func testRunWithStdinStillDeliversItsPayload() throws {
         guard GitShell.shared.isAvailable else {
             throw XCTSkip("git is not installed on this machine")
@@ -135,6 +162,6 @@ final class GitShellEnvironmentTests: XCTestCase {
         let result = try GitShell.shared.runChecked(
             ["hash-object", "--stdin"], in: nil, stdin: "hello\n")
         XCTAssertEqual(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines),
-                       "ce013625030ba8dba906f756967f9e9ca394464a")
+                       try expectedHash(of: "hello\n"))
     }
 }
