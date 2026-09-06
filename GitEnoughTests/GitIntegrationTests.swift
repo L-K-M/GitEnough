@@ -879,6 +879,15 @@ final class GitIntegrationTests: XCTestCase {
         try client.stage(paths: ["a.txt"])
         try write("brand new\n", to: "fresh.txt")
 
+        // Precondition: the driver really is being invoked. Without this, a
+        // fixture that never ran the script — a noexec TMPDIR, a git that
+        // stopped honouring diff.external — would leave every "must not
+        // contain" assertion below passing for the wrong reason.
+        let hijacked = try GitShell.shared.runChecked(
+            ["-C", repoURL.path, "diff", "--staged"], in: nil).stdout
+        XCTAssertTrue(hijacked.contains("EXTERNAL-TOOL-OUTPUT"),
+                      "precondition: diff.external replaces an unguarded patch read")
+
         let staged = try client.stagedDiff()
         XCTAssertFalse(staged.contains("EXTERNAL-TOOL-OUTPUT"),
                        "the model must be handed a patch, not a diff tool's rendering")
