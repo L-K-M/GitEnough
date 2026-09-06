@@ -123,7 +123,14 @@ final class GitShellEnvironmentTests: XCTestCase {
             .appendingPathComponent("GitEnough-hash-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: file) }
         try contents.write(to: file, atomically: true, encoding: .utf8)
-        return try GitShell.shared.runChecked(["hash-object", "--", file.path], in: nil)
+        // `--no-filters`, because `hash-object <file>` runs the attributes
+        // machinery — CRLF conversion included — while `--stdin` hashes raw
+        // bytes with no path to look filters up for. A machine with a global
+        // `core.attributesFile` saying `* text=auto` would make the two digests
+        // differ for a reason that has nothing to do with stdin. Same class of
+        // environment skew as the `GIT_DEFAULT_HASH` one this helper exists for.
+        return try GitShell.shared.runChecked(
+            ["hash-object", "--no-filters", "--", file.path], in: nil)
             .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
@@ -189,8 +196,15 @@ final class GitShellEnvironmentTests: XCTestCase {
             dup2(savedStdin, STDIN_FILENO)
             close(savedStdin)
         }
-        XCTAssertGreaterThanOrEqual(dup2(reader.fileDescriptor, STDIN_FILENO), 0,
-                                    "could not place the sentinel on fd 0")
+        // Skip, not assert, and for the reason the `dup` above already skips:
+        // an assertion records a failure and keeps going, so a failed `dup2`
+        // would leave fd 0 at the runner's own stdin and the two hash checks
+        // below would compare against an empty stdin and pass — green
+        // assertions next to one red setup line, with the discriminating power
+        // of the test silently gone for that run.
+        guard dup2(reader.fileDescriptor, STDIN_FILENO) >= 0 else {
+            throw XCTSkip("could not place the sentinel on fd 0")
+        }
 
         let result = try GitShell.shared.run(["hash-object", "--stdin"], in: nil)
         let hashed = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
