@@ -873,7 +873,12 @@ final class GitIntegrationTests: XCTestCase {
             .write(to: script, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755],
                                               ofItemAtPath: script.path)
-        try run(["config", "diff.external", script.path])
+        // `sh <script>` rather than the script itself: git runs diff.external
+        // through a shell, so passing the path as an *argument* needs no exec
+        // bit and works on a runner whose TMPDIR is mounted noexec. Verified
+        // against git 2.43 with the exec bit cleared — the direct form fails
+        // "cannot exec … Permission denied", this form produces the output.
+        try run(["config", "diff.external", "sh \(script.path)"])
 
         try write("changed\n", to: "a.txt")
         try client.stage(paths: ["a.txt"])
@@ -884,12 +889,6 @@ final class GitIntegrationTests: XCTestCase {
         // stopped honouring diff.external — would leave every "must not
         // contain" assertion below passing for the wrong reason.
         //
-        // Deliberately fails rather than skips. A runner whose temp directory is
-        // mounted noexec cannot execute the script and will go red here — that
-        // is the intended outcome, because a skip on the same signal would also
-        // hide a real regression in the client, and this is the only assertion
-        // standing between the two. If you are looking at this failure on CI,
-        // check whether TMPDIR is executable before reading the client code.
         let hijacked = try GitShell.shared.runChecked(
             ["-C", repoURL.path, "diff", "--staged"], in: nil).stdout
         XCTAssertTrue(hijacked.contains("EXTERNAL-TOOL-OUTPUT"),

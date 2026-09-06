@@ -357,6 +357,10 @@ public final class GitClient {
     /// Patch of one file within a commit (for the detail pane).
     public func commitFileDiff(hash: String, path: String) throws -> String {
         try runReadChecked(
+            // `--format=` is load-bearing, not tidiness: `DiffParser`'s input
+            // contract is patch-only output. A commit message reaching it would
+            // arrive while the parser is outside a hunk, where a bullet starting
+            // "-" colours as a deletion and a quoted "@@" opens a phantom hunk.
             ["-C", worktree.path, "show", "-m", "--first-parent", "--format="]
                 + Self.patchReadFlags + [hash, "--", Self.literalPathspec(path)],
             in: nil).stdout

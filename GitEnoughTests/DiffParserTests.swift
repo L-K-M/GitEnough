@@ -177,6 +177,16 @@ Binary files a/img.png and b/img.png differ
         XCTAssertEqual(byText["Binary files a/img.png and b/img.png differ"], .meta)
     }
 
+    /// Dropping the phantom trailing component changed a public behaviour:
+    /// `parse("")` used to return one blank context line and now returns none.
+    /// Pinned so a future refactor can't quietly reintroduce the phantom row,
+    /// and so callers rendering an empty state have something to rely on.
+    func testEmptyInputYieldsNoLines() {
+        XCTAssertEqual(DiffParser.parse("").map(\.kind), [])
+        // A lone separator is still one (contentless) line, not zero.
+        XCTAssertEqual(DiffParser.parse("\n").map(\.kind), [.context])
+    }
+
     /// A trailing newline is a separator, not a line — the split must drop the
     /// empty final component while keeping blank lines that are hunk content.
     func testATrailingNewlineDoesNotAddAPhantomLine() {
