@@ -490,6 +490,40 @@ should refuse and say the repository's HEAD is broken rather than degrade
 silently. Same family as **o-L3** and **C1**: absence and failure must not be the
 same value.
 
+### o-L14 · Opening an untrusted working copy runs code from it — M · *threat model, not a single bug*
+
+Raised on PR #98 about `diff.<driver>.textconv`, which is an **arbitrary
+executable named by the repository being viewed** — so rendering a diff in a repo
+that arrived with a hostile `.git/config` or `.gitattributes` runs it. That is
+real, but it is the smallest instance of the actual gap: GitEnough shells out to
+the user's own git, which runs **that repository's hooks** on commit, checkout
+and merge regardless. `.git/hooks/pre-commit` is a strictly larger hole than
+textconv, and both arrive together in a downloaded zip or bundle.
+
+So "opening an untrusted working copy is safe" is not a property this app has,
+and suppressing textconv alone would not give it one — it would only cost every
+legitimate binary-format diff (`pdf` → `pdftotext` and friends), which is the
+whole reason `patchReadFlags` deliberately omits `--no-textconv`
+(`GitClient.swift:268`).
+
+**Fix, as one deliberate piece of work rather than a flag:** decide the policy
+first, then implement it whole.
+
+- Detect the risk at *add* time, not at render time: on registering a repository,
+  check for `.git/hooks/*` that are executable and non-sample, and for
+  `diff.*.textconv` / `diff.*.command` / `core.fsmonitor` / `core.pager` in the
+  repo-local config. Any hit gets a one-time "this repository can run code on
+  your machine — it was probably cloned normally, but if you downloaded it, look
+  first" prompt, with the offending entries listed.
+- A per-repository "trusted" bit persisted alongside the sidebar entry, defaulting
+  to trusted for anything cloned *by* GitEnough (which cannot carry a config) and
+  untrusted for anything added by folder pick or discovery that trips the check.
+- Only then is a `--no-textconv` / `core.hooksPath=/dev/null` mode worth adding,
+  gated on that bit, because only then does it mean something.
+
+Compare `git`'s own `safe.directory` and VS Code's Workspace Trust: the useful
+part is the *prompt on first contact*, not the flag.
+
 ### o-R1 · `GitShell.gitURL` is written on main and read from every repo queue — S
 
 `reprobe()` writes `gitURL` from the main thread while every repo's serial queue
