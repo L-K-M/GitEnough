@@ -18,6 +18,10 @@ struct RepoDetailView: View {
     /// the single most destructive unguarded action in the banner.
     @State private var confirmingAbort = false
     @State private var showingForcePushConfirmation = false
+    /// The exact command the open confirmation dialog is showing. Compared
+    /// against a freshly resolved one when the user confirms, so a refresh
+    /// between opening and confirming cannot swap the refspec underneath them.
+    @State private var pendingForcePush: GitClient.PushCommand?
 
     /// Lowercase noun of the in-progress operation for the abort dialog's
     /// sentence text ("… before the merge started").
@@ -125,6 +129,12 @@ struct RepoDetailView: View {
                 // a branch with no upstream yet has nothing to overwrite.
                 Menu {
                     Button("Force Push (with Lease)…") {
+                        // Captured here, when the dialog opens, and not
+                        // re-derived in the confirm action: re-deriving would
+                        // read whatever the capability says at *tap* time,
+                        // which is exactly the value the comparison exists to
+                        // catch changing.
+                        pendingForcePush = forcePushCommand
                         showingForcePushConfirmation = true
                     }
                     // Gated on the command, not on the capability, so the
@@ -175,12 +185,14 @@ struct RepoDetailView: View {
                             isPresented: $showingForcePushConfirmation,
                             titleVisibility: .visible) {
             Button("Force Push (with Lease)", role: .destructive) {
-                viewModel.forcePush()
+                viewModel.forcePush(confirming: pendingForcePush)
             }
             Button("Cancel", role: .cancel) {}
         } message: {
             Text(Self.forcePushWarning)
-            if let command = forcePushCommand {
+            if let command = pendingForcePush.map({
+                GitActivityLog.displayCommand(for: $0.arguments)
+            }) {
                 // Monospaced, because the refspec is the one part of this dialog
                 // the user has to actually read, and `local:remote` with its
                 // colon is exactly what proportional type renders worst.
@@ -202,20 +214,23 @@ struct RepoDetailView: View {
     private static let forcePushWarning: LocalizedStringKey =
         "This rewrites the remote branch to match your local history. “With lease” refuses to overwrite commits you haven't fetched yet, so a teammate's new work can't be lost silently — but anyone who pulled the old history will have to recover."
 
-    /// The literal command a confirmed force push will run.
+    /// The command a confirmed force push would run, as of right now.
     ///
     /// Showing it is not decoration: this is the one action in the app that can
     /// destroy someone else's work, and the whole premise of GitEnough is that
     /// it does what the command line would — so it should be willing to say
     /// which command. It also makes the refspec visible, which is exactly what a
     /// bare `git push` left to `push.default` did not have.
-    private var forcePushCommand: String? {
+    ///
+    /// `pendingForcePush` is the snapshot of this taken when the dialog opened;
+    /// this property is what gates the menu item. Both come from the same
+    /// `forcePushArguments` the client executes, so the sentence and the command
+    /// cannot describe different things.
+    private var forcePushCommand: GitClient.PushCommand? {
         guard case .push(let remote, let local, let remoteBranch)
             = viewModel.pushCapability else { return nil }
-        // Built from the same `forcePushArguments` the client executes, so the
-        // sentence and the command cannot drift apart.
-        return GitActivityLog.displayCommand(for: GitClient.forcePushArguments(
-            remote: remote, localBranch: local, remoteBranch: remoteBranch).arguments)
+        return GitClient.forcePushArguments(
+            remote: remote, localBranch: local, remoteBranch: remoteBranch)
     }
 
     // MARK: - Toolbar pieces

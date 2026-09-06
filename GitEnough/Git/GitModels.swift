@@ -84,6 +84,23 @@ public struct Remote: Identifiable, Hashable {
             ?? remotes.first { $0.name == "origin" } ?? remotes.first
     }
 
+    /// Every configured remote whose name could be the remote half of
+    /// `upstream`. More than one means the string is genuinely ambiguous:
+    /// with `origin` and `origin/features` both configured, `origin/features/x`
+    /// is two well-formed readings and nothing in the string picks between them.
+    public static func splitCandidates(upstream: String?, among remotes: [Remote]) -> [Remote] {
+        guard let upstream else { return [] }
+        return remotes.filter { upstream.hasPrefix($0.name + "/") }
+    }
+
+    /// The branch half of `upstream` under `remote`, or nil when that reading
+    /// leaves nothing behind.
+    public static func branchHalf(of upstream: String, under remote: Remote) -> String? {
+        guard upstream.hasPrefix(remote.name + "/") else { return nil }
+        let branch = String(upstream.dropFirst(remote.name.count + 1))
+        return branch.isEmpty ? nil : branch
+    }
+
     /// Splits an upstream ref (`origin/main`, `up/stream/topic`) into the
     /// configured remote it names and the branch **on that remote**.
     ///
@@ -104,23 +121,6 @@ public struct Remote: Identifiable, Hashable {
     /// `%(upstream:remotename)` from the `for-each-ref` that already builds the
     /// branch list. Carrying it through would remove the guess entirely; see
     /// ANALYSIS.md.
-    /// Every configured remote whose name could be the remote half of
-    /// `upstream`. More than one means the string is genuinely ambiguous:
-    /// with `origin` and `origin/features` both configured, `origin/features/x`
-    /// is two well-formed readings and nothing in the string picks between them.
-    public static func splitCandidates(upstream: String?, among remotes: [Remote]) -> [Remote] {
-        guard let upstream else { return [] }
-        return remotes.filter { upstream.hasPrefix($0.name + "/") }
-    }
-
-    /// The branch half of `upstream` under `remote`, or nil when that reading
-    /// leaves nothing behind.
-    public static func branchHalf(of upstream: String, under remote: Remote) -> String? {
-        guard upstream.hasPrefix(remote.name + "/") else { return nil }
-        let branch = String(upstream.dropFirst(remote.name.count + 1))
-        return branch.isEmpty ? nil : branch
-    }
-
     public static func split(upstream: String?,
                              among remotes: [Remote],
                              localBranch: String? = nil) -> (remote: Remote, branch: String)? {

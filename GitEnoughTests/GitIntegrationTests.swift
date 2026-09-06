@@ -954,7 +954,6 @@ final class GitIntegrationTests: XCTestCase {
                        "the same-named remote branch is untouched")
     }
 
-    /// A bare repository registered as a remote, cleaned up with the test.
     /// A fresh bare remote with `main` and `topic` published to it, and
     /// `push.default = matching` in effect. Shared by the two tests that guard
     /// the `matching` hazard, so the scenario cannot drift between them and
@@ -973,6 +972,7 @@ final class GitIntegrationTests: XCTestCase {
         return remoteURL
     }
 
+    /// A bare repository registered as a remote, cleaned up with the test.
     private func makeBareRemote(named name: String = "origin") throws -> URL {
         let remoteURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("GitEnoughTests-remote-\(UUID().uuidString)")
@@ -981,7 +981,7 @@ final class GitIntegrationTests: XCTestCase {
         // Pin the remote's HEAD rather than inheriting the machine's
         // `init.defaultBranch`, which is still `master` on a stock git. Nothing
         // asserts on it today — every interaction here uses explicit refspecs —
-        // but this helper is now shared by seven tests, and the first one that
+        // but this helper is shared by every test that needs a remote, and the
         // clones or reads `ls-remote origin HEAD` would behave differently on
         // different developers' machines. `symbolic-ref` rather than
         // `init --initial-branch=`, which older git does not have.

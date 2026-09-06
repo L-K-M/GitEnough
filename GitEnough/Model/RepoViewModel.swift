@@ -356,7 +356,16 @@ public final class RepoViewModel: ObservableObject, Identifiable {
     /// The capability is re-resolved here rather than trusted from the click:
     /// force-pushing is the one action where sending a stale refspec would
     /// rewrite the wrong branch, and only `.push` has an upstream to overwrite.
-    public func forcePush() {
+    ///
+    /// Re-resolving alone is not enough, which is why `confirming` exists. The
+    /// dialog renders its command when it opens; this runs at tap. A refresh
+    /// landing in between — the watcher fires every 2.5 s — can re-point the
+    /// branch's upstream, and the user would then confirm one refspec and
+    /// force-push another. So the caller passes back the command it *showed*,
+    /// and a mismatch refuses rather than proceeding. Narrow window, but this is
+    /// the one action in the app that destroys work, and "the command shown and
+    /// the command run cannot drift apart" is the whole claim being made.
+    public func forcePush(confirming shown: GitClient.PushCommand? = nil) {
         let capability = pushCapability
         guard case .push(let remote, let local, let remoteBranch) = capability else {
             // `.unavailable` already carries a reason that names the real
@@ -370,9 +379,14 @@ public final class RepoViewModel: ObservableObject, Identifiable {
             }
             return
         }
+        let command = GitClient.forcePushArguments(
+            remote: remote, localBranch: local, remoteBranch: remoteBranch)
+        if let shown, shown != command {
+            errorMessage = "This branch's upstream changed while the confirmation was open, so the command shown is no longer the one that would run. Open Force Push again to review it."
+            return
+        }
         perform("Force pushing…", invalidatesMessageGeneration: false) {
-            try $0.push(GitClient.forcePushArguments(
-                remote: remote, localBranch: local, remoteBranch: remoteBranch))
+            try $0.push(command)
         }
     }
 

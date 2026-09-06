@@ -19,7 +19,10 @@ public enum PushCapability: Equatable {
         case noRemotes
         case noCurrentBranch
         /// `branch.<name>.remote` names a remote that is no longer configured.
-        case upstreamRemoteMissing(remote: String, branch: String)
+        /// Carries the whole upstream string rather than a guessed remote half:
+        /// splitting at the first slash would name `origin` for a vanished
+        /// `origin/features`, which was never the branch's remote.
+        case upstreamRemoteMissing(upstream: String, branch: String)
         /// Two or more configured remotes are prefixes of the upstream string
         /// and nothing available distinguishes them.
         case ambiguousUpstream(upstream: String, branch: String)
@@ -34,8 +37,8 @@ public enum PushCapability: Equatable {
                 return "Can't push: this repository has no remotes configured. Add a remote first."
             case .noCurrentBranch:
                 return "Can't push: the current branch is unavailable. Refresh the repository, then check out or create a branch."
-            case .upstreamRemoteMissing(let remote, let branch):
-                return "Can't push: \(branch) tracks “\(remote)”, which is no longer a configured remote. Add it back, or set a new upstream for this branch."
+            case .upstreamRemoteMissing(let upstream, let branch):
+                return "Can't push: \(branch) tracks “\(upstream)”, whose remote is no longer configured. Add it back, or set a new upstream for this branch."
             case .ambiguousUpstream(let upstream, let branch):
                 return "Can't push: “\(upstream)” matches more than one configured remote, so GitEnough can't tell which ref \(branch) tracks. Rename one of the remotes, or set the upstream again to disambiguate."
             }
@@ -61,46 +64,51 @@ public enum PushCapability: Equatable {
         guard let fallback = remotes.first(where: { $0.name == "origin" }) ?? remotes.first else {
             return .unavailable(.noRemotes)
         }
-        // Refuse a guess before making one. With `origin` and `origin/features`
-        // both configured, "origin/features/x" is two well-formed readings; the
-        // local branch name settles it when it happens to match one of them, and
-        // when it matches neither, nothing does.
-        //
-        // Resolving anyway is the same mistake `upstreamRemoteMissing` exists to
-        // prevent, and worse here: the result is a `.push`, which *enables force
-        // push* — so one confirmation could `--force-with-lease` a ref on a
-        // remote the user never chose. "Only git knows" is an argument for
-        // refusing, not for picking the longer prefix.
+        // One block, so the ambiguity rule and the resolution that follows it
+        // cannot answer differently. `resolve` deciding "not ambiguous" by one
+        // rule while `Remote.split` selects by another is how the refusal would
+        // start firing on strings split would have resolved, or vice versa.
         if let upstream = status.upstream {
+            // Refuse a guess before making one. With `origin` and
+            // `origin/features` both configured, "origin/features/x" is two
+            // well-formed readings; the local branch name settles it when it
+            // happens to match one of them, and when it matches neither,
+            // nothing does.
+            //
+            // Resolving anyway is the same mistake `upstreamRemoteMissing`
+            // exists to prevent, and worse here: the result is a `.push`, which
+            // *enables force push* — so one confirmation could
+            // `--force-with-lease` a ref on a remote the user never chose.
+            // "Only git knows" is an argument for refusing, not for picking the
+            // longer prefix.
             let candidates = Remote.splitCandidates(upstream: upstream, among: remotes)
             if candidates.count > 1,
                !candidates.contains(where: { Remote.branchHalf(of: upstream, under: $0) == head }) {
                 return .unavailable(.ambiguousUpstream(upstream: upstream, branch: head))
             }
-        }
-        if let upstream = Remote.split(upstream: status.upstream, among: remotes,
-                                       localBranch: head) {
-            return .push(remote: upstream.remote.name,
+            // A *configured* upstream that no configured remote can account for
+            // is its own state, not the same as having none.
+            //
+            // Publishing looks like the helpful answer — it would push somewhere
+            // real and re-point the branch — but it is the app deciding, on one
+            // unconfirmed click, to rewrite `branch.<name>.remote` and to pick
+            // the destination by a name heuristic (`origin`, else whichever
+            // remote git happens to list first). Worse, `.publish` disallows
+            // force push, so a fallback remote that already carries a diverged
+            // branch of the same name rejects the push as non-fast-forward with
+            // no way forward.
+            //
+            // Before this type carried refs, `.push` here ran a bare `git push`,
+            // which failed loudly against the missing remote. That was the right
+            // outcome for the wrong reason; say it deliberately instead.
+            guard let match = Remote.split(upstream: upstream, among: remotes,
+                                           localBranch: head) else {
+                return .unavailable(
+                    .upstreamRemoteMissing(upstream: upstream, branch: head))
+            }
+            return .push(remote: match.remote.name,
                          localBranch: head,
-                         remoteBranch: upstream.branch)
-        }
-        // A *configured* upstream that no configured remote can account for is
-        // its own state, not the same as having none.
-        //
-        // Publishing looks like the helpful answer — it would push somewhere
-        // real and re-point the branch — but it is the app deciding, on one
-        // unconfirmed click, to rewrite `branch.<name>.remote` and to pick the
-        // destination by a name heuristic (`origin`, else whichever remote git
-        // happens to list first). Worse, `.publish` disallows force push, so a
-        // fallback remote that already carries a diverged branch of the same
-        // name rejects the push as non-fast-forward with no way forward.
-        //
-        // Before this type carried refs, `.push` here ran a bare `git push`,
-        // which failed loudly against the missing remote. That was the right
-        // outcome for the wrong reason; say it deliberately instead.
-        if let upstream = status.upstream {
-            let remoteName = upstream.split(separator: "/").first.map(String.init) ?? upstream
-            return .unavailable(.upstreamRemoteMissing(remote: remoteName, branch: head))
+                         remoteBranch: match.branch)
         }
         return .publish(remote: fallback.name, branch: head)
     }

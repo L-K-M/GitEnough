@@ -119,7 +119,7 @@ final class PushCapabilityTests: XCTestCase {
         let resolved = PushCapability.resolve(
             status: status(head: "main", upstream: "gone/main"), remotes: [origin])
         XCTAssertEqual(resolved,
-                       .unavailable(.upstreamRemoteMissing(remote: "gone", branch: "main")))
+                       .unavailable(.upstreamRemoteMissing(upstream: "gone/main", branch: "main")))
         XCTAssertFalse(resolved.allowsForcePush,
                        "nothing is resolved, so there is certainly nothing to force onto")
         XCTAssertTrue(resolved.help.contains("gone"),
@@ -290,5 +290,15 @@ final class PushCapabilityTests: XCTestCase {
                                     remoteBranch: "main", setUpstream: false,
                                     forceWithLease: true).arguments,
             "the confirmation dialog and the command it describes share one definition")
+        // Also for operands that look like options. The dash tests exercise
+        // `pushArguments`; if `forcePushArguments` ever grew its own formatting
+        // and dropped the `--` or the qualification, only the *destructive* path
+        // would carry the regression and the suite would stay green.
+        XCTAssertEqual(
+            GitClient.forcePushArguments(remote: "-f", localBranch: "-x",
+                                         remoteBranch: "main").arguments,
+            GitClient.pushArguments(remote: "-f", localBranch: "-x", remoteBranch: "main",
+                                    setUpstream: false, forceWithLease: true).arguments,
+            "the equivalence holds for option-shaped operands too")
     }
 }
