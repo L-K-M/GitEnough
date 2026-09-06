@@ -524,6 +524,29 @@ first, then implement it whole.
 Compare `git`'s own `safe.directory` and VS Code's Workspace Trust: the useful
 part is the *prompt on first contact*, not the flag.
 
+### o-L15 · `GitError.exitCode = -1` is an unnamed sentinel used fourteen ways — S
+
+Raised three times across PR #100's review, and the reviewer is right that a
+magic number carrying a meaning is worse than a named one. `-1` appears at
+fourteen `GitError` construction sites and means "GitEnough synthesized this, it
+is not a git exit code" — covering "git isn't installed"
+(`GitShell.swift:250`), "failed to launch git" (`:271`), and eleven client-side
+refusals such as "Branch names must not start with —".
+
+**Not currently a bug**: nothing anywhere branches on it. Every consumer tests
+`== 0` or `!= 0` (`ActivityLogView.swift:57`, `GitActivityLog.swift:49`,
+`GitActivityStore.swift:193`), and `GitActivityLog.Entry.exitCode` is only ever
+written from a real process exit, so a synthesized error never reaches the
+activity log at all.
+
+**Fix:** one named constant used at *all fourteen* sites —
+`GitError.synthesized` or an `exitCode` of `nil` with the type made honest about
+"there was no process". What to avoid is a *second* sentinel for one call site,
+which is the shape the review suggested: it would leave the convention
+half-migrated, so `-1` would then mean "synthesized, except sometimes", which is
+worse than one uniform magic number. Reconsider with urgency the day any UI does
+branch on it, e.g. to show an install-git screen.
+
 ### o-R1 · `GitShell.gitURL` is written on main and read from every repo queue — S
 
 `reprobe()` writes `gitURL` from the main thread while every repo's serial queue
