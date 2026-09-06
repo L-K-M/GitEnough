@@ -127,9 +127,12 @@ struct RepoDetailView: View {
                     Button("Force Push (with Lease)…") {
                         showingForcePushConfirmation = true
                     }
-                    .disabled(!viewModel.pushCapability.allowsForcePush)
+                    // Gated on the command, not on the capability, so the
+                    // dialog can never open without the command it will show.
+                    // Two expressions of one predicate is how they drift.
+                    .disabled(forcePushCommand == nil)
                 } label: {
-                    Label(viewModel.pushCapability.allowsForcePush && viewModel.status.ahead > 0
+                    Label(viewModel.pushCapability.tracksAnUpstream && viewModel.status.ahead > 0
                           ? "Push (\(viewModel.status.ahead))"
                           : viewModel.pushCapability.label,
                           systemImage: "arrow.up.to.line")
@@ -181,17 +184,23 @@ struct RepoDetailView: View {
                 // Monospaced, because the refspec is the one part of this dialog
                 // the user has to actually read, and `local:remote` with its
                 // colon is exactly what proportional type renders worst.
-                Text("Will run in this repository:\ngit " + command)
+                //
+                // Interpolated rather than concatenated: `Text(someString)` picks
+                // the verbatim initializer, so building this with `+` would take
+                // the sentence out of localization while leaving the dialog
+                // around it in. The command itself stays verbatim, as it should.
+                Text("Will run in this repository:\ngit \(command)")
                     .font(.system(.footnote, design: .monospaced))
             }
         }
     }
 
-    private static let forcePushWarning =
-        "This rewrites the remote branch to match your local history."
-        + " “With lease” refuses to overwrite commits you haven't fetched yet, so a"
-        + " teammate's new work can't be lost silently — but anyone who pulled the old"
-        + " history will have to recover."
+    /// Typed as `LocalizedStringKey`, and one literal rather than a
+    /// concatenation, so `Text` takes the localizing initializer. A `String`
+    /// constant here would silently make the app's most safety-critical sentence
+    /// the only untranslated one on screen.
+    private static let forcePushWarning: LocalizedStringKey =
+        "This rewrites the remote branch to match your local history. “With lease” refuses to overwrite commits you haven't fetched yet, so a teammate's new work can't be lost silently — but anyone who pulled the old history will have to recover."
 
     /// The literal command a confirmed force push will run.
     ///
@@ -206,7 +215,7 @@ struct RepoDetailView: View {
         // Built from the same `forcePushArguments` the client executes, so the
         // sentence and the command cannot drift apart.
         return GitActivityLog.displayCommand(for: GitClient.forcePushArguments(
-            remote: remote, localBranch: local, remoteBranch: remoteBranch))
+            remote: remote, localBranch: local, remoteBranch: remoteBranch).arguments)
     }
 
     // MARK: - Toolbar pieces

@@ -105,11 +105,8 @@ final class PushCapabilityTests: XCTestCase {
     }
 
     /// A branch whose `branch.<name>.remote` names a remote that has since been
-    /// renamed or removed. Publishing repairs it and pushes somewhere the label
-    /// names; a plain push would have to guess a remote, and guessing is the
-    /// whole class of bug this type exists to remove.
-    /// A configured upstream that no configured remote accounts for is its own
-    /// state, not the same as having none.
+    /// renamed or removed. A configured upstream that no configured remote
+    /// accounts for is its own state, not the same as having none.
     ///
     /// This used to resolve to `.publish(remote: "origin")`, which reads as
     /// helpful and isn't: one unconfirmed click would rewrite
@@ -145,14 +142,14 @@ final class PushCapabilityTests: XCTestCase {
     func testPushArgumentsAreFullyQualifiedOnBothSides() {
         XCTAssertEqual(
             GitClient.pushArguments(remote: "origin", localBranch: "feature",
-                                    remoteBranch: "main", setUpstream: false),
+                                    remoteBranch: "main", setUpstream: false).arguments,
             ["push", "--", "origin", "refs/heads/feature:refs/heads/main"])
     }
 
     func testPublishArgumentsSetUpstream() {
         XCTAssertEqual(
             GitClient.pushArguments(remote: "work", localBranch: "topic",
-                                    remoteBranch: "topic", setUpstream: true),
+                                    remoteBranch: "topic", setUpstream: true).arguments,
             ["push", "-u", "--", "work", "refs/heads/topic:refs/heads/topic"])
     }
 
@@ -160,7 +157,7 @@ final class PushCapabilityTests: XCTestCase {
         XCTAssertEqual(
             GitClient.pushArguments(remote: "origin", localBranch: "main",
                                     remoteBranch: "main", setUpstream: false,
-                                    forceWithLease: true),
+                                    forceWithLease: true).arguments,
             ["push", "--force-with-lease", "--", "origin", "refs/heads/main:refs/heads/main"])
     }
 
@@ -169,7 +166,7 @@ final class PushCapabilityTests: XCTestCase {
     func testALeadingDashBranchCannotReachOptionPosition() {
         XCTAssertEqual(
             GitClient.pushArguments(remote: "origin", localBranch: "-x",
-                                    remoteBranch: "-x", setUpstream: false),
+                                    remoteBranch: "-x", setUpstream: false).arguments,
             ["push", "--", "origin", "refs/heads/-x:refs/heads/-x"],
             "the dash-leading branch stays inside the qualified refspec")
     }
@@ -243,19 +240,37 @@ final class PushCapabilityTests: XCTestCase {
             .push(remote: "origin", localBranch: "features/x", remoteBranch: "features/x"))
     }
 
-    /// The residual hole, pinned rather than papered over: when the local branch
-    /// name matches *neither* reading — a branch tracking a differently-named
-    /// upstream under nested remote names — nothing in the string settles it and
-    /// longest-prefix decides. `origin/features/x` here could equally be
-    /// `origin` + `features/x`; only git knows, because only git stores
-    /// `branch.trunk.remote`. Closing this needs `%(upstream:remotename)` on
-    /// `RepoStatus`, which is a bigger change than a push refspec.
-    func testResolveFallsBackToLongestPrefixWhenNoReadingMatchesTheBranch() {
+    /// When the local branch name matches *neither* reading, nothing settles the
+    /// ambiguity — so this refuses instead of guessing.
+    ///
+    /// An earlier version of this test pinned the longest-prefix guess as
+    /// expected behaviour, on the grounds that it was "documented". That was
+    /// wrong twice over. It is the same mistake `upstreamRemoteMissing` exists
+    /// to prevent, and worse: the guess resolves to `.push`, which *enables
+    /// force push*, so one confirmation could `--force-with-lease` a ref on a
+    /// remote the user never chose. And pinning it meant CI would have defended
+    /// the wrong answer against the fix.
+    func testResolveRefusesAnAmbiguousUpstreamRatherThanGuessing() {
+        let features = Remote(name: "origin/features", url: "https://example.com/f.git")
+        let resolved = PushCapability.resolve(
+            status: status(head: "trunk", upstream: "origin/features/x"),
+            remotes: [origin, features])
+
+        XCTAssertEqual(resolved, .unavailable(
+            .ambiguousUpstream(upstream: "origin/features/x", branch: "trunk")))
+        XCTAssertFalse(resolved.allowsForcePush,
+                       "an unresolved upstream must not offer to overwrite one")
+        XCTAssertTrue(resolved.help.contains("origin/features/x"),
+                      "the message must name the string it cannot read")
+    }
+
+    /// One candidate remote is not ambiguous, however nested its name looks.
+    func testASingleCandidateRemoteResolvesEvenWithoutABranchNameMatch() {
         let features = Remote(name: "origin/features", url: "https://example.com/f.git")
         XCTAssertEqual(
             PushCapability.resolve(
                 status: status(head: "trunk", upstream: "origin/features/x"),
-                remotes: [origin, features]),
+                remotes: [features]),
             .push(remote: "origin/features", localBranch: "trunk", remoteBranch: "x"))
     }
 
@@ -263,17 +278,17 @@ final class PushCapabilityTests: XCTestCase {
         // `git remote add -- -f <url>` is accepted, so a remote really can be
         // called "-f"; `--` is what keeps it an operand.
         let args = GitClient.pushArguments(remote: "-f", localBranch: "main",
-                                           remoteBranch: "main", setUpstream: false)
+                                           remoteBranch: "main", setUpstream: false).arguments
         XCTAssertEqual(args, ["push", "--", "-f", "refs/heads/main:refs/heads/main"])
     }
 
     func testForcePushArgumentsAreTheOnesForcePushRuns() {
         XCTAssertEqual(
             GitClient.forcePushArguments(remote: "origin", localBranch: "main",
-                                         remoteBranch: "main"),
+                                         remoteBranch: "main").arguments,
             GitClient.pushArguments(remote: "origin", localBranch: "main",
                                     remoteBranch: "main", setUpstream: false,
-                                    forceWithLease: true),
+                                    forceWithLease: true).arguments,
             "the confirmation dialog and the command it describes share one definition")
     }
 }

@@ -20,6 +20,9 @@ public enum PushCapability: Equatable {
         case noCurrentBranch
         /// `branch.<name>.remote` names a remote that is no longer configured.
         case upstreamRemoteMissing(remote: String, branch: String)
+        /// Two or more configured remotes are prefixes of the upstream string
+        /// and nothing available distinguishes them.
+        case ambiguousUpstream(upstream: String, branch: String)
 
         public var message: String {
             switch self {
@@ -33,6 +36,8 @@ public enum PushCapability: Equatable {
                 return "Can't push: the current branch is unavailable. Refresh the repository, then check out or create a branch."
             case .upstreamRemoteMissing(let remote, let branch):
                 return "Can't push: \(branch) tracks “\(remote)”, which is no longer a configured remote. Add it back, or set a new upstream for this branch."
+            case .ambiguousUpstream(let upstream, let branch):
+                return "Can't push: “\(upstream)” matches more than one configured remote, so GitEnough can't tell which ref \(branch) tracks. Rename one of the remotes, or set the upstream again to disambiguate."
             }
         }
     }
@@ -55,6 +60,23 @@ public enum PushCapability: Equatable {
         guard let head = status.head else { return .unavailable(.noCurrentBranch) }
         guard let fallback = remotes.first(where: { $0.name == "origin" }) ?? remotes.first else {
             return .unavailable(.noRemotes)
+        }
+        // Refuse a guess before making one. With `origin` and `origin/features`
+        // both configured, "origin/features/x" is two well-formed readings; the
+        // local branch name settles it when it happens to match one of them, and
+        // when it matches neither, nothing does.
+        //
+        // Resolving anyway is the same mistake `upstreamRemoteMissing` exists to
+        // prevent, and worse here: the result is a `.push`, which *enables force
+        // push* — so one confirmation could `--force-with-lease` a ref on a
+        // remote the user never chose. "Only git knows" is an argument for
+        // refusing, not for picking the longer prefix.
+        if let upstream = status.upstream {
+            let candidates = Remote.splitCandidates(upstream: upstream, among: remotes)
+            if candidates.count > 1,
+               !candidates.contains(where: { Remote.branchHalf(of: upstream, under: $0) == head }) {
+                return .unavailable(.ambiguousUpstream(upstream: upstream, branch: head))
+            }
         }
         if let upstream = Remote.split(upstream: status.upstream, among: remotes,
                                        localBranch: head) {
@@ -88,11 +110,20 @@ public enum PushCapability: Equatable {
         return true
     }
 
-    /// Only a branch that already has an upstream has anything to overwrite.
-    public var allowsForcePush: Bool {
+    /// True when this is a push to an existing upstream — so an ahead count is
+    /// measured against something real and can be shown.
+    public var tracksAnUpstream: Bool {
         if case .push = self { return true }
         return false
     }
+
+    /// Only a branch that already has an upstream has anything to overwrite.
+    ///
+    /// Identical to `tracksAnUpstream` today, and deliberately a separate name:
+    /// one asks "is there a remote branch to count against", the other "is there
+    /// remote history to destroy". A reader gating a *label* on `allowsForcePush`
+    /// has to stop and work out whether that was meant.
+    public var allowsForcePush: Bool { tracksAnUpstream }
 
     public var label: String {
         if case .publish = self { return "Publish" }

@@ -843,18 +843,7 @@ final class GitIntegrationTests: XCTestCase {
     /// bare `git push --force-with-lease` force-updates *every* branch that
     /// exists on both sides, while the confirmation dialog names exactly one.
     func testForcePushRewritesOnlyTheNamedBranch() throws {
-        let remoteURL = try makeBareRemote()
-        try run(["config", "push.default", "matching"])
-
-        // Two branches published to the remote, then both diverged locally.
-        try client.push(remote: "origin", localBranch: "main", remoteBranch: "main",
-                        setUpstream: true)
-        try run(["checkout", "-b", "topic"])
-        try write("topic\n", to: "t.txt")
-        try client.stage(paths: ["t.txt"])
-        try client.commit(message: "Topic")
-        try client.push(remote: "origin", localBranch: "topic", remoteBranch: "topic",
-                        setUpstream: true)
+        let remoteURL = try matchingRemoteWithMainAndTopic()
 
         try run(["checkout", "main"])
         try write("rewritten main\n", to: "a.txt")
@@ -879,24 +868,12 @@ final class GitIntegrationTests: XCTestCase {
                        "a branch the user did not select must not be force-updated")
     }
 
-    /// `push.default = nothing` makes a bare `git push` fail with "You didn't
-    /// specify any refspecs to push". An explicit refspec is immune.
     /// The lease-free half of the `matching` hazard. `push.default = matching`
     /// makes a bare `git push` publish *every* branch that exists on both sides,
     /// not just the one named — the same surprise the force-push test guards
     /// against, minus the lease. Verified against git 2.43.
     func testPlainPushUnderMatchingMovesOnlyTheNamedBranch() throws {
-        let remoteURL = try makeBareRemote()
-        try run(["config", "push.default", "matching"])
-        try client.push(remote: "origin", localBranch: "main", remoteBranch: "main",
-                        setUpstream: true)
-
-        try run(["checkout", "-b", "topic"])
-        try write("topic\n", to: "t.txt")
-        try client.stage(paths: ["t.txt"])
-        try client.commit(message: "Topic")
-        try client.push(remote: "origin", localBranch: "topic", remoteBranch: "topic",
-                        setUpstream: true)
+        let remoteURL = try matchingRemoteWithMainAndTopic()
 
         // Give main a commit the remote doesn't have: under `matching`, a bare
         // push of topic would fast-forward this one along with it.
@@ -921,6 +898,8 @@ final class GitIntegrationTests: XCTestCase {
                        "and the named one must actually move")
     }
 
+    /// `push.default = nothing` makes a bare `git push` fail with "You didn't
+    /// specify any refspecs to push". An explicit refspec is immune.
     func testPushWorksUnderPushDefaultNothing() throws {
         let remoteURL = try makeBareRemote()
         try run(["config", "push.default", "nothing"])
@@ -956,6 +935,14 @@ final class GitIntegrationTests: XCTestCase {
         guard case .push(let remote, let local, let remoteBranch) = capability else {
             return XCTFail("expected a push capability, got \(capability)")
         }
+        // Assert the resolution itself, not only its downstream effect. Without
+        // this, a regression to the same-named branch fails at the tail of the
+        // test with "the configured upstream is what moves" — true, but it
+        // points at the assertion rather than at the step that went wrong.
+        XCTAssertEqual(remote, "origin")
+        XCTAssertEqual(local, "sidecar")
+        XCTAssertEqual(remoteBranch, "main",
+                       "the target is the configured upstream, not the same-named branch")
         try client.push(remote: remote, localBranch: local, remoteBranch: remoteBranch,
                         setUpstream: false)
 
@@ -968,6 +955,24 @@ final class GitIntegrationTests: XCTestCase {
     }
 
     /// A bare repository registered as a remote, cleaned up with the test.
+    /// A fresh bare remote with `main` and `topic` published to it, and
+    /// `push.default = matching` in effect. Shared by the two tests that guard
+    /// the `matching` hazard, so the scenario cannot drift between them and
+    /// quietly weaken one of the guards. Leaves `topic` checked out.
+    private func matchingRemoteWithMainAndTopic() throws -> URL {
+        let remoteURL = try makeBareRemote()
+        try run(["config", "push.default", "matching"])
+        try client.push(remote: "origin", localBranch: "main", remoteBranch: "main",
+                        setUpstream: true)
+        try run(["checkout", "-b", "topic"])
+        try write("topic\n", to: "t.txt")
+        try client.stage(paths: ["t.txt"])
+        try client.commit(message: "Topic")
+        try client.push(remote: "origin", localBranch: "topic", remoteBranch: "topic",
+                        setUpstream: true)
+        return remoteURL
+    }
+
     private func makeBareRemote(named name: String = "origin") throws -> URL {
         let remoteURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("GitEnoughTests-remote-\(UUID().uuidString)")

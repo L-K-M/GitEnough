@@ -464,17 +464,24 @@ public final class GitClient {
             setUpstream: setUpstream, forceWithLease: forceWithLease))
     }
 
-    /// Runs an argv built by `pushArguments`/`forcePushArguments`, so a caller
+    /// Runs a command built by `pushArguments`/`forcePushArguments`, so a caller
     /// that has already resolved the exact command (the force-push confirmation
     /// shows it to the user first) runs that command rather than rebuilding it.
-    public func push(_ arguments: [String]) throws {
-        // The contract in the doc comment, made real at zero release cost. This
-        // is the one place the codebase accepts raw argv, and the whole point of
-        // routing everything through `pushArguments`/`forcePushArguments` is
-        // that no caller gets to add `--force` or drop the refspec.
-        assert(arguments.first == "push",
-               "push(_:) takes an argv from pushArguments()/forcePushArguments()")
-        try runChecked(["-C", worktree.path] + arguments, in: nil)
+    public func push(_ command: PushCommand) throws {
+        try runChecked(["-C", worktree.path] + command.arguments, in: nil)
+    }
+
+    /// A push argv that came from `pushArguments`/`forcePushArguments`.
+    ///
+    /// The point is the `fileprivate` initializer: there is no way to build one
+    /// from raw `[String]`, so no caller can add `--force` or drop the refspec
+    /// on the way to `push(_:)`. An `assert` was the first attempt and does not
+    /// hold — it compiles out of release builds, which are the ones users run,
+    /// and inspecting `arguments.first` would have let `["push", "--force", …]`
+    /// straight through anyway. The type makes the contract structural.
+    public struct PushCommand: Equatable {
+        public let arguments: [String]
+        fileprivate init(_ arguments: [String]) { self.arguments = arguments }
     }
 
     /// The argv `push` runs, without the repo-scoping `-C` pair. Pure, so the
@@ -483,7 +490,7 @@ public final class GitClient {
     /// drift apart.
     public static func pushArguments(remote: String, localBranch: String, remoteBranch: String,
                                      setUpstream: Bool,
-                                     forceWithLease: Bool = false) -> [String] {
+                                     forceWithLease: Bool = false) -> PushCommand {
         var args = ["push"]
         if forceWithLease { args.append("--force-with-lease") }
         if setUpstream { args.append("-u") }
@@ -494,7 +501,7 @@ public final class GitClient {
         args.append("--")
         args.append(remote)
         args.append("refs/heads/\(localBranch):refs/heads/\(remoteBranch)")
-        return args
+        return PushCommand(args)
     }
 
     /// The argv a force push runs. One definition so the confirmation dialog and
@@ -502,7 +509,7 @@ public final class GitClient {
     /// otherwise adding, say, `--force-if-includes` would change what runs
     /// without changing what the user was shown.
     public static func forcePushArguments(remote: String, localBranch: String,
-                                          remoteBranch: String) -> [String] {
+                                          remoteBranch: String) -> PushCommand {
         pushArguments(remote: remote, localBranch: localBranch,
                       remoteBranch: remoteBranch, setUpstream: false,
                       forceWithLease: true)
