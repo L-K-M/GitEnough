@@ -671,44 +671,45 @@ public final class RepoViewModel: ObservableObject, Identifiable {
             // A broader existing pattern (*.log, build/) already covers it.
             guard !client.isIgnored(path: change.path) else { return }
             let url = client.worktree.appendingPathComponent(".gitignore")
-            // Only a genuinely missing file maps to empty: a *read* failure
-            // (e.g. non-UTF-8 bytes) must throw rather than let the write
-            // below clobber the existing file with a single line.
-            let fileExists = FileManager.default.fileExists(atPath: url.path)
-            let existing = fileExists
-                ? try String(contentsOf: url, encoding: .utf8)
-                : ""
+            guard FileManager.default.fileExists(atPath: url.path) else {
+                // No file yet, so the addition is the whole rule.
+                try GitIgnore.appendedBytes(change.path, to: "")
+                    .write(to: url, options: .atomic)
+                return
+            }
+            // One handle across the read *and* the append, rather than reading
+            // the file and then reopening it to write. The separator decision
+            // and the duplicate check both come from these bytes, and an
+            // external editor appending between a separate read and write would
+            // make the separator stale and glue the new rule onto the previous
+            // line — the same damage this function fixes for the CR case.
+            //
+            // Appending through the open file also keeps what an atomic replace
+            // would lose: the symlink is followed rather than broken, and
+            // permissions and ownership survive.
+            //
+            // This narrows the window rather than closing it — nothing here
+            // holds an advisory lock, so a writer landing between `readToEnd`
+            // and `seekToEnd` is still possible. Closing it properly needs
+            // `flock`, which .gitignore does not warrant.
+            let handle = try FileHandle(forUpdatingTo: url)
+            // Closed on every exit: a throwing read, seek or write (disk full,
+            // permissions revoked mid-flight) would otherwise leak the
+            // descriptor for the life of the process.
+            defer { try? handle.close() }
+            // Only a genuinely empty file maps to "": non-UTF-8 bytes must
+            // throw rather than let the append below treat the file as blank
+            // and write a rule that reads as the continuation of a real one.
+            let bytes = try handle.readToEnd() ?? Data()
+            guard let existing = String(data: bytes, encoding: .utf8) else {
+                throw CocoaError(.fileReadInapplicableStringEncoding)
+            }
             // The bytes to add, computed once in `GitIgnore` — see
             // `appendedBytes` for why this must not be a Character-count slice.
-            //
-            // Both the separator decision and the duplicate check come from
-            // `existing`, read before the handle is opened. An external editor
-            // appending to .gitignore in that window would make the separator
-            // stale and glue the new rule onto the previous line — the same
-            // shape of damage this function fixes for the CR case. Not closed
-            // here: GitEnough's own writes are serialized on the repo queue, and
-            // re-deriving the separator from the file's live last byte would
-            // still leave the duplicate check reading a stale snapshot. Closing
-            // it properly means holding the file open across both, which is a
-            // change to this function's shape rather than a line.
             let addition = GitIgnore.appendedBytes(change.path, to: existing)
             guard !addition.isEmpty else { return }
-            if fileExists {
-                // Append through the existing file (following symlinks, and
-                // preserving permissions/ownership) rather than replacing it
-                // atomically. `appending` only ever appends, so these bytes are
-                // exactly the difference.
-                let handle = try FileHandle(forWritingTo: url)
-                // Closed on every exit: a throwing seek or write (disk full,
-                // permissions revoked mid-flight) would otherwise leak the
-                // descriptor for the life of the process.
-                defer { try? handle.close() }
-                try handle.seekToEnd()
-                try handle.write(contentsOf: addition)
-            } else {
-                // `existing` is empty here, so the addition is the whole file.
-                try addition.write(to: url, options: .atomic)
-            }
+            try handle.seekToEnd()
+            try handle.write(contentsOf: addition)
         }
     }
 

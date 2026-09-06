@@ -887,28 +887,7 @@ final class GitIntegrationTests: XCTestCase {
     func testACorruptHeadRefFailsInsteadOfStagingDeletions() throws {
         try write("changed\n", to: "a.txt")
         try client.stage(paths: ["a.txt"])
-        // Derived, not assumed: corrupting a ref that isn't HEAD's would leave
-        // HEAD resolving fine, `restore --staged` succeeding, and this test
-        // failing with "unstage didn't throw" — which points nowhere near the
-        // real cause.
-        let branch = try GitShell.shared.runChecked(
-            ["-C", repoURL.path, "symbolic-ref", "--short", "HEAD"], in: nil).stdout
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let headRef = repoURL.appendingPathComponent(".git/refs/heads/\(branch)")
-        // Hermetic by construction rather than by luck: setUp builds a fresh
-        // repository per test today, so nothing inherits this corruption — but
-        // that is a property of the fixture, not of this test, and a shared
-        // fixture would make every later test fail for an unrelated reason.
-        let originalHead = try GitShell.shared.runChecked(
-            ["-C", repoURL.path, "rev-parse", "HEAD"], in: nil).stdout
-        defer { try? originalHead.write(to: headRef, atomically: true, encoding: .utf8) }
-        try "not a sha\n".write(to: headRef, atomically: true, encoding: .utf8)
-
-        // Precondition, so a future fixture change fails here with its own
-        // message rather than downstream with a misleading one.
-        XCTAssertNotEqual(try GitShell.shared.run(
-            ["-C", repoURL.path, "rev-parse", "--verify", "--quiet", "HEAD"], in: nil).exitCode, 0,
-            "precondition: HEAD must no longer resolve after corrupting \(branch)")
+        try corruptHeadRef()
 
         XCTAssertThrowsError(try client.unstage(paths: ["a.txt"]),
                              "a corrupt HEAD must surface, not fall through to rm --cached")
@@ -919,6 +898,64 @@ final class GitIntegrationTests: XCTestCase {
             ["-C", repoURL.path, "ls-files", "--", "a.txt"], in: nil).stdout
         XCTAssertTrue(indexed.contains("a.txt"),
                       "the file must still be in the index, not removed from it")
+    }
+
+    /// Points HEAD's branch ref at garbage, restoring it when the test ends.
+    ///
+    /// Derived, not assumed: corrupting a ref that isn't HEAD's would leave HEAD
+    /// resolving fine and the call under test succeeding, so the test would fail
+    /// with "it didn't throw" — which points nowhere near the real cause.
+    ///
+    /// Hermetic by construction rather than by luck: `setUp` builds a fresh
+    /// repository per test today, so nothing inherits this corruption — but that
+    /// is a property of the fixture, not of the tests, and a shared fixture would
+    /// make every later test fail for an unrelated reason. `addTeardownBlock`
+    /// rather than `defer` so the restore also runs when an assertion in the
+    /// caller throws before its scope ends.
+    private func corruptHeadRef() throws {
+        let branch = try GitShell.shared.runChecked(
+            ["-C", repoURL.path, "symbolic-ref", "--short", "HEAD"], in: nil).stdout
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let headRef = repoURL.appendingPathComponent(".git/refs/heads/\(branch)")
+        let originalHead = try GitShell.shared.runChecked(
+            ["-C", repoURL.path, "rev-parse", "HEAD"], in: nil).stdout
+        addTeardownBlock {
+            try? originalHead.write(to: headRef, atomically: true, encoding: .utf8)
+        }
+        try "not a sha\n".write(to: headRef, atomically: true, encoding: .utf8)
+
+        // Precondition, so a future fixture change fails here with its own
+        // message rather than downstream with a misleading one.
+        XCTAssertNotEqual(try GitShell.shared.run(
+            ["-C", repoURL.path, "rev-parse", "--verify", "--quiet", "HEAD"], in: nil).exitCode, 0,
+            "precondition: HEAD must no longer resolve after corrupting \(branch)")
+    }
+
+    /// `discard` shares `isUnbornHEAD()` with `unstage`, so it is pinned too —
+    /// but it does **not** behave the same way, and the difference is the point.
+    ///
+    /// Verified against git 2.43: with `refs/heads/<branch>` pointing at garbage,
+    /// `git restore --staged` fails (which is what makes `unstage`'s guard load-
+    /// bearing) while `git reset -q HEAD --` *succeeds*, falling back to the
+    /// empty tree exactly as it does on a genuinely unborn HEAD. So `discard`
+    /// does not throw here; it degrades to an unstage.
+    ///
+    /// What this test protects is the thing that actually matters: **nothing is
+    /// destroyed**. The worktree file keeps the user's content, and discard on a
+    /// broken repository can only cost the staging, never the work.
+    func testDiscardOnACorruptHeadRefUnstagesRatherThanDestroying() throws {
+        try write("changed\n", to: "a.txt")
+        try client.stage(paths: ["a.txt"])
+        try corruptHeadRef()
+
+        XCTAssertNoThrow(try client.discard(paths: ["a.txt"]),
+                         "reset against an unresolvable HEAD succeeds; see the note above")
+
+        let file = repoURL.appendingPathComponent("a.txt")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.path),
+                      "the worktree file must survive a discard on a broken repository")
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "changed\n",
+                       "and keep the user's content — the checkout step must not run")
     }
 
     /// The case the blanket catch was written for still works: on an unborn
