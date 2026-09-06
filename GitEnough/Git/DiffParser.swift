@@ -49,6 +49,12 @@ public enum DiffParser {
         // painted them as file headers — grey, in the pane whose only job is
         // showing what changed. File headers only ever appear *outside* a hunk.
         var inHunk = false
+        // How many marker columns the current hunk's body lines carry. A normal
+        // diff has one; a combined diff (`git diff` on a conflicted path, a
+        // merge under `show -m`) opens with `@@@` and carries one column *per
+        // parent*. Derived from the `@` run rather than assumed, so a three-way
+        // `@@@@` works too.
+        var markerColumns = 1
         var rawLines = diff.components(separatedBy: "\n")
         // Git's output always ends in a newline, so the split leaves a phantom
         // empty final component. Drop exactly that one — an empty line *inside*
@@ -63,24 +69,35 @@ public enum DiffParser {
             count += 1
             let kind: DiffLine.Kind
             if rawLine.hasPrefix("@@") {
-                // Also matches a combined diff's "@@@".
                 inHunk = true
+                // "@@" → 1 column, "@@@" → 2, and so on: one per parent.
+                markerColumns = max(1, rawLine.prefix(while: { $0 == "@" }).count - 1)
                 kind = .hunk
-            } else if inHunk, let marker = rawLine.first {
-                // Every line git emits inside a hunk carries one of these
-                // markers. Anything else is the next file's header, so the hunk
+            } else if inHunk, rawLine.hasPrefix("\\") {
+                kind = .meta                     // "\ No newline at end of file"
+            } else if inHunk, !rawLine.isEmpty {
+                // Every line git emits inside a hunk carries a marker in each
+                // column. Anything else is the next file's header, so the hunk
                 // has ended and the line falls through to the header rules.
-                switch marker {
-                case "+": kind = .addition
-                case "-": kind = .deletion
-                case " ": kind = .context
-                case "\\": kind = .meta          // "\ No newline at end of file"
-                default:
+                //
+                // A combined diff's columns are read together: ` +OURS` is an
+                // *addition* relative to the second parent even though its first
+                // column is a space. Classifying on `rawLine.first` alone called
+                // that a context line — i.e. told the user, mid-conflict, that
+                // their own side's new line was unchanged.
+                let columns = rawLine.prefix(markerColumns)
+                if columns.contains(where: { $0 == "+" }) {
+                    kind = .addition
+                } else if columns.contains(where: { $0 == "-" }) {
+                    kind = .deletion
+                } else if columns.allSatisfy({ $0 == " " }) {
+                    kind = .context
+                } else {
                     // In git's output the only thing that can appear here is the
-                    // next file's section, which always opens with `diff --git`
-                    // or `index`. A plain `diff -u` patch without those
-                    // separators would need the `@@` line counts to find the
-                    // boundary; every producer feeding this parser is git
+                    // next file's section, which always opens with `diff --git`,
+                    // `diff --cc` or `index`. A plain `diff -u` patch without
+                    // those separators would need the `@@` line counts to find
+                    // the boundary; every producer feeding this parser is git
                     // (`diff`, `diff --no-index`, `show`), so it does not.
                     inHunk = false
                     kind = Self.classifyOutsideHunk(rawLine)
@@ -106,7 +123,12 @@ public enum DiffParser {
     /// line — where the hunk state cannot help — from reading a deleted `--`
     /// comment as a header.
     private static func classifyOutsideHunk(_ rawLine: String) -> DiffLine.Kind {
-        if rawLine.hasPrefix("diff --git") || rawLine.hasPrefix("index ")
+        // `diff --cc` (and the older `diff --combined`) open a *combined* diff,
+        // which is what `git diff` emits for a conflicted path. Without them the
+        // boundary line renders as hunk content in the one state — mid-merge —
+        // where the diff pane is doing the most work.
+        if rawLine.hasPrefix("diff --git") || rawLine.hasPrefix("diff --cc")
+            || rawLine.hasPrefix("diff --combined") || rawLine.hasPrefix("index ")
             || rawLine.hasPrefix("--- ") || rawLine.hasPrefix("+++ ")
             || rawLine.hasPrefix("old mode") || rawLine.hasPrefix("new mode")
             || rawLine.hasPrefix("similarity index") || rawLine.hasPrefix("dissimilarity index")

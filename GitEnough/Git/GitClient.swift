@@ -276,14 +276,24 @@ public final class GitClient {
     ///
     /// The security half of that tradeoff, stated so it is a decision rather
     /// than an omission: a textconv filter is an **arbitrary executable named by
-    /// the repository being viewed**, so rendering a diff in a repo that
-    /// arrived with a hostile `.git/config` runs it. GitEnough is not a sandbox
-    /// and does not claim to be one — it shells out to the user's own git, which
-    /// runs that repository's hooks on commit, checkout and merge regardless, a
-    /// strictly larger hole than this one. "Opening an untrusted working copy is
-    /// safe" is therefore not a property this app has, and suppressing textconv
-    /// alone would not give it one while costing every legitimate binary-format
-    /// diff. Making it true is its own piece of work, tracked in ANALYSIS.md.
+    /// the repository being viewed**, so rendering a diff in a repo that arrived
+    /// with a hostile `.git/config` runs it.
+    ///
+    /// Note the asymmetry, because it is easy to get backwards: git also runs
+    /// that repository's *hooks*, but only when the user commits, checks out or
+    /// merges — a deliberate action. **textconv runs on render.** Measured
+    /// against git 2.43: one `git diff --no-color --no-ext-diff -- <path>`, with
+    /// no hooks present and no mutating command, executed the filter twice (once
+    /// per side). `--no-ext-diff` does not suppress it; it is a different
+    /// mechanism. So for someone who merely opens a hostile clone and looks at
+    /// it, textconv is the *first* repo-named executable reached, not a small
+    /// addition to a larger existing hole.
+    ///
+    /// Keeping it is still the right call — suppressing it costs every
+    /// legitimate binary-format diff and would not make opening an untrusted
+    /// working copy safe, which is not a property this app has. But that is a
+    /// reason to do the trust work, not to treat this as minor. Tracked as
+    /// `o-L14` in ANALYSIS.md.
     private static let patchReadFlags = ["--no-color", "--no-ext-diff"]
 
     /// Unified diff for one worktree/index path.

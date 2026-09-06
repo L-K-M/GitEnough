@@ -908,6 +908,15 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertFalse(try client.diff(path: "a.txt", staged: true)
             .contains("EXTERNAL-TOOL-OUTPUT"))
 
+        // Plain `git diff <path>` is the invocation diff.external hijacks most
+        // readily, so pin it too. The worktree has to diverge from the index
+        // first: after staging they are identical, and an empty diff never
+        // invokes the driver — the assertion would pass for the wrong reason.
+        try write("changed again\n", to: "a.txt")
+        let unstaged = try client.diff(path: "a.txt", staged: false)
+        XCTAssertTrue(unstaged.contains("@@"), "precondition: a non-empty diff")
+        XCTAssertFalse(unstaged.contains("EXTERNAL-TOOL-OUTPUT"))
+
         // git does not apply the driver to these two, but they pass the flag
         // for consistency — assert they still return what they always did.
         XCTAssertTrue(try client.stagedDiffStat().contains("a.txt"))

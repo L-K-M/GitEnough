@@ -108,7 +108,7 @@ diff --git a/k8s.yaml b/k8s.yaml
 index 1234567..89abcde 100644
 --- a/k8s.yaml
 +++ b/k8s.yaml
-@@ -1,6 +1,6 @@
+@@ -1,5 +1,4 @@
  kind: Service
 ----
 --- a comment removed by SQL
@@ -187,8 +187,8 @@ Binary files a/img.png and b/img.png differ
         XCTAssertEqual(lines.map(\.text), ["@@ -1 +1 @@", "-a", "+b"])
 
         // An empty line inside the body is still content and must survive.
-        let withBlank = DiffParser.parse("@@ -1,2 +1,2 @@\n a\n\n b\n")
-        XCTAssertEqual(withBlank.map(\.text), ["@@ -1,2 +1,2 @@", " a", "", " b"])
+        let withBlank = DiffParser.parse("@@ -1,3 +1,3 @@\n a\n\n b\n")
+        XCTAssertEqual(withBlank.map(\.text), ["@@ -1,3 +1,3 @@", " a", "", " b"])
         XCTAssertEqual(withBlank[2].kind, .context)
     }
 
@@ -206,6 +206,69 @@ dissimilarity index 96%
 
     /// A fragment with no `@@` — the hunk state cannot help, so the header
     /// patterns have to be precise enough on their own.
+    /// `git diff` on a conflicted path emits a **combined** diff: `diff --cc`,
+    /// `@@@` hunks, and one marker column per parent. Captured verbatim from
+    /// git 2.43 on a two-branch content conflict.
+    ///
+    /// Two things were wrong before. The `diff --cc` line fell through every
+    /// header prefix and rendered as hunk content, and — worse — a line like
+    /// ` +OURS`, whose *second* column marks it as added, was classified from
+    /// its first column alone and came out as unchanged context. Mid-merge,
+    /// that told the user their own side's new line wasn't a change.
+    func testACombinedDiffReadsBothMarkerColumns() {
+        let diff = """
+diff --cc a.txt
+index daf31e1,594dc4f..0000000
+--- a/a.txt
++++ b/a.txt
+@@@ -1,3 -1,3 +1,7 @@@
+  one
+++<<<<<<< HEAD
+ +OURS
+++=======
++ THEIRS
+++>>>>>>> other
+  three
+"""
+        let kinds = DiffParser.parse(diff).map(\.kind)
+        XCTAssertEqual(kinds, [
+            .fileHeader,   // diff --cc a.txt
+            .fileHeader,   // index …
+            .fileHeader,   // --- a/a.txt
+            .fileHeader,   // +++ b/a.txt
+            .hunk,         // @@@ … @@@
+            .context,      // "  one"
+            .addition,     // "++<<<<<<< HEAD"
+            .addition,     // " +OURS"      ← second column
+            .addition,     // "++======="
+            .addition,     // "+ THEIRS"    ← first column
+            .addition,     // "++>>>>>>> other"
+            .context,      // "  three"
+        ])
+    }
+
+    /// The next file's `diff --git` closes an open hunk, so its `--- `/`+++ `
+    /// lines are headers again rather than content.
+    func testASecondFileClosesTheFirstFilesHunk() {
+        let diff = """
+@@ -1 +1 @@
+-a
++b
+diff --git a/g b/g
+index 0000000..1111111 100644
+--- a/g
++++ b/g
+@@ -1 +1 @@
+-x
++y
+"""
+        XCTAssertEqual(DiffParser.parse(diff).map(\.kind), [
+            .hunk, .deletion, .addition,
+            .fileHeader, .fileHeader, .fileHeader, .fileHeader,
+            .hunk, .deletion, .addition,
+        ])
+    }
+
     func testAFragmentWithoutAHunkHeaderStillColoursItsChanges() {
         let lines = DiffParser.parse("----\n+++i;\n-- sql\n")
         XCTAssertEqual(lines[0].kind, .deletion)
