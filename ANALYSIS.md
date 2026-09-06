@@ -490,7 +490,7 @@ should refuse and say the repository's HEAD is broken rather than degrade
 silently. Same family as **o-L3** and **C1**: absence and failure must not be the
 same value.
 
-### o-L14 · Opening an untrusted working copy runs code from it — M · *threat model, not a single bug*
+### o-L14 · Opening an untrusted working copy runs code from it — M · **decided: fix by trust, not by flag**
 
 Raised on PR #98 about `diff.<driver>.textconv`, which is an **arbitrary
 executable named by the repository being viewed** — so rendering a diff in a repo
@@ -529,6 +529,32 @@ first, then implement it whole.
 
 Compare `git`'s own `safe.directory` and VS Code's Workspace Trust: the useful
 part is the *prompt on first contact*, not the flag.
+
+**Decision (2026-09-06, repository owner).** Raised three times during PR #98's
+review, which pushed for shipping `--no-textconv` as a deny-by-default interim
+mitigation. Declined in favour of doing this properly: textconv stays enabled, so
+binary-format diffs keep working, and the exposure closes when the trust prompt
+above lands. That makes this entry the *mitigation*, not a nice-to-have — treat
+its priority accordingly rather than as a general-hardening item.
+
+### o-G3 · Publish ignores `remote.pushDefault` and `branch.<name>.pushRemote` — S
+
+Raised on PR #96. `PushCapability.resolve` picks the publish destination with
+"`origin` if it exists, else whichever remote git lists first". That matches
+git's *implicit* default but not its *configured* one: git consults
+`branch.<name>.pushRemote`, then `remote.pushDefault`, before falling back.
+
+So a user who has deliberately set `remote.pushDefault = fork` gets their branch
+published to `origin` — **and** `branch.<name>.remote` rewritten to point there,
+since publish passes `-u`. Same class as the two `resolve` defects PR #96 fixed:
+the app deciding a destination the user already specified.
+
+**Fix:** read `branch.<name>.pushRemote` then `remote.pushDefault` (one
+`git config --get` each, or fold them into the existing branch `for-each-ref`)
+and prefer them over the name heuristic. Thread the value into `resolve` the way
+`remotes` already is, keeping the heuristic as the last fallback. **Test:** a
+configured `remote.pushDefault` beats `origin`; `branch.<name>.pushRemote` beats
+both.
 
 ### o-L15 · `GitError.exitCode = -1` is an unnamed sentinel used fourteen ways — S
 
