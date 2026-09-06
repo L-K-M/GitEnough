@@ -134,17 +134,13 @@ struct RepoDetailView: View {
                         // read whatever the capability says at *tap* time,
                         // which is exactly the value the comparison exists to
                         // catch changing.
-                        // `.disabled` is evaluated when the menu renders; a
-                        // refresh landing between that and the tap can still
-                        // leave this nil, and then the dialog would open with no
-                        // command and a confirm button that silently does
-                        // nothing — the worst place in the app for a no-op.
-                        // Not a bare `return`: `.disabled` is evaluated when
-                        // the menu renders, so a refresh landing between that
-                        // and the tap can still reach here — and a destructive
-                        // button that does nothing at all hides the very state
-                        // change (the upstream moved) the user needs to know
-                        // about. Say what happened instead.
+                        //
+                        // Switched rather than guarded, and never a bare
+                        // `return`: `.disabled` is evaluated when the menu
+                        // renders, so a refresh landing between that and the
+                        // tap can still find no command — and a destructive
+                        // button that does nothing at all hides the state
+                        // change behind it. Say what happened instead.
                         switch viewModel.forcePushResolution {
                         case .command(let command):
                             pendingForcePush = command
