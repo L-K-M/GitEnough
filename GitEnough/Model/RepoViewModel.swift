@@ -680,6 +680,17 @@ public final class RepoViewModel: ObservableObject, Identifiable {
                 : ""
             // The bytes to add, computed once in `GitIgnore` — see
             // `appendedBytes` for why this must not be a Character-count slice.
+            //
+            // Both the separator decision and the duplicate check come from
+            // `existing`, read before the handle is opened. An external editor
+            // appending to .gitignore in that window would make the separator
+            // stale and glue the new rule onto the previous line — the same
+            // shape of damage this function fixes for the CR case. Not closed
+            // here: GitEnough's own writes are serialized on the repo queue, and
+            // re-deriving the separator from the file's live last byte would
+            // still leave the duplicate check reading a stale snapshot. Closing
+            // it properly means holding the file open across both, which is a
+            // change to this function's shape rather than a line.
             let addition = GitIgnore.appendedBytes(change.path, to: existing)
             guard !addition.isEmpty else { return }
             if fileExists {

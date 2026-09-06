@@ -895,6 +895,13 @@ final class GitIntegrationTests: XCTestCase {
             ["-C", repoURL.path, "symbolic-ref", "--short", "HEAD"], in: nil).stdout
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let headRef = repoURL.appendingPathComponent(".git/refs/heads/\(branch)")
+        // Hermetic by construction rather than by luck: setUp builds a fresh
+        // repository per test today, so nothing inherits this corruption — but
+        // that is a property of the fixture, not of this test, and a shared
+        // fixture would make every later test fail for an unrelated reason.
+        let originalHead = try GitShell.shared.runChecked(
+            ["-C", repoURL.path, "rev-parse", "HEAD"], in: nil).stdout
+        defer { try? originalHead.write(to: headRef, atomically: true, encoding: .utf8) }
         try "not a sha\n".write(to: headRef, atomically: true, encoding: .utf8)
 
         // Precondition, so a future fixture change fails here with its own

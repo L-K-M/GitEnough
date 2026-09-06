@@ -394,6 +394,16 @@ public final class GitClient {
         guard !isUnbornHEAD() else {
             // Unborn HEAD: nothing to restore against, so unstaging is exactly
             // dropping the index entry. --cached never touches worktree files.
+            //
+            // `unstage`'s error behaviour is therefore state-dependent, on
+            // purpose: `--ignore-unmatch` makes this branch succeed quietly for
+            // a pathspec matching nothing, where `restore --staged` below fails
+            // the whole call. That asymmetry is the lesser evil. Without the
+            // flag, `git rm --cached` on an already-dropped path fails, and the
+            // only thing this branch could do about it is exactly what the
+            // blanket `try?` used to do — which is the bug this guard exists to
+            // undo. Leniency here costs a silent no-op; strictness there
+            // prevents a staged deletion.
             try runChecked(
                 ["-C", worktree.path, "rm", "--cached", "-r", "--ignore-unmatch", "--"]
                     + literalSpecs,
