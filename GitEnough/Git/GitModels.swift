@@ -118,12 +118,36 @@ public struct Remote: Identifiable, Hashable {
     /// have to agree, and the way they stop agreeing is a future edit to one
     /// tie-break that the other never hears about. Same rule, same file, one
     /// definition.
-    public static func isAmbiguous(upstream: String, among remotes: [Remote],
+    public static func isAmbiguous(upstream: String?, among remotes: [Remote],
                                    localBranch: String?) -> Bool {
+        // Optional to match `split`, `splitCandidates` and `preferred`. When it
+        // was the only sibling demanding a non-optional, every caller holding
+        // the usual `branch.upstream: String?` had to invent its own answer for
+        // nil — which is how one definition becomes several.
+        guard let upstream else { return false }
+        let (candidates, tieBreakMatch) = readings(upstream: upstream, among: remotes,
+                                                   localBranch: localBranch)
+        return candidates.count > 1 && tieBreakMatch == nil
+    }
+
+    /// The candidate readings of `upstream`, and the one the local branch name
+    /// settles on — the single definition of the tie-break.
+    ///
+    /// `isAmbiguous` and `split` both need it and used to spell it separately.
+    /// The doc on `isAmbiguous` warned they had to agree and named drift as the
+    /// failure mode, which is an argument for one definition rather than a
+    /// comment asking two to stay in step. The invariant it makes structural:
+    /// `isAmbiguous` is true exactly when there are several readings and none
+    /// matches, and a successful tie-break leaves `isAmbiguous` false while
+    /// `remoteWasGuessed` stays true.
+    private static func readings(upstream: String, among remotes: [Remote],
+                                 localBranch: String?)
+        -> (candidates: [Remote], tieBreakMatch: Remote?) {
         let candidates = splitCandidates(upstream: upstream, among: remotes)
-        guard candidates.count > 1 else { return false }
-        guard let localBranch else { return true }
-        return !candidates.contains { branchHalf(of: upstream, under: $0) == localBranch }
+        let tieBreakMatch = localBranch.flatMap { branch in
+            candidates.first { branchHalf(of: upstream, under: $0) == branch }
+        }
+        return (candidates, tieBreakMatch)
     }
 
     /// The branch half of `upstream` under `remote`, or nil when that reading
@@ -172,11 +196,9 @@ public struct Remote: Identifiable, Hashable {
         // `Remote.branchHalf`, not a nested copy of it: the nested version
         // returned "" where the shared one returns nil, so the same rule had two
         // spellings that had to be kept in step by hand.
-        let matches = splitCandidates(upstream: upstream, among: remotes)
-        let matched = matches.first(where: { remote in
-            guard let localBranch else { return false }
-            return branchHalf(of: upstream, under: remote) == localBranch
-        }) ?? matches.max(by: { $0.name.count < $1.name.count })
+        let (matches, tieBreakMatch) = readings(upstream: upstream, among: remotes,
+                                                localBranch: localBranch)
+        let matched = tieBreakMatch ?? matches.max(by: { $0.name.count < $1.name.count })
         guard let matched, let branch = branchHalf(of: upstream, under: matched) else {
             return nil
         }

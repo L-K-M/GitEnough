@@ -390,8 +390,12 @@ public final class RepoViewModel: ObservableObject, Identifiable {
             // `.publish` means exactly one thing — no upstream at all.
             return .refused("Can't force push: this branch has no upstream on a configured remote to overwrite. Publish it first.")
         case .unavailable(let reason):
-            // Already names the real problem, including upstream-remote-is-gone.
-            return .refused(reason.message)
+            // Already names the real problem, including upstream-remote-is-gone
+            // — but in the wrong verb. Every reason opens "Can't push: …", so a
+            // user who chose Force Push and was refused read a sentence about a
+            // different action, while the two branches above carefully said
+            // "Can't force push". Same words, right verb.
+            return .refused(reason.forcePushMessage)
         }
     }
 

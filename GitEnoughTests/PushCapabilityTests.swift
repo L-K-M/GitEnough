@@ -37,6 +37,57 @@ final class PushCapabilityTests: XCTestCase {
         XCTAssertTrue(resolved.help.contains("detached"))
     }
 
+    /// The one half-read combination the other pins leave open: no branch name
+    /// yet, but the hash already says unborn.
+    ///
+    /// Raised as a case where the answer depends on which guard runs first. It
+    /// doesn't, and that is worth pinning too: `isDetached` requires
+    /// `headHash != "(initial)"`, so the two predicates are disjoint by
+    /// construction and no reordering of the guards can change this answer.
+    /// The test pins the outcome; the assertion message names what actually
+    /// guarantees it.
+    func testAnUnbornHashWithNoBranchNameIsStillUnborn() {
+        let halfRead = status(head: nil, headHash: "(initial)")
+        XCTAssertTrue(halfRead.isUnborn)
+        XCTAssertFalse(halfRead.isDetached,
+                       "isDetached excludes the unborn sentinel, so these two "
+                       + "cannot both be true and guard order is not load-bearing")
+        XCTAssertEqual(PushCapability.resolve(status: halfRead, remotes: [origin]),
+                       .unavailable(.unbornHead))
+    }
+
+    /// A branch tracking another *local* branch (`branch.<name>.remote = "."`)
+    /// gets an upstream with no remote half at all. Verified against git 2.43:
+    /// `git branch --track topic main` writes `remote = "."` and porcelain v2
+    /// emits `# branch.upstream main`. Reporting that as a vanished remote told
+    /// the user to add back something that never existed.
+    func testALocalTrackingUpstreamIsNotAVanishedRemote() {
+        let resolved = PushCapability.resolve(
+            status: status(head: "topic", upstream: "main"), remotes: [origin])
+        XCTAssertEqual(resolved,
+                       .unavailable(.localUpstream(upstream: "main", branch: "topic")))
+        XCTAssertFalse(resolved.allowsForcePush)
+        XCTAssertTrue(resolved.help.contains("local branch"),
+                      "the message must not send the user looking for a remote")
+    }
+
+    /// Every reason is phrased for Push, and Force Push re-phrases rather than
+    /// duplicating them — which only works while they all share the prefix.
+    func testEveryUnavailableReasonCarriesThePushPrefix() {
+        let reasons: [PushCapability.UnavailableReason] = [
+            .detachedHead, .unbornHead, .noRemotes, .noCurrentBranch,
+            .upstreamRemoteMissing(upstream: "origin/main", branch: "main"),
+            .ambiguousUpstream(upstream: "origin/features/x", branch: "trunk"),
+            .localUpstream(upstream: "main", branch: "topic"),
+        ]
+        for reason in reasons {
+            XCTAssertTrue(reason.message.hasPrefix("Can't push: "),
+                          "\(reason) must open with the shared prefix")
+            XCTAssertTrue(reason.forcePushMessage.hasPrefix("Can't force push: "),
+                          "\(reason) must re-phrase for the force-push action")
+        }
+    }
+
     /// A repository shape that cannot push is reported before any ref is
     /// chosen: `head` is nil on a freshly-created view model, before the first
     /// snapshot lands.
@@ -174,18 +225,40 @@ final class PushCapabilityTests: XCTestCase {
             ["push", "-u", "--", "work", "refs/heads/topic:refs/heads/topic"])
     }
 
+    /// Both flag shapes, hardcoded, on every host.
+    ///
+    /// These expectations used to be built from `GitClient.supportsForceIfIncludes`
+    /// — the same property the builder reads — which made them tautological. A
+    /// gate that regressed to `<= (2, 30)` would have flipped the argv and the
+    /// expectation together and stayed green on every machine, while the
+    /// protection that decides whether a teammate's commits survive was
+    /// silently off. Whichever git the runner has, only one branch was ever
+    /// exercised and the pre-2.30 shape was written down nowhere.
     func testForceWithLeasePrecedesTheRefspec() {
-        // `--force-if-includes` rides along on git 2.30+, so the expectation is
-        // built from the same gate the builder uses rather than hardcoded — the
-        // point of the test is flag *order* relative to the refspec.
-        let lease = GitClient.supportsForceIfIncludes
-            ? ["--force-with-lease", "--force-if-includes"]
-            : ["--force-with-lease"]
         XCTAssertEqual(
             GitClient.pushArguments(remote: "origin", localBranch: "main",
                                     remoteBranch: "main", setUpstream: false,
-                                    forceWithLease: true).arguments,
-            ["push"] + lease + ["--", "origin", "refs/heads/main:refs/heads/main"])
+                                    forceWithLease: true,
+                                    forceIfIncludes: true).arguments,
+            ["push", "--force-with-lease", "--force-if-includes",
+             "--", "origin", "refs/heads/main:refs/heads/main"])
+
+        XCTAssertEqual(
+            GitClient.pushArguments(remote: "origin", localBranch: "main",
+                                    remoteBranch: "main", setUpstream: false,
+                                    forceWithLease: true,
+                                    forceIfIncludes: false).arguments,
+            ["push", "--force-with-lease",
+             "--", "origin", "refs/heads/main:refs/heads/main"],
+            "an older git must get the lease alone, not an unknown option")
+    }
+
+    /// And the composition the gate actually performs, pinned independently of
+    /// the host's git: `testGitVersionParsing` covers `parseVersion` alone, so
+    /// without this the `>= (2, 30)` comparison itself was never asserted.
+    func testTheVersionGateComparison() {
+        XCTAssertEqual(GitClient.parseVersion("git version 2.29.2").map { $0 >= (2, 30) }, false)
+        XCTAssertEqual(GitClient.parseVersion("git version 2.30.0").map { $0 >= (2, 30) }, true)
     }
 
     /// `--force-with-lease` on its own compares against the remote-tracking
@@ -201,6 +274,14 @@ final class PushCapabilityTests: XCTestCase {
                                          remoteBranch: "main")
                 .arguments.contains("--force-if-includes"),
             "a lease that a background fetch can satisfy is not a lease")
+
+        // Forced off, so the pass-through is covered on any host rather than
+        // only where the probe happens to say yes.
+        XCTAssertFalse(
+            GitClient.forcePushArguments(remote: "origin", localBranch: "main",
+                                         remoteBranch: "main",
+                                         forceIfIncludes: false)
+                .arguments.contains("--force-if-includes"))
     }
 
     /// The gate is a version comparison on git's banner, so pin the shapes real

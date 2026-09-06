@@ -582,9 +582,17 @@ public final class GitClient {
     /// confirmation dialog can show the user the exact command rather than a
     /// description of it — and so the command shown and the command run cannot
     /// drift apart.
+    /// `forceIfIncludes` defaults to the probed capability, and exists as a
+    /// parameter so the tests can pin *both* flag shapes on any host. Deriving
+    /// the expectation from `supportsForceIfIncludes` — the same property the
+    /// builder reads — made those tests tautological: a gate that regressed to
+    /// `<= (2, 30)` would have flipped the argv and the assertion together, and
+    /// the suite would have stayed green on every machine while the protection
+    /// that decides whether a teammate's commits survive was silently off.
     public static func pushArguments(remote: String, localBranch: String, remoteBranch: String,
                                      setUpstream: Bool,
-                                     forceWithLease: Bool = false) -> PushCommand {
+                                     forceWithLease: Bool = false,
+                                     forceIfIncludes: Bool = supportsForceIfIncludes) -> PushCommand {
         var args = ["push"]
         if forceWithLease {
             args.append("--force-with-lease")
@@ -605,7 +613,7 @@ public final class GitClient {
             //
             // Gated because it needs git 2.30+; without the gate an older git
             // fails every force push with "unknown option".
-            if supportsForceIfIncludes { args.append("--force-if-includes") }
+            if forceIfIncludes { args.append("--force-if-includes") }
         }
         if setUpstream { args.append("-u") }
         // `--` ends option parsing. Qualifying the refspec covers the branch
@@ -624,11 +632,13 @@ public final class GitClient {
     /// That paid off immediately: `--force-if-includes` was added to
     /// `pushArguments` after this comment was written, and the dialog picked it
     /// up with no change here — which is exactly the drift this shape prevents.
-    public static func forcePushArguments(remote: String, localBranch: String,
-                                          remoteBranch: String) -> PushCommand {
+    public static func forcePushArguments(
+        remote: String, localBranch: String, remoteBranch: String,
+        forceIfIncludes: Bool = supportsForceIfIncludes
+    ) -> PushCommand {
         pushArguments(remote: remote, localBranch: localBranch,
                       remoteBranch: remoteBranch, setUpstream: false,
-                      forceWithLease: true)
+                      forceWithLease: true, forceIfIncludes: forceIfIncludes)
     }
 
     // MARK: - Branches

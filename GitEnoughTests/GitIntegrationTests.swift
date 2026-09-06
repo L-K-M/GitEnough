@@ -909,10 +909,11 @@ final class GitIntegrationTests: XCTestCase {
     /// specify any refspecs to push". An explicit refspec is immune.
     func testPushWorksUnderPushDefaultNothing() throws {
         let remoteURL = try makeBareRemote()
-        // Repo-local, on a worktree `setUpWithError` creates fresh per test,
-        // so there is nothing to unset — but say so, because a future move to
-        // a shared fixture would turn this into order-dependent leakage.
+        // Repo-local only while `setUpWithError` builds a fresh repository per
+        // test. A linked worktree shares its main repo's config, so restore the
+        // value rather than resting the isolation on a comment.
         try run(["config", "push.default", "nothing"])
+        addTeardownBlock { try? self.run(["config", "--unset", "push.default"]) }
 
         try client.push(remote: "origin", localBranch: "main", remoteBranch: "main",
                         setUpstream: true)
@@ -1065,8 +1066,12 @@ final class GitIntegrationTests: XCTestCase {
     /// quietly weaken one of the guards. Leaves `topic` checked out.
     private func matchingRemoteWithMainAndTopic() throws -> URL {
         let remoteURL = try makeBareRemote()
-        // Same as above: per-test worktree, so no teardown needed.
+        // Restored in teardown for the same reason as the `nothing` write: a
+        // shared or linked-worktree fixture would leak `matching` into every
+        // later test, and the leak would surface as order-dependent failures
+        // far from here rather than as anything pointing back at this line.
         try run(["config", "push.default", "matching"])
+        addTeardownBlock { try? self.run(["config", "--unset", "push.default"]) }
         try client.push(remote: "origin", localBranch: "main", remoteBranch: "main",
                         setUpstream: true)
         try run(["checkout", "-b", "topic"])
@@ -1109,6 +1114,12 @@ final class GitIntegrationTests: XCTestCase {
     /// The local-side mirror of `remoteRef`. The push tests compare one against
     /// the other constantly, and hand-rolling this at each site is how the two
     /// halves of the same comparison drift apart.
+    ///
+    /// `--verify` here means "resolves to exactly one object", not "is a fully
+    /// qualified ref": it still DWIMs short names, and these callers pass
+    /// `HEAD`, `main`, `topic`, `sidecar`. That is fine while no fixture has a
+    /// tag sharing a branch name — pass `refs/heads/…` if you need the stricter
+    /// reading, as every `remoteRef` caller already does.
     private func localRef(_ ref: String) throws -> String {
         try GitShell.shared.runChecked(["rev-parse", "--verify", ref], in: repoURL)
             .stdout.trimmingCharacters(in: .whitespacesAndNewlines)

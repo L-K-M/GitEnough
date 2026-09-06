@@ -212,7 +212,7 @@ struct RepoDetailView: View {
             }
             Button("Cancel", role: .cancel) { pendingForcePush = nil }
         } message: { command in
-            Text(Self.forcePushWarning)
+            Text(Self.forcePushWarning(for: command))
             // Monospaced, because the refspec is the one part of this dialog
             // the user has to actually read, and `local:remote` with its
             // colon is exactly what proportional type renders worst.
@@ -234,7 +234,7 @@ struct RepoDetailView: View {
         }
     }
 
-    /// Two literals, picked by what the installed git can actually enforce.
+    /// Two literals, picked by what the command about to run actually carries.
     ///
     /// The strong sentence is only true because `pushArguments` sends
     /// `--force-if-includes` alongside `--force-with-lease`. Measured against
@@ -260,8 +260,13 @@ struct RepoDetailView: View {
     /// concatenation, so `Text` takes the localizing initializer. A `String`
     /// constant here would silently make the app's most safety-critical
     /// sentence the only untranslated one on screen.
-    private static var forcePushWarning: LocalizedStringKey {
-        GitClient.supportsForceIfIncludes
+    private static func forcePushWarning(for command: GitClient.PushCommand) -> LocalizedStringKey {
+        // Keyed off the argv actually about to run, not off the capability the
+        // builder consulted. Those are two readings of one fact, and the
+        // monospaced line directly below this sentence shows the user the
+        // flags — so if they ever disagreed, the dialog would promise a
+        // protection its own command visibly does not carry.
+        command.arguments.contains("--force-if-includes")
             ? "This rewrites the remote branch to match your local history. It refuses if the remote has commits you haven't merged in — including ones GitEnough fetched for you in the background — so a teammate's new work can't be lost silently. Anyone who already pulled the old history will still have to recover."
             : "This rewrites the remote branch to match your local history. GitEnough can't confirm your git is 2.30 or newer, so it can only check that the remote still points where your last fetch left it: a teammate's commits that GitEnough has already fetched in the background will be overwritten without warning. Update git to 2.30 or newer — and make sure GitEnough can read its version — to be protected from that. Anyone who already pulled the old history will still have to recover."
     }

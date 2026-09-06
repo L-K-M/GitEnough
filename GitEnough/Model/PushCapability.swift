@@ -26,6 +26,25 @@ public enum PushCapability: Equatable {
         /// Two or more configured remotes are prefixes of the upstream string
         /// and nothing available distinguishes them.
         case ambiguousUpstream(upstream: String, branch: String)
+        /// `branch.<name>.remote = "."` — the branch tracks another *local*
+        /// branch, which git reports without a remote prefix (`main`, not
+        /// `origin/main`). No remote ever accounted for it, so saying one went
+        /// missing sends the user looking for something that never existed.
+        case localUpstream(upstream: String, branch: String)
+
+        /// The same reason, phrased for Force Push.
+        ///
+        /// Derived from `message` rather than written twice, so the two cannot
+        /// drift — and guarded rather than assumed, so a future case that
+        /// starts differently degrades to the plain sentence instead of losing
+        /// its first eleven characters. `PushCapabilityTests` pins that every
+        /// case carries the prefix, which is what keeps the guard from
+        /// silently becoming the normal path.
+        public var forcePushMessage: String {
+            let pushPrefix = "Can't push: "
+            guard message.hasPrefix(pushPrefix) else { return message }
+            return "Can't force push: " + String(message.dropFirst(pushPrefix.count))
+        }
 
         public var message: String {
             switch self {
@@ -41,6 +60,8 @@ public enum PushCapability: Equatable {
                 return "Can't push: \(branch) tracks “\(upstream)”, whose remote is no longer configured. Add it back, or set a new upstream for this branch."
             case .ambiguousUpstream(let upstream, let branch):
                 return "Can't push: “\(upstream)” matches more than one configured remote, so GitEnough can't tell which ref \(branch) tracks. Rename one of the remotes, or set the upstream again to disambiguate."
+            case .localUpstream(let upstream, let branch):
+                return "Can't push: \(branch) tracks the local branch “\(upstream)”, not a branch on a remote. Set an upstream on a remote first."
             }
         }
     }
@@ -109,6 +130,15 @@ public enum PushCapability: Equatable {
             // outcome for the wrong reason; say it deliberately instead.
             guard let match = Remote.split(upstream: upstream, among: remotes,
                                            localBranch: head) else {
+                // A slash-less upstream is `branch.<name>.remote = "."`, not a
+                // remote that vanished: git reports a local-tracking branch's
+                // upstream with no remote half at all. Verified against git
+                // 2.43 — `git branch --track topic main` writes `remote = "."`
+                // and porcelain v2 emits `# branch.upstream main`.
+                guard upstream.contains("/") else {
+                    return .unavailable(
+                        .localUpstream(upstream: upstream, branch: head))
+                }
                 return .unavailable(
                     .upstreamRemoteMissing(upstream: upstream, branch: head))
             }
@@ -158,9 +188,16 @@ public enum PushCapability: Equatable {
     /// history we are certain enough about to destroy". `.pushToGuessedRemote`
     /// answers yes to the first and no to the second — an ahead count against a
     /// guessed ref is a cosmetic error, a force push to one is not.
+    ///
+    /// Switched rather than `if case`, for the reason `forcePushResolution`
+    /// gives: a new capability must force a decision here rather than inherit
+    /// `false` from a fallthrough. This is the predicate that decides whether
+    /// remote history can be overwritten; silence is the wrong default for it.
     public var allowsForcePush: Bool {
-        if case .push = self { return true }
-        return false
+        switch self {
+        case .push: return true
+        case .pushToGuessedRemote, .publish, .unavailable: return false
+        }
     }
 
     public var label: String {
