@@ -37,13 +37,6 @@ final class PushCapabilityTests: XCTestCase {
         XCTAssertTrue(resolved.help.contains("detached"))
     }
 
-    func testNoRemotesIsReportedBeforeAnyRefIsChosen() {
-        let resolved = PushCapability.resolve(
-            status: status(head: "main", upstream: "origin/main"), remotes: [])
-        XCTAssertEqual(resolved, .unavailable(.noRemotes))
-        XCTAssertTrue(resolved.help.contains("no remotes"))
-    }
-
     /// A repository shape that cannot push is reported before any ref is
     /// chosen: `head` is nil on a freshly-created view model, before the first
     /// snapshot lands.
@@ -310,15 +303,25 @@ final class PushCapabilityTests: XCTestCase {
 
     /// An upstream with no remote left to account for it, in the most extreme
     /// form: every remote deleted. Its own reason, not the generic `.noRemotes`.
+    ///
+    /// This replaces `testNoRemotesIsReportedBeforeAnyRefIsChosen`, which fed
+    /// the same input and expected `.noRemotes`. Moving the `.noRemotes` guard
+    /// below the upstream block changed that answer deliberately, and leaving
+    /// both tests standing meant the suite asserted two things about one call.
     func testAnUpstreamWithNoRemotesAtAllStillNamesTheUpstream() {
+        let orphaned = PushCapability.resolve(
+            status: status(head: "main", upstream: "origin/main"), remotes: [])
         XCTAssertEqual(
-            PushCapability.resolve(status: status(head: "main", upstream: "origin/main"),
-                                   remotes: []),
+            orphaned,
             .unavailable(.upstreamRemoteMissing(upstream: "origin/main", branch: "main")))
-        // No upstream and no remotes is still just "no remotes".
-        XCTAssertEqual(
-            PushCapability.resolve(status: status(head: "main"), remotes: []),
-            .unavailable(.noRemotes))
+        XCTAssertTrue(orphaned.help.contains("origin/main"),
+                      "the user who most needs the specific guidance must get it")
+
+        // No upstream and no remotes is still just "no remotes" — the generic
+        // message is right when there is genuinely nothing more to say.
+        let bare = PushCapability.resolve(status: status(head: "main"), remotes: [])
+        XCTAssertEqual(bare, .unavailable(.noRemotes))
+        XCTAssertTrue(bare.help.contains("no remotes"))
     }
 
     /// One candidate remote is not ambiguous, however nested its name looks.
