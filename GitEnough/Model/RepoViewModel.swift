@@ -675,14 +675,14 @@ public final class RepoViewModel: ObservableObject, Identifiable {
             try RepoViewModel.requireRegularIgnoreFile(at: url)
             guard FileManager.default.fileExists(atPath: url.path) else {
                 // No file yet, so the addition is the whole rule.
-                let bytes = GitIgnore.appendedBytes(change.path, to: "")
-                // The same guard the append branch carries, and it throws for
-                // the same reason that one does. It cannot fire today — an empty
-                // file covers no rule — but `appendedBytes` now returns empty
-                // when its prefix invariant breaks, and returning quietly would
-                // write nothing, report success, and leave the path unignored on
+                // `nil` is the broken byte-prefix invariant, and empty is "the
+                // rule is already covered" — which cannot happen here, because
+                // an empty file covers nothing. Both are therefore defects on
+                // this branch, and both throw: returning quietly would write
+                // nothing, report success, and leave the path unignored on
                 // every retry, with no banner to explain it.
-                guard !bytes.isEmpty else {
+                guard let bytes = GitIgnore.appendedBytes(change.path, to: ""),
+                      !bytes.isEmpty else {
                     throw GitError(
                         message: "Couldn't build a .gitignore rule for “\(change.path)”. Nothing was written.",
                         exitCode: -1)
@@ -734,15 +734,19 @@ public final class RepoViewModel: ObservableObject, Identifiable {
             }
             // The bytes to add, computed once in `GitIgnore` — see
             // `appendedBytes` for why this must not be a Character-count slice.
-            let addition = GitIgnore.appendedBytes(change.path, to: existing)
-            // Quiet, unlike the creation branch above, and the asymmetry is
-            // real rather than an oversight. There, `existing` is `""`, so no
-            // rule can already be covered and empty can only be the broken
-            // invariant. Here it has a second reading: the literal rule is
-            // already in the file while `isIgnored` still said no — which
-            // happens when a later negation (`!build`) overrides it. Appending
+            // `nil` is the broken invariant and throws, as on the creation
+            // branch. Empty is a different thing here and returns quietly: the
+            // literal rule is already in the file while `isIgnored` still said
+            // no, which is what a later negation (`!build`) produces. Appending
             // a duplicate would not help that user, and throwing would report a
-            // defect where the file is merely arguing with itself.
+            // defect where the file is merely arguing with itself. The two used
+            // to be one value, which is how the invariant break came to be
+            // reported as success on this path.
+            guard let addition = GitIgnore.appendedBytes(change.path, to: existing) else {
+                throw GitError(
+                    message: "Couldn't build a .gitignore rule for “\(change.path)”. Nothing was written.",
+                    exitCode: -1)
+            }
             guard !addition.isEmpty else { return }
             try handle.seekToEnd()
             try handle.write(contentsOf: addition)

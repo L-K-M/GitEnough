@@ -82,12 +82,14 @@ final class GitIgnoreTests: XCTestCase {
     /// ending in a bare CR is the case that makes a Character-count slice wrong:
     /// the separator "\n" merges with it into one CRLF grapheme cluster, so the
     /// result has one Character *fewer* at the join than `existing` does.
-    func testAppendedBytesSurviveACarriageReturnAtTheJoin() {
+    func testAppendedBytesSurviveACarriageReturnAtTheJoin() throws {
         let existing = "a\r"
         XCTAssertEqual(GitIgnore.appending("x", to: existing), "a\r\n/x\n")
-        XCTAssertEqual(
-            String(decoding: GitIgnore.appendedBytes("x", to: existing), as: UTF8.self),
-            "\n/x\n")
+        // `nil` here would mean the byte-prefix invariant broke, which is a
+        // different failure from the wrong bytes — so unwrap explicitly rather
+        // than letting a default paper over it.
+        let bytes = try XCTUnwrap(GitIgnore.appendedBytes("x", to: existing))
+        XCTAssertEqual(String(decoding: bytes, as: UTF8.self), "\n/x\n")
 
         // The slice that must not be used: it swallows the separator, gluing the
         // new rule onto the previous one — "a\r/x\n" — which destroys the "a"
@@ -99,7 +101,7 @@ final class GitIgnoreTests: XCTestCase {
 
     /// The general invariant the caller depends on: appending these bytes to the
     /// existing bytes reproduces `appending` exactly, for any input.
-    func testAppendedBytesReconstructTheWholeFile() {
+    func testAppendedBytesReconstructTheWholeFile() throws {
         let cases: [(String, String)] = [
             ("", "notes.md"),
             ("build/\n", "dist/"),
@@ -114,21 +116,28 @@ final class GitIgnoreTests: XCTestCase {
         ]
         for (existing, path) in cases {
             let expected = GitIgnore.appending(path, to: existing)
-            let rebuilt = Data(existing.utf8) + GitIgnore.appendedBytes(path, to: existing)
+            let addition = try XCTUnwrap(
+                GitIgnore.appendedBytes(path, to: existing),
+                "the byte-prefix invariant broke for \(existing.debugDescription)")
+            let rebuilt = Data(existing.utf8) + addition
             XCTAssertEqual(String(decoding: rebuilt, as: UTF8.self), expected,
                            "existing: \(existing.debugDescription), path: \(path)")
         }
     }
 
-    func testAppendedBytesAreEmptyWhenTheRuleAlreadyExists() {
-        XCTAssertTrue(GitIgnore.appendedBytes("build", to: "/build\n").isEmpty)
+    /// Empty, and specifically *not* `nil`: "already covered" is an ordinary
+    /// outcome the callers must be able to tell apart from a broken invariant.
+    func testAppendedBytesAreEmptyWhenTheRuleAlreadyExists() throws {
+        let bytes = try XCTUnwrap(GitIgnore.appendedBytes("build", to: "/build\n"),
+                                  "already-covered must be empty, never nil")
+        XCTAssertTrue(bytes.isEmpty)
     }
 
     /// The returned `Data` is zero-based, not a slice of the whole updated file.
     /// Appending works either way, but a slice indexed as `addition[0]` traps —
     /// the API shouldn't hand callers that edge.
-    func testAppendedBytesAreZeroBased() {
-        let addition = GitIgnore.appendedBytes("x", to: "build/\ndist/\n")
+    func testAppendedBytesAreZeroBased() throws {
+        let addition = try XCTUnwrap(GitIgnore.appendedBytes("x", to: "build/\ndist/\n"))
         XCTAssertFalse(addition.isEmpty, "precondition: there is something to append")
         XCTAssertEqual(addition.startIndex, 0)
         XCTAssertEqual(addition.first, UInt8(ascii: "/"))
@@ -188,10 +197,20 @@ final class GitIgnoreTests: XCTestCase {
                                                 withIntermediateDirectories: true)
         addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
 
+        // The target exists, so the link is *live* — which routes through the
+        // append branch. Without this the link dangles and lands in the creation
+        // branch, which the absolute-link test above already covers, leaving the
+        // shape this test is named for unexercised: a refusal that keyed off a
+        // failed `fileExists` would have passed while writing through a live
+        // in-repo link.
+        let target = directory.appendingPathComponent("shared-ignore")
+        try "existing\n".write(to: target, atomically: true, encoding: .utf8)
         let link = directory.appendingPathComponent(".gitignore")
         try FileManager.default.createSymbolicLink(atPath: link.path,
                                                    withDestinationPath: "shared-ignore")
         assertRefusesSymlinkedIgnore(at: link, stillPointingTo: "shared-ignore")
+        XCTAssertEqual(try String(contentsOf: target, encoding: .utf8), "existing\n",
+                       "the in-repo target must be untouched too")
     }
 
     /// A regular file is not refused — the check must not reject the only shape
@@ -263,13 +282,15 @@ final class GitIgnoreTests: XCTestCase {
         try FileManager.default.createSymbolicLink(atPath: link.path,
                                                    withDestinationPath: "shared-ignore")
         XCTAssertTrue(try untracked().contains("shared.txt"),
-                      "git must NOT apply a rule from a symlinked .gitignore")
+                      "shared.txt must still be listed as untracked — git must NOT "
+                      + "apply a rule from a symlinked .gitignore")
 
         try FileManager.default.removeItem(at: link)
         try "shared.txt\n".write(to: link, atomically: true, encoding: .utf8)
         XCTAssertFalse(try untracked().contains("shared.txt"),
-                       "the same rule in a regular file is applied — so the symlink, "
-                       + "not the rule, is what git rejects")
+                       "shared.txt is now absent from status, so the same rule in a "
+                       + "regular file is applied — the symlink, not the rule, is "
+                       + "what git rejects")
     }
 
     /// Asserts the refusal fired *and* left the link exactly as it was.

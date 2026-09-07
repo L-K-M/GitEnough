@@ -1095,8 +1095,9 @@ final class GitIntegrationTests: XCTestCase {
     /// unborn-HEAD answer takes the fallback, so a selection the index has moved
     /// on from cannot be answered by dropping index entries.
     func testUnstageRethrowsWhenTheFallbackDoesNotApply() throws {
-        XCTAssertThrowsError(try client.unstage(paths: ["no-such-file.txt"])) { error in
-            XCTAssertTrue("\(error)".contains("no-such-file.txt"),
+        let missing = "no-such-file.txt"
+        XCTAssertThrowsError(try client.unstage(paths: [missing])) { error in
+            XCTAssertTrue("\(error)".contains(missing),
                           "the error must name what could not be unstaged, got \(error)")
         }
     }

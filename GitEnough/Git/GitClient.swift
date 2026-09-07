@@ -504,7 +504,10 @@ public final class GitClient {
         return shown + " and \(paths.count - limit) more"
     }
 
-    /// True when HEAD resolves to a commit.
+    /// True when `rev-parse --verify --quiet HEAD` succeeds — that is, HEAD
+    /// resolves to a well-formed object *name*. It does not prove the object is
+    /// in the database; the matrix in `isUnbornHEAD()` turns on exactly that
+    /// distinction, so this doc used to contradict the analysis below it.
     private func hasHEAD() -> Bool {
         (try? runReadChecked(
             ["-C", worktree.path, "rev-parse", "--verify", "--quiet", "HEAD"], in: nil)) != nil
@@ -568,10 +571,13 @@ public final class GitClient {
     /// landing after `isUnbornHEAD()` answers but before the `rm` still meets
     /// now-tracked files, and the same is true between `hasHEAD()` and
     /// `symbolic-ref` inside that check. Only an index lock closes it. A
-    /// compensating "if `hasHEAD()` now, restore" was considered and left out:
-    /// it throws for paths the racing commit did not include (`restore --staged`
-    /// refuses a path absent from HEAD, measured), which is exactly the case
-    /// where the `rm` did no harm — so the repair fails loudest where it is
+    /// compensating "if `hasHEAD()` now, restore" was considered and left out,
+    /// because by then the `rm` has already dropped the index entries and
+    /// `restore --staged` refuses a pathspec absent from the **index** —
+    /// measured: a staged-new file still in the index but absent from HEAD
+    /// restores fine (exit 0), while one removed from the index fails with
+    /// "did not match any file(s) known to git". So the repair throws in the
+    /// case where the `rm` did no harm, which is loudest exactly where it is
     /// least needed.
     ///
     /// Safe because the failure is unambiguous rather than silent. Measured on
@@ -651,26 +657,43 @@ public final class GitClient {
         // make these commands also match unrelated tracked files (abc.txt…).
         // Force literal matching everywhere a real path is passed.
         let literalSpecs = Self.literalPathspecs(paths)
-        // Check for an unborn HEAD explicitly instead of inferring it from a
-        // `reset` failure — see `isUnbornHEAD()` for why the inferring version
-        // turns an unrelated error into staged deletions.
+        // Reset first, ask afterwards — the same ordering `unstage` uses, and
+        // for the same reason. Guarding on `isUnbornHEAD()` *before* the
+        // mutation is a check-then-act across two processes: a first commit
+        // landing in the window sends now-tracked files to `rm --cached -f`,
+        // staging their deletion. That is the bug this whole change exists to
+        // prevent, and leaving it on the sibling path while fixing `unstage`
+        // was fixing half of a symmetric pair.
         //
-        // `-f` below makes this guard load-bearing rather than merely correct:
-        // a bare `rev-parse --verify --quiet HEAD` probe fails for a *corrupt*
-        // HEAD exactly as it does for an unborn one, and a corrupt repository
-        // reaching `rm --cached -f` would have its matched paths silently
-        // staged-deleted. `isUnbornHEAD()` is two commands for precisely this
-        // reason and separates the two, and the corrupt-ref integration test
-        // pins that it does.
-        guard !isUnbornHEAD() else {
+        // Safe because the reset either works or fails loudly. On git 2.43
+        // `reset -q HEAD -- <path>` *succeeds* on an unborn HEAD (measured:
+        // exit 0, index emptied), falling back to the empty tree — so on
+        // current git the fallback below is unreachable and the ordering costs
+        // nothing. It stays for older git, where the reset fails and the
+        // unborn answer is what justifies index surgery.
+        do {
+            try runChecked(
+                ["-C", worktree.path, "reset", "-q", "HEAD", "--"] + literalSpecs, in: nil)
+        } catch {
+            // Only a *positive* unborn answer takes the fallback; a corrupt
+            // HEAD rethrows. `-f` makes that distinction load-bearing rather
+            // than merely correct — a bare `rev-parse --verify --quiet HEAD`
+            // probe fails for a corrupt HEAD exactly as it does for an unborn
+            // one, and a corrupt repository reaching `rm --cached -f` would
+            // have its matched paths silently staged-deleted. `isUnbornHEAD()`
+            // is two commands for precisely this reason, and the corrupt-ref
+            // integration test pins that it separates them.
+            guard isUnbornHEAD() else { throw error }
             // Unborn HEAD: there is nothing to restore against, so discarding
-            // can only unstage. --cached never touches worktree files; -f just
-            // bypasses the safety check that refuses staged-new files that
-            // were edited after staging.
-            try runChecked(["-C", worktree.path, "rm", "--cached", "-r", "-f", "--ignore-unmatch", "--"] + literalSpecs, in: nil)
+            // can only unstage. `--cached` never touches worktree files; `-f`
+            // bypasses the check that refuses staged-new files edited after
+            // staging. Nothing is tracked, so there is no checkout step to run.
+            try runChecked(
+                ["-C", worktree.path, "rm", "--cached", "-r", "-f", "--ignore-unmatch", "--"]
+                    + literalSpecs,
+                in: nil)
             return
         }
-        try runChecked(["-C", worktree.path, "reset", "-q", "HEAD", "--"] + literalSpecs, in: nil)
         let tracked = try runReadChecked(
             ["-C", worktree.path, "ls-files", "-z", "--"] + literalSpecs,
             in: nil).stdout

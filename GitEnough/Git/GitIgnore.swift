@@ -55,16 +55,15 @@ public enum GitIgnore {
     /// The bytes a caller must append to a file currently holding `existing` in
     /// order to reach `appending(path, to: existing)`.
     ///
-    /// Empty in **two** cases: the rule is already present in `existing`, or the
-    /// byte-prefix invariant below failed. The return value cannot tell them
-    /// apart, so each caller decides from its own context — and they decide
-    /// differently, which is why this is written down.
+    /// `nil` means the byte-prefix invariant below failed — an internal defect,
+    /// never a normal outcome. Empty (non-nil) means the rule is already present
+    /// in `existing`, which is ordinary.
     ///
-    /// The append path passes a real file's contents, where "already present" is
-    /// an ordinary outcome, and returns quietly. The creation path passes `""`,
-    /// where no rule can already be covered — so empty there can only be the
-    /// invariant, and it throws rather than writing a zero-byte `.gitignore` and
-    /// reporting success.
+    /// The distinction used to be carried by empty `Data` alone, and each caller
+    /// disambiguated from context. That worked, and it made the wrong thing the
+    /// easy thing: `if bytes.isEmpty { return }` reads as "nothing to do" and
+    /// silently swallows a broken invariant, writing no rule while reporting
+    /// success. The type says it now, so a caller cannot forget to ask.
     ///
     /// This exists so the difference is taken in **bytes**, once, here. Deriving
     /// it from Character counts is wrong in a way that is easy to miss and
@@ -80,7 +79,7 @@ public enum GitIgnore {
     /// whose `startIndex` is the byte count of `existing`. Both are equally
     /// correct to append, but a slice traps on `addition[0]` — no caller does
     /// that today, and none should have to know not to.
-    public static func appendedBytes(_ path: String, to existing: String) -> Data {
+    public static func appendedBytes(_ path: String, to existing: String) -> Data? {
         let updated = appending(path, to: existing)
         // The whole function is a byte offset into `updated`, and that offset
         // is only meaningful while `appending` returns `existing` unchanged at
@@ -91,15 +90,11 @@ public enum GitIgnore {
         //
         // Loud in debug, harmless in release. `precondition` was the other
         // candidate, and it trades one user's corrupted `.gitignore` for every
-        // user's crashed app; returning nothing instead makes a broken
-        // invariant a no-op rather than a corrupted file.
-        //
-        // How visible that no-op is differs by caller, and the earlier wording
-        // here ("a visible no-op the user can retry") was only true of one of
-        // them: the creation path throws, so it reaches the banner, while the
-        // append path reads empty as "already present" and reports success. In
-        // release, only that first path tells anyone. The debug `assert` is
-        // what catches it on the second.
+        // user's crashed app; returning `nil` instead makes a broken invariant a
+        // refusal rather than a corrupted file. Both callers now throw on it,
+        // so it reaches the banner in release too — which the earlier ambiguous
+        // empty `Data` could not promise: the append path read that as "already
+        // present" and reported success.
         //
         // One evaluation, used by both. Written twice, the debug trap and the
         // release guard could come to check different predicates — and the
@@ -107,7 +102,7 @@ public enum GitIgnore {
         let isPrefix = updated.utf8.starts(with: existing.utf8)
         assert(isPrefix,
                "appending(_:to:) must return `existing` as a byte-for-byte prefix")
-        guard isPrefix else { return Data() }
+        guard isPrefix else { return nil }
         return Data(updated.utf8.dropFirst(existing.utf8.count))
     }
 
