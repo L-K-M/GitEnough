@@ -170,6 +170,13 @@ final class GitShellEnvironmentTests: XCTestCase {
     /// `dup2` a file of sentinel bytes over fd 0 for the duration of one call
     /// and restore it afterwards. With the fix, the child hashes empty; without
     /// it, the child hashes the sentinel and both assertions below fail.
+    ///
+    /// fd 0 is process-global, so this is only safe while nothing else in the
+    /// same process spawns a child during that window. XCTest runs the methods
+    /// of a class serially, and Xcode's test parallelism forks separate runner
+    /// *processes* — separate descriptor tables, so that is safe too. What is
+    /// not is in-process parallelism: swift-testing parallelizes by default, so
+    /// a port of this file has to mark this test serialized.
     func testAnInheritedStdinWouldBeVisible() throws {
         guard GitShell.shared.isAvailable else {
             throw XCTSkip("git is not installed on this machine")
@@ -207,6 +214,11 @@ final class GitShellEnvironmentTests: XCTestCase {
         }
 
         let result = try GitShell.shared.run(["hash-object", "--stdin"], in: nil)
+        // First, because every other failure here reads as a stdin failure: git
+        // failing to launch leaves `stdout` empty, `hashed` becomes "", and the
+        // assertion below fails saying the child read the parent's fd 0 — which
+        // it did not, having never run at all.
+        XCTAssertEqual(result.exitCode, 0, result.stderr)
         let hashed = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         XCTAssertEqual(hashed, emptyHash,
                        "the child must read /dev/null, not the parent's fd 0")
