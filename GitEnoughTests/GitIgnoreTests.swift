@@ -137,18 +137,16 @@ final class GitIgnoreTests: XCTestCase {
     /// Pins the platform behaviour `RepoViewModel.ignore` relies on for its
     /// "no .gitignore yet" branch.
     ///
-    /// `fileExists(atPath:)` **resolves** symlinks, so a `.gitignore` symlinked
-    /// to a target that doesn't exist yet reports false and lands in that
-    /// branch, where writing to the link itself would replace it with a regular
-    /// file rather than creating what it points at.
+    /// A symlinked `.gitignore` is refused, in every shape, because git does
+    /// not read one. The four tests this replaces pinned the *opposite*
+    /// behaviour — resolving the whole chain and writing at its end — on a
+    /// premise `testGitIgnoresASymlinkedGitignoreEntirely` below shows is false.
     ///
-    /// The first attempt used `FileManager.createFile(atPath:contents:)`, on the
-    /// reasoning that `O_CREAT` follows a final symlink. `open(2)` does; that
-    /// `FileManager` method does not — it clobbered the link on **both**
-    /// platforms, and this test caught it with the same two failures on macOS
-    /// and Linux. Hence the explicit `destinationOfSymbolicLink` resolution,
-    /// which depends on no create-time symlink semantics at all.
-    func testCreatingThroughADanglingSymlinkWritesTheTargetNotTheLink() throws {
+    /// Both directions matter. A dangling link lands in the creation branch
+    /// (`fileExists` resolves symlinks, so it reports false); a live one lands
+    /// in the append branch, which follows the link through an open handle. The
+    /// check sits above both, so one assertion covers the pair.
+    func testASymlinkedGitignoreIsRefusedRatherThanWrittenThrough() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("GitEnough-symlink-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory,
@@ -156,32 +154,29 @@ final class GitIgnoreTests: XCTestCase {
         addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
 
         let link = directory.appendingPathComponent(".gitignore")
-        let target = directory.appendingPathComponent("shared-ignore")
-        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+        let outside = directory.appendingPathComponent("target-outside")
+
+        // Dangling: the creation branch's shape.
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: outside)
         XCTAssertFalse(FileManager.default.fileExists(atPath: link.path),
                        "precondition: fileExists resolves the link, so a dangling one is 'missing'")
+        assertRefusesSymlinkedIgnore(at: link, stillPointingTo: outside.path)
 
-        // The real resolution `RepoViewModel.ignore` uses, not a copy of it.
-        try GitIgnore.appendedBytes("build", to: "")
-            .write(to: try RepoViewModel.creationTarget(for: link), options: .atomic)
-
-        // Throws if .gitignore is no longer a symlink, which is the regression.
-        XCTAssertEqual(
-            try FileManager.default.destinationOfSymbolicLink(atPath: link.path),
-            target.path,
-            "the symlink must survive, not be replaced by a regular file")
-        XCTAssertEqual(try String(contentsOf: target, encoding: .utf8), "/build\n",
-                       "and the rule must land in its target")
+        // Live: the append branch's shape. Same link, target now real.
+        try "existing\n".write(to: outside, atomically: true, encoding: .utf8)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: link.path),
+                      "precondition: a live link reports as existing")
+        assertRefusesSymlinkedIgnore(at: link, stillPointingTo: outside.path)
+        XCTAssertEqual(try String(contentsOf: outside, encoding: .utf8), "existing\n",
+                       "the target must be untouched — this is the file a hostile "
+                       + "repo would have aimed at")
     }
 
-    /// Every other symlink test here creates its links with an *absolute*
-    /// destination, which is the shape least likely to catch a resolver bug.
-    /// On disk the common shape is relative — a dotfile manager's
-    /// `.gitignore -> shared-ignore` — and `destinationOfSymbolicLink` hands
-    /// back that raw string, so resolution has to rebase it on the link's own
-    /// directory rather than the process's working directory. A regression
-    /// there passes every absolute-destination test in this file.
-    func testCreatingThroughADanglingSymlinkWithARelativeDestination() throws {
+    /// A relative link to a sibling *inside* the repository is refused too. It
+    /// is the shape that reads most legitimate, and it is the one the old
+    /// chain-following code was written to serve — so if the refusal were going
+    /// to be too narrow anywhere, it would be here.
+    func testARelativeInRepoSymlinkIsRefusedToo() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("GitEnough-symlink-relative-\(UUID().uuidString)",
                                     isDirectory: true)
@@ -190,95 +185,90 @@ final class GitIgnoreTests: XCTestCase {
         addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
 
         let link = directory.appendingPathComponent(".gitignore")
-        let target = directory.appendingPathComponent("shared-ignore")
         try FileManager.default.createSymbolicLink(atPath: link.path,
                                                    withDestinationPath: "shared-ignore")
-
-        try GitIgnore.appendedBytes("build", to: "")
-            .write(to: try RepoViewModel.creationTarget(for: link), options: .atomic)
-
-        XCTAssertEqual(
-            try FileManager.default.destinationOfSymbolicLink(atPath: link.path),
-            "shared-ignore",
-            "the relative link must survive, still spelled relatively")
-        XCTAssertEqual(try String(contentsOf: target, encoding: .utf8), "/build\n",
-                       "and the rule lands beside the link, not beside the process")
+        assertRefusesSymlinkedIgnore(at: link, stillPointingTo: "shared-ignore")
     }
 
-    /// One hop is not enough. `.gitignore -> shared -> real`, with `real` still
-    /// missing, is the shape a shared ignore file behind a per-machine alias
-    /// takes — and resolving one level hands the atomic write `shared`, whose
-    /// rename replaces that intermediate link with a regular file while `real`
-    /// is never created.
-    ///
-    /// Measured on this exact chain before the fix: `shared` became a regular
-    /// file and `real` stayed missing, where the kernel's own `open(O_CREAT)`
-    /// through the chain creates `real` and leaves both links intact. Both
-    /// links surviving is the assertion that separates the two.
-    func testCreatingThroughAChainOfDanglingSymlinksWritesTheEndOfTheChain() throws {
+    /// A regular file is not refused — the check must not reject the only shape
+    /// that works.
+    func testARegularGitignoreIsNotRefused() throws {
         let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("GitEnough-symlink-chain-\(UUID().uuidString)",
-                                    isDirectory: true)
+            .appendingPathComponent("GitEnough-regular-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory,
                                                 withIntermediateDirectories: true)
         addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
 
-        let link = directory.appendingPathComponent(".gitignore")
-        let intermediate = directory.appendingPathComponent("shared-ignore")
-        let real = directory.appendingPathComponent("real-ignore")
-        try FileManager.default.createSymbolicLink(at: intermediate, withDestinationURL: real)
-        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: intermediate)
-
-        try GitIgnore.appendedBytes("build", to: "")
-            .write(to: try RepoViewModel.creationTarget(for: link), options: .atomic)
-
-        // Each throws if that link was replaced by a regular file — the
-        // intermediate one is what a single-hop resolution destroys.
-        XCTAssertEqual(
-            try FileManager.default.destinationOfSymbolicLink(atPath: link.path),
-            intermediate.path, "the outer link must survive")
-        XCTAssertEqual(
-            try FileManager.default.destinationOfSymbolicLink(atPath: intermediate.path),
-            real.path, "and so must the intermediate one")
-        XCTAssertEqual(try String(contentsOf: real, encoding: .utf8), "/build\n",
-                       "the rule lands at the end of the chain, not part-way along it")
+        let url = directory.appendingPathComponent(".gitignore")
+        XCTAssertNoThrow(try RepoViewModel.requireRegularIgnoreFile(at: url),
+                         "a missing .gitignore is the ordinary creation case")
+        try "build\n".write(to: url, atomically: true, encoding: .utf8)
+        XCTAssertNoThrow(try RepoViewModel.requireRegularIgnoreFile(at: url),
+                         "and an existing regular file is the ordinary append case")
     }
 
-    /// A cycle has no end of chain, so there is nothing to create — and the
-    /// answer has to be an error rather than a path.
-    ///
-    /// The first version of the chain fix returned the revisited path, on the
-    /// reasoning that the write would fail with `ELOOP`. `open(O_CREAT)` does
-    /// raise `ELOOP`, measured — but `Data.write(options: .atomic)` is a
-    /// rename, and rename replaces the final symlink instead of traversing it.
-    /// So returning the path destroyed the very link this code protects, by the
-    /// same mechanism the chain case documents.
-    func testASymlinkCycleThrowsRatherThanReturningTheLink() throws {
+    /// The measurement the refusal rests on: git does not read a symlinked
+    /// `.gitignore`, so writing through the link puts the rule where git never
+    /// looks. Asserted against real git rather than quoted in a comment,
+    /// because the whole design turns on it — and the previous design turned on
+    /// the opposite being true.
+    func testGitIgnoresASymlinkedGitignoreEntirely() throws {
+        guard GitShell.shared.isAvailable else {
+            throw XCTSkip("git is not installed")
+        }
         let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("GitEnough-symlink-cycle-\(UUID().uuidString)",
+            .appendingPathComponent("GitEnough-symlink-git-\(UUID().uuidString)",
                                     isDirectory: true)
         try FileManager.default.createDirectory(at: directory,
                                                 withIntermediateDirectories: true)
         addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        _ = try GitShell.shared.runChecked(["init", directory.path], in: nil)
 
-        let link = directory.appendingPathComponent(".gitignore")
-        let other = directory.appendingPathComponent("loop")
-        try FileManager.default.createSymbolicLink(at: other, withDestinationURL: link)
-        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: other)
+        try "shared.txt\n".write(to: directory.appendingPathComponent("shared-ignore"),
+                                 atomically: true, encoding: .utf8)
+        FileManager.default.createFile(
+            atPath: directory.appendingPathComponent("shared.txt").path, contents: Data())
 
-        XCTAssertThrowsError(try RepoViewModel.creationTarget(for: link)) { error in
-            // Not just "something threw": a sandbox EACCES or a future refactor
-            // failing for another reason would satisfy a bare assertion while
-            // the cycle went undetected.
-            XCTAssertTrue("\(error)".contains("loop of symbolic links"),
-                          "expected the cycle refusal, got \(error)")
+        func untracked() throws -> String {
+            try GitShell.shared.runChecked(
+                ["-C", directory.path, "status", "--porcelain"], in: nil).stdout
         }
 
-        // The link is still a link: nothing was written through it.
+        let link = directory.appendingPathComponent(".gitignore")
+        try FileManager.default.createSymbolicLink(atPath: link.path,
+                                                   withDestinationPath: "shared-ignore")
+        XCTAssertTrue(try untracked().contains("shared.txt"),
+                      "git must NOT apply a rule from a symlinked .gitignore")
+
+        try FileManager.default.removeItem(at: link)
+        try "shared.txt\n".write(to: link, atomically: true, encoding: .utf8)
+        XCTAssertFalse(try untracked().contains("shared.txt"),
+                       "the same rule in a regular file is applied — so the symlink, "
+                       + "not the rule, is what git rejects")
+    }
+
+    /// Asserts the refusal fired *and* left the link exactly as it was.
+    private func assertRefusesSymlinkedIgnore(
+        at link: URL, stillPointingTo destination: String,
+        file: StaticString = #filePath, line: UInt = #line
+    ) {
+        XCTAssertThrowsError(try RepoViewModel.requireRegularIgnoreFile(at: link),
+                             "a symlinked .gitignore must be refused",
+                             file: file, line: line) { error in
+            // Not just "something threw": a sandbox EACCES or a future refactor
+            // failing for another reason would satisfy a bare assertion while
+            // the symlink went unnoticed. Matched on the two terms rather than
+            // the whole sentence, so rewording the copy is not a red suite.
+            let description = "\(error)".lowercased()
+            XCTAssertTrue(description.contains("symbolic link") && description.contains("git"),
+                          "expected the symlink refusal, got \(error)",
+                          file: file, line: line)
+        }
         XCTAssertEqual(
-            try FileManager.default.destinationOfSymbolicLink(atPath: link.path),
-            other.path,
-            "a refused resolution must leave the cycle exactly as it found it")
+            try? FileManager.default.destinationOfSymbolicLink(atPath: link.path),
+            destination,
+            "a refusal must leave the link exactly as it found it",
+            file: file, line: line)
     }
 
     func testGeneratedRulesMatchLiteralNamesWithGit() throws {

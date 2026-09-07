@@ -53,8 +53,18 @@ public enum GitIgnore {
     }
 
     /// The bytes a caller must append to a file currently holding `existing` in
-    /// order to reach `appending(path, to: existing)`. Empty when the rule is
-    /// already covered.
+    /// order to reach `appending(path, to: existing)`.
+    ///
+    /// Empty in **two** cases: the rule is already present in `existing`, or the
+    /// byte-prefix invariant below failed. The return value cannot tell them
+    /// apart, so each caller decides from its own context — and they decide
+    /// differently, which is why this is written down.
+    ///
+    /// The append path passes a real file's contents, where "already present" is
+    /// an ordinary outcome, and returns quietly. The creation path passes `""`,
+    /// where no rule can already be covered — so empty there can only be the
+    /// invariant, and it throws rather than writing a zero-byte `.gitignore` and
+    /// reporting success.
     ///
     /// This exists so the difference is taken in **bytes**, once, here. Deriving
     /// it from Character counts is wrong in a way that is easy to miss and
@@ -84,9 +94,14 @@ public enum GitIgnore {
         // user's crashed app; returning nothing instead makes a broken
         // invariant show up as "the rule wasn't added" — a visible no-op the
         // user can retry, rather than a file they have to restore from git.
-        assert(updated.utf8.starts(with: existing.utf8),
+        //
+        // One evaluation, used by both. Written twice, the debug trap and the
+        // release guard could come to check different predicates — and the
+        // whole point of the pair is that they check the same one.
+        let isPrefix = updated.utf8.starts(with: existing.utf8)
+        assert(isPrefix,
                "appending(_:to:) must return `existing` as a byte-for-byte prefix")
-        guard updated.utf8.starts(with: existing.utf8) else { return Data() }
+        guard isPrefix else { return Data() }
         return Data(updated.utf8.dropFirst(existing.utf8.count))
     }
 

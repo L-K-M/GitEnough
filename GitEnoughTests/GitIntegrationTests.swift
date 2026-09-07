@@ -1022,9 +1022,12 @@ final class GitIntegrationTests: XCTestCase {
             .appendingPathComponent("GitEnoughTests-unborn-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: fresh, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: fresh) }
-        let unborn = GitClient(worktree: fresh)
         // No -b: this test never names the branch, only needs HEAD unborn.
+        // Initialised *before* the client is built: nothing in `GitClient.init`
+        // inspects the worktree today, but a client naming a repository that
+        // does not exist yet works only by that, and the ordering costs nothing.
         _ = try GitShell.shared.runChecked(["init", fresh.path], in: nil)
+        let unborn = GitClient(worktree: fresh)
         try "new\n".write(to: fresh.appendingPathComponent("new.txt"),
                           atomically: true, encoding: .utf8)
         try unborn.stage(paths: ["new.txt"])
@@ -1038,6 +1041,59 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(
             atPath: fresh.appendingPathComponent("new.txt").path),
             "unstaging must never remove the file from disk")
+    }
+
+    /// The shape that was broken: stage a file in a brand-new repository, keep
+    /// editing it, then unstage.
+    ///
+    /// `git rm --cached` refuses an entry whose content differs from *both* HEAD
+    /// and the worktree. On an unborn HEAD git diffs against the empty tree, so
+    /// every staged entry differs from HEAD and the check collapses to "refuse
+    /// if the file was edited after staging" — the ordinary flow, in the one
+    /// state this branch exists for. Measured on git 2.43:
+    ///
+    ///     error: the following file has staged content different from both the
+    ///     file and the HEAD: new.txt  (use -f to force removal)
+    ///
+    /// `--ignore-unmatch` does not bypass it; only `-f` does. The sibling
+    /// `discard` path has always passed `-f`, so this was an inconsistency
+    /// inside one file rather than a considered difference.
+    func testUnstageOnUnbornHeadWorksAfterTheFileIsEditedAgain() throws {
+        let fresh = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitEnoughTests-unborn-edited-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: fresh, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: fresh) }
+        _ = try GitShell.shared.runChecked(["init", fresh.path], in: nil)
+        let unborn = GitClient(worktree: fresh)
+
+        let file = fresh.appendingPathComponent("new.txt")
+        try "staged\n".write(to: file, atomically: true, encoding: .utf8)
+        try unborn.stage(paths: ["new.txt"])
+        // The edit that makes the index entry differ from the worktree too.
+        try "staged\nand edited after staging\n".write(to: file, atomically: true,
+                                                       encoding: .utf8)
+
+        try unborn.unstage(paths: ["new.txt"])
+
+        let status = try unborn.status()
+        XCTAssertTrue(status.staged.isEmpty, "got \(status.staged)")
+        XCTAssertEqual(status.unstaged.map(\.path), ["new.txt"])
+        // The later edit must survive: `--cached` drops the index entry and
+        // must never reach into the worktree, `-f` included.
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8),
+                       "staged\nand edited after staging\n",
+                       "unstaging must not roll the file back to what was staged")
+    }
+
+    /// A stale pathspec on a *born* HEAD throws rather than passing quietly to
+    /// the unborn branch. That asymmetry is the design: only a positive
+    /// unborn-HEAD answer takes the fallback, so a selection the index has moved
+    /// on from cannot be answered by dropping index entries.
+    func testUnstageRethrowsWhenTheFallbackDoesNotApply() throws {
+        XCTAssertThrowsError(try client.unstage(paths: ["no-such-file.txt"])) { error in
+            XCTAssertTrue("\(error)".contains("no-such-file.txt"),
+                          "the error must name what could not be unstaged, got \(error)")
+        }
     }
 
     // MARK: - External diff drivers

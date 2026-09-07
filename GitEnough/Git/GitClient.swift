@@ -456,30 +456,68 @@ public final class GitClient {
             ["-C", worktree.path, "symbolic-ref", "--quiet", "HEAD"], in: nil)) != nil
     }
 
+    /// Unstages `paths`, falling back to dropping the index entry only when
+    /// there is genuinely no HEAD to restore against.
+    ///
+    /// **Restore first, ask afterwards.** The obvious shape — check
+    /// `isUnbornHEAD()`, then branch — is a check-then-act across two
+    /// processes, and the window has teeth: a commit landing in it (another
+    /// terminal, an editor plugin, a hook) sends now-*tracked* files to
+    /// `rm --cached`, which stages deletions. That is precisely the bug this
+    /// function exists to prevent, arriving through the guard added to prevent
+    /// it. Attempting the restore first closes that direction — if a commit
+    /// lands, `restore --staged` simply succeeds and the `rm` branch is never
+    /// reached.
+    ///
+    /// Safe because the failure is unambiguous rather than silent. Measured on
+    /// git 2.43, `git restore --staged -- <path>` against an unborn HEAD exits
+    /// 128 with `fatal: could not resolve HEAD` and leaves the index untouched
+    /// — so it cannot quietly no-op its way past the branch that should have
+    /// run. It also drops a subprocess from every unstage on a normal repo,
+    /// where `isUnbornHEAD()` used to run `rev-parse` before each one.
+    ///
+    /// The fallback stays narrow on purpose: only a *positive* unborn-HEAD
+    /// answer takes it. Any other restore failure — most often a stale pathspec
+    /// from a selection the index has moved on from — is rethrown. Swallowing
+    /// those is the blanket `try?` this whole change removed, and a benign
+    /// error the user can read beats a silent no-op on a button they pressed.
     public func unstage(paths: [String]) throws {
         guard !paths.isEmpty else { return }
         let literalSpecs = Self.literalPathspecs(paths)
-        guard !isUnbornHEAD() else {
+        do {
+            try runChecked(
+                ["-C", worktree.path, "restore", "--staged", "--"] + literalSpecs, in: nil)
+        } catch {
+            guard isUnbornHEAD() else { throw error }
             // Unborn HEAD: nothing to restore against, so unstaging is exactly
-            // dropping the index entry. --cached never touches worktree files.
+            // dropping the index entry. `--cached` never touches worktree files.
             //
-            // `unstage`'s error behaviour is therefore state-dependent, on
-            // purpose: `--ignore-unmatch` makes this branch succeed quietly for
-            // a pathspec matching nothing, where `restore --staged` below fails
-            // the whole call. That asymmetry is the lesser evil. Without the
-            // flag, `git rm --cached` on an already-dropped path fails, and the
-            // only thing this branch could do about it is exactly what the
-            // blanket `try?` used to do — which is the bug this guard exists to
-            // undo. Leniency here costs a silent no-op; strictness there
+            // `-f` is not optional here, and `discard` below has always passed
+            // it. `git rm --cached` refuses an entry whose content differs from
+            // *both* HEAD and the worktree — and on an unborn HEAD git diffs
+            // against the empty tree, so every staged entry differs from HEAD
+            // and the check reduces to "refuse if the file was edited after
+            // staging". Measured on git 2.43 in a fresh repo:
+            //
+            //     $ echo a > f; git add f; echo b >> f
+            //     $ git rm --cached -r --ignore-unmatch -- f
+            //     error: the following file has staged content different from
+            //     both the file and the HEAD: f  (use -f to force removal)
+            //
+            // That is stage-a-file-and-keep-editing-it — the ordinary flow, in
+            // the one repository state this branch exists for. `--ignore-unmatch`
+            // does not bypass it; only `-f` does, and `-f` still touches nothing
+            // outside the index.
+            //
+            // `--ignore-unmatch` stays for a different case: a pathspec matching
+            // nothing succeeds quietly here where the restore above would have
+            // thrown. Leniency costs a silent no-op; strictness up there
             // prevents a staged deletion.
             try runChecked(
-                ["-C", worktree.path, "rm", "--cached", "-r", "--ignore-unmatch", "--"]
+                ["-C", worktree.path, "rm", "--cached", "-f", "-r", "--ignore-unmatch", "--"]
                     + literalSpecs,
                 in: nil)
-            return
         }
-        try runChecked(
-            ["-C", worktree.path, "restore", "--staged", "--"] + literalSpecs, in: nil)
     }
 
     /// Reverts tracked paths to their HEAD state — both the index and the

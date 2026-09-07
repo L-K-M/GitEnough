@@ -671,29 +671,23 @@ public final class RepoViewModel: ObservableObject, Identifiable {
             // A broader existing pattern (*.log, build/) already covers it.
             guard !client.isIgnored(path: change.path) else { return }
             let url = client.worktree.appendingPathComponent(".gitignore")
+            // Before either branch, because both would write *through* the link.
+            try RepoViewModel.requireRegularIgnoreFile(at: url)
             guard FileManager.default.fileExists(atPath: url.path) else {
                 // No file yet, so the addition is the whole rule.
-                //
-                // `fileExists` *resolves* symlinks, so a `.gitignore` symlinked
-                // to a target that doesn't exist yet lands here — and writing to
-                // `url` would replace the user's symlink with a regular file
-                // rather than creating what it points at. So resolve one level
-                // explicitly rather than expecting any create call to follow the
-                // link for us: `FileManager.createFile(atPath:contents:)` looks
-                // like it would — `O_CREAT` follows a final symlink — but it
-                // replaces the link on **both** platforms, measured, not assumed
-                // (`testCreatingThroughADanglingSymlinkWritesTheTargetNotTheLink`
-                // failed identically on macOS and Linux against that version).
-                let target = try RepoViewModel.creationTarget(for: url)
                 let bytes = GitIgnore.appendedBytes(change.path, to: "")
-                // The same guard the append branch carries. It cannot fire
-                // today — an empty file covers no rule — but `appendedBytes`
-                // now returns empty when its prefix invariant breaks, and
-                // without this the creation branch would write a zero-byte
-                // `.gitignore` and report success, leaving the path unignored
-                // on every retry.
-                guard !bytes.isEmpty else { return }
-                try bytes.write(to: target, options: .atomic)
+                // The same guard the append branch carries, and it throws for
+                // the same reason that one does. It cannot fire today — an empty
+                // file covers no rule — but `appendedBytes` now returns empty
+                // when its prefix invariant breaks, and returning quietly would
+                // write nothing, report success, and leave the path unignored on
+                // every retry, with no banner to explain it.
+                guard !bytes.isEmpty else {
+                    throw GitError(
+                        message: "Couldn't build a .gitignore rule for “\(change.path)”. Nothing was written.",
+                        exitCode: -1)
+                }
+                try bytes.write(to: url, options: .atomic)
                 return
             }
             // One handle across the read *and* the append, rather than reading
@@ -752,65 +746,48 @@ public final class RepoViewModel: ObservableObject, Identifiable {
         }
     }
 
-    /// Where to write when creating `url`: the end of its symlink chain if it is
-    /// a symlink, otherwise `url` itself. Relative link destinations resolve
-    /// against their own link's directory, as the kernel resolves them.
+    /// Refuses a `.gitignore` that is a symbolic link.
     ///
-    /// The *whole* chain, not one hop. `Data.write(options: .atomic)` renames a
-    /// temp file over the path it is given, and a rename replaces a symlink
-    /// rather than following it — so stopping after one hop on
-    /// `.gitignore -> shared -> real` writes over `shared`, destroying the
-    /// user's intermediate link while `real` is still never created. Measured
-    /// on that exact chain: one hop leaves `shared` a regular file and `real`
-    /// missing, where the kernel's own `open(O_CREAT)` creates `real` and keeps
-    /// both links intact. That is the bug this function exists to prevent,
-    /// one level further down.
+    /// **git does not read one.** Measured on git 2.43, and the shape does not
+    /// matter — an absolute link out of the worktree and a relative link to a
+    /// sibling inside it behave identically:
     ///
-    /// Only needed on the creation path. Appending goes through an open handle,
-    /// which follows the chain on both platforms without help.
-    static func creationTarget(for url: URL, fileManager: FileManager = .default) throws -> URL {
-        var current = url
-        // The visited key is standardized, so one file cannot be seen twice
-        // under two spellings; `current` itself is not, for the reason below.
-        var visited: Set<String> = []
-        while true {
-            // A repeat visit is a cycle, and it has to throw rather than
-            // return. Returning the revisited path hands back a *symlink*, and
-            // the atomic write that follows renames over it — replacing the
-            // user's link with a regular file, which is the exact damage this
-            // function exists to prevent.
-            //
-            // An earlier version returned it, on the reasoning that the write
-            // would fail with ELOOP anyway. `open(O_CREAT)` does raise ELOOP;
-            // measured. But `Data.write(options: .atomic)` is a rename, and
-            // rename does not traverse the final symlink at all — the same
-            // mechanism that makes the chain case above dangerous, applied to
-            // the wrong branch of the same function.
-            // Standardized for the *key* only. `standardizedFileURL` collapses
-            // `..` textually while the kernel resolves it against the already-
-            // resolved directory, so a destination like `sub/../real` behind a
-            // symlinked `sub` would differ. Keeping `current` raw lets lstat
-            // and the final rename resolve it as the kernel does.
-            guard visited.insert(current.standardizedFileURL.path).inserted else {
-                throw GitError(
-                    message: "Can't create “\(url.lastPathComponent)”: the path "
-                        + "resolves through a loop of symbolic links, so there is no "
-                        + "file to create. Fix the link and try again.",
-                    exitCode: -1)
-            }
-            guard let destination = try? fileManager.destinationOfSymbolicLink(
-                atPath: current.path) else { return current }
-            // `appendingPathComponent` rather than `relativeTo:`. The latter
-            // does RFC 3986 path merging, which resolves against the base's
-            // *parent* when the base does not read as a directory — and whether
-            // `deletingLastPathComponent()` returns a directory-flavoured URL
-            // has differed between Darwin and swift-corelibs-foundation. This
-            // builds the same path without depending on that.
-            current = (destination.hasPrefix("/")
-                ? URL(fileURLWithPath: destination)
-                : current.deletingLastPathComponent()
-                    .appendingPathComponent(destination))
-        }
+    ///     $ ln -s shared-ignore .gitignore   # relative, inside the repo
+    ///     $ touch shared.txt                 # named by a rule in shared-ignore
+    ///     $ git status --porcelain
+    ///     warning: unable to access '.gitignore': Too many levels of symbolic links
+    ///     ?? shared.txt                      # the rule was NOT applied
+    ///     $ rm .gitignore && cp shared-ignore .gitignore
+    ///     $ git status --porcelain           # shared.txt now absent: ignored
+    ///
+    /// So following the link writes the rule into a file git will never consult.
+    /// This code used to resolve the whole chain, on the strength of a
+    /// "dotfile manager's `.gitignore -> shared-ignore`" use case that the
+    /// output above shows does not work with git at all — the premise was
+    /// wrong, and every hop of resolution built on it was serving nobody.
+    ///
+    /// It was also a way for a repository to choose where the app writes. A
+    /// clone can ship `.gitignore` as a symlink — mode `120000`, materialised
+    /// by checkout, verified end to end — so `.gitignore -> ~/.zshrc` in an
+    /// untrusted working copy turned one "Ignore" click into an append to the
+    /// user's shell config. Refusing closes that without a containment rule or
+    /// a confirmation prompt, because there is no legitimate case on the other
+    /// side of the line to weigh against it. See `o-L14` for the broader
+    /// untrusted-working-copy question this is one instance of.
+    ///
+    /// `try?` reads a failure as "not a symlink". An unreadable parent
+    /// directory therefore proceeds to the write, which fails on its own with a
+    /// real filesystem error — the right direction to be wrong in, since the
+    /// alternative is refusing to ignore a file because of a transient stat
+    /// failure.
+    static func requireRegularIgnoreFile(at url: URL,
+                                         fileManager: FileManager = .default) throws {
+        guard (try? fileManager.destinationOfSymbolicLink(atPath: url.path)) != nil else { return }
+        throw GitError(
+            message: "Can't ignore this path: “.gitignore” is a symbolic link, and git "
+                + "does not read a symlinked .gitignore — the rule would be written "
+                + "somewhere git never looks. Replace it with a regular file and try again.",
+            exitCode: -1)
     }
 
     /// Tracked paths are restored via git; untracked paths are moved to the Trash
