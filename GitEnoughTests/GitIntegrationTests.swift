@@ -928,7 +928,16 @@ final class GitIntegrationTests: XCTestCase {
         // test. A linked worktree shares its main repo's config, so restore the
         // value rather than resting the isolation on a comment.
         let priorPushDefault = currentPushDefault()
-        try run(["config", "push.default", "nothing"])
+        try run(["config", "--local", "push.default", "nothing"])
+        // The write is the premise, so assert it took. Every push below passes
+        // an explicit refspec, and git ignores `push.default` entirely when one
+        // is given — so these assertions pass under *any* value, and this test
+        // is a canary for "the app must never regress to a bare `git push`".
+        // If the write silently stopped applying, the canary could never fire.
+        // `--local` matches the scope `currentPushDefault` reads and
+        // `restorePushDefault` writes; without it the three disagreed.
+        XCTAssertEqual(currentPushDefault(), "nothing",
+                       "premise: without `nothing` in effect the bare-push canary is vacuous")
         addTeardownBlock { self.restorePushDefault(priorPushDefault) }
 
         try client.push(remote: "origin", localBranch: "main", remoteBranch: "main",
@@ -1202,7 +1211,13 @@ final class GitIntegrationTests: XCTestCase {
         // later test, and the leak would surface as order-dependent failures
         // far from here rather than as anything pointing back at this line.
         let priorPushDefault = currentPushDefault()
-        try run(["config", "push.default", "matching"])
+        try run(["config", "--local", "push.default", "matching"])
+        // Same premise, same reason: `matching` is what makes a bare push
+        // move every same-named branch, and the tests built on this fixture
+        // guard exactly that hazard. Unasserted, they would keep passing with
+        // the config write doing nothing at all.
+        XCTAssertEqual(currentPushDefault(), "matching",
+                       "premise: without `matching` in effect the matching-hazard guards are vacuous")
         addTeardownBlock { self.restorePushDefault(priorPushDefault) }
         try client.push(remote: "origin", localBranch: "main", remoteBranch: "main",
                         setUpstream: true)

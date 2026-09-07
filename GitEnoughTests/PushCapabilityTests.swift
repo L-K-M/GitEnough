@@ -198,7 +198,13 @@ final class PushCapabilityTests: XCTestCase {
         ]
         for capability in refusing {
             guard case .refused(let reason) = capability.forcePushTarget else {
-                return XCTFail("\(capability) must refuse a force push")
+                // `continue`, not `return`: a regression that makes two shapes
+                // force-pushable should name both, and bailing out here also
+                // skips the `allowsForcePush` cross-check for everything after
+                // the first failure — which is the agreement this test exists
+                // to verify.
+                XCTFail("\(capability) must refuse a force push")
+                continue
             }
             XCTAssertTrue(reason.hasPrefix("Can't force push: "),
                           "the refusal must name the action refused, got \(reason)")
@@ -301,8 +307,25 @@ final class PushCapabilityTests: XCTestCase {
     /// the host's git: `testGitVersionParsing` covers `parseVersion` alone, so
     /// without this the `>= (2, 30)` comparison itself was never asserted.
     func testTheVersionGateComparison() {
-        XCTAssertEqual(GitClient.parseVersion("git version 2.29.2").map { $0 >= (2, 30) }, false)
-        XCTAssertEqual(GitClient.parseVersion("git version 2.30.0").map { $0 >= (2, 30) }, true)
+        // Through `GitClient.supportsForceIfIncludes(version:)` — the function
+        // the property itself calls — rather than a `>= (2, 30)` written here.
+        // A test-local copy pins nothing: moving the threshold or regressing the
+        // operator changes production and leaves this green. Worse, the only
+        // end-to-end check sits behind `XCTSkipUnless(supportsForceIfIncludes)`,
+        // so a gate regression makes the runner *skip* the assertion that would
+        // have caught it, on every host.
+        //
+        // The `parseVersion(...).map(...)` roundtrip stays: an unparseable
+        // banner then fails the assertion rather than short-circuiting to false.
+        XCTAssertEqual(
+            GitClient.parseVersion("git version 2.29.2")
+                .map { GitClient.versionSupportsForceIfIncludes($0) }, false)
+        XCTAssertEqual(
+            GitClient.parseVersion("git version 2.30.0")
+                .map { GitClient.versionSupportsForceIfIncludes($0) }, true)
+        XCTAssertEqual(
+            GitClient.parseVersion("git version 2.43.0")
+                .map { GitClient.versionSupportsForceIfIncludes($0) }, true)
     }
 
     /// `--force-with-lease` on its own compares against the remote-tracking
@@ -505,9 +528,16 @@ final class PushCapabilityTests: XCTestCase {
                         .map(\.name), ["origin"])
         XCTAssertFalse(Remote.isAmbiguous(upstream: "origin/main", among: remotes,
                                           localBranch: "topic"))
+        let resolved = PushCapability.resolve(
+            status: status(head: "topic", upstream: "origin/main"), remotes: remotes)
+        // Asserted, not just claimed by the message below. The suite pins the
+        // *withholding* direction three times over and never pinned the arming
+        // one, so a regression that disarmed every push would have changed the
+        // destructive path with no test signal at all.
+        XCTAssertTrue(resolved.allowsForcePush,
+                      "one well-formed reading is knowledge, so force push stays armed")
         XCTAssertEqual(
-            PushCapability.resolve(
-                status: status(head: "topic", upstream: "origin/main"), remotes: remotes),
+            resolved,
             .push(remote: "origin", localBranch: "topic", remoteBranch: "main"),
             "one well-formed reading is not a guess, so force push stays armed")
         XCTAssertEqual(Remote.preferred(for: "origin/main", among: remotes)?.name, "origin")
@@ -561,11 +591,14 @@ final class PushCapabilityTests: XCTestCase {
 
     /// One candidate remote is not ambiguous, however nested its name looks.
     func testASingleCandidateRemoteResolvesEvenWithoutABranchNameMatch() {
+        let resolved = PushCapability.resolve(
+            status: status(head: "trunk", upstream: "origin/features/x"),
+            remotes: [nestedFeatures])
         XCTAssertEqual(
-            PushCapability.resolve(
-                status: status(head: "trunk", upstream: "origin/features/x"),
-                remotes: [nestedFeatures]),
+            resolved,
             .push(remote: "origin/features", localBranch: "trunk", remoteBranch: "x"))
+        XCTAssertTrue(resolved.allowsForcePush,
+                      "a single candidate is not a guess either, however the name splits")
     }
 
     /// `git push` stops parsing options at `--`; anything after it is a
@@ -627,5 +660,26 @@ final class PushCapabilityTests: XCTestCase {
             GitClient.pushArguments(remote: "-f", localBranch: "-x", remoteBranch: "main",
                                     setUpstream: false, forceWithLease: true).arguments,
             "the equivalence holds for option-shaped operands too")
+
+        // And with the flag on, which is the shape production sends on any
+        // modern host. The equivalence above runs at the *default*
+        // `forceIfIncludes`, and the separator test proves only that the flag
+        // lands before `--` for an option-shaped remote — so if the flagged
+        // variant ever grew bespoke formatting (dropping the lease, adding more
+        // than the one flag), the "one definition" claim would quietly stop
+        // covering the variant that actually ships.
+        let plain = GitClient.forcePushArguments(remote: "origin", localBranch: "main",
+                                                 remoteBranch: "main",
+                                                 forceIfIncludes: false).arguments
+        let flagged = GitClient.forcePushArguments(remote: "origin", localBranch: "main",
+                                                   remoteBranch: "main",
+                                                   forceIfIncludes: true).arguments
+        XCTAssertEqual(flagged.filter { $0 != "--force-if-includes" }, plain,
+                       "the flagged variant is the shared definition plus exactly one flag")
+        guard let separator = flagged.firstIndex(of: "--") else {
+            return XCTFail("expected the operand separator")
+        }
+        XCTAssertTrue(flagged[..<separator].contains("--force-if-includes"),
+                      "and that flag stays an option rather than becoming a refspec")
     }
 }

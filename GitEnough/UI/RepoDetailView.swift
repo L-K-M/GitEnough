@@ -224,15 +224,18 @@ struct RepoDetailView: View {
                             isPresented: $showingForcePushConfirmation,
                             titleVisibility: .visible,
                             presenting: pendingForcePush) { command in
+            // Neither action clears the snapshot: `onChange` below does, on
+            // every dismissal path including Esc and outside-click. Clearing
+            // here as well was belt-and-braces, and I kept it for a round on
+            // that reasoning — but it mutates the `presenting:` value while the
+            // dialog is still inside its dismissal transaction, which is the
+            // ordering assumption the comment above says not to rely on. Two
+            // fields kept in step across three sites is also how the next
+            // frozen field gets cleared in two of them.
             Button("Force Push (with Lease)", role: .destructive) {
                 viewModel.forcePush(confirming: command)
-                pendingForcePush = nil
-                pendingForcePushBranch = nil
             }
-            Button("Cancel", role: .cancel) {
-                pendingForcePush = nil
-                pendingForcePushBranch = nil
-            }
+            Button("Cancel", role: .cancel) {}
         } message: { command in
             Text(Self.forcePushWarning(for: command))
             // Monospaced, because the refspec is the one part of this dialog

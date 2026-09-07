@@ -164,15 +164,22 @@ public final class RepoViewModel: ObservableObject, Identifiable {
         // `static let`, so the first touch runs `git --version`, and without
         // this the first touch is a view body reading `forcePushResolution`.
         //
-        // Best effort, not an ordering guarantee: `queue.async` only makes the
-        // background probe *likely* to win. If a body gets there first it
-        // blocks on `swift_once` for the length of one `git --version` — a
-        // bounded one-time stall, not a hang. Closing that properly means a
-        // stored, asynchronously-populated property rather than a race that is
-        // usually won; recorded rather than guessed at, because the fix costs
-        // more than the stall it removes. `swift_once` does make this exactly
-        // one probe however many repos open at once.
-        queue.async { _ = GitClient.supportsForceIfIncludes }
+        // A global queue, not `queue`. The repo queue is serial and exists to
+        // order *this repository's* git operations; `git --version` is not one
+        // of them — it takes no `-C` and has no relationship to repo state, so
+        // AGENTS.md's serial-access rule does not reach it. Putting it there
+        // only bought a choice between two bad orderings: ahead of the initial
+        // status load, delaying first paint by a subprocess, or behind it and
+        // therefore finishing right around when the first body reads the
+        // property — precisely the stall being avoided.
+        //
+        // Best effort either way, not an ordering guarantee. If a body wins the
+        // race it blocks on `swift_once` for one `git --version`: bounded and
+        // one-time, not a hang. Closing it properly means a stored,
+        // asynchronously-populated property, or warming once at launch before
+        // any window renders; recorded rather than guessed at. `swift_once`
+        // does make this exactly one probe however many repos open at once.
+        DispatchQueue.global(qos: .utility).async { _ = GitClient.supportsForceIfIncludes }
     }
 
     deinit {

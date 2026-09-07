@@ -201,8 +201,26 @@ public final class GitClient {
     /// was the anomaly.
     public static let supportsForceIfIncludes: Bool = {
         guard let banner = version(), let v = parseVersion(banner) else { return false }
-        return (v.major, v.minor) >= (2, 30)
+        return versionSupportsForceIfIncludes(v)
     }()
+
+    /// The gate itself, as a pure function of a parsed version.
+    ///
+    /// Extracted so a test can pin *this* comparison rather than its own copy of
+    /// it. `testTheVersionGateComparison` used to write `>= (2, 30)` inline, so
+    /// moving the threshold or regressing the operator changed production and
+    /// left the test green — and the only end-to-end check sits behind
+    /// `XCTSkipUnless(supportsForceIfIncludes)`, meaning a gate regression makes
+    /// the runner *skip* the assertion that would have caught it. On every host.
+    /// Deliberately *not* an overload of the property above: `pushArguments`
+    /// names `supportsForceIfIncludes` as a default argument value, and putting
+    /// a function into that name's overload set makes a resolvable-but-fragile
+    /// expression out of one that is currently unambiguous. A distinct name
+    /// costs nothing and cannot go wrong.
+    public static func versionSupportsForceIfIncludes(
+        _ version: (major: Int, minor: Int)) -> Bool {
+        (version.major, version.minor) >= (2, 30)
+    }
 
     // MARK: - Status / branches / remotes
 
@@ -662,6 +680,17 @@ public final class GitClient {
     /// silently. With an explicit refspec the lease applies to that one ref.
     public func push(remote: String, localBranch: String, remoteBranch: String,
                      setUpstream: Bool, forceWithLease: Bool = false) throws {
+        // The boundary `pushArguments`' comment names, which until now did not
+        // exist: it said user-typed input should be validated here because this
+        // API throws, while the only check was a `precondition` one level down
+        // that traps in release builds too. A future branch-name field would
+        // have shipped a crash on empty input, and the comment inviting the
+        // reliance was the thing that made that likely.
+        guard !remote.isEmpty, !localBranch.isEmpty, !remoteBranch.isEmpty else {
+            throw GitError(
+                message: "Can't push: the remote and branch names must not be empty.",
+                exitCode: -1)
+        }
         try push(Self.pushArguments(
             remote: remote, localBranch: localBranch, remoteBranch: remoteBranch,
             setUpstream: setUpstream, forceWithLease: forceWithLease))
