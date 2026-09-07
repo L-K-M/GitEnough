@@ -654,8 +654,19 @@ public final class GitClient {
 
     /// Hands one conflicted file to an external merge tool (`git mergetool`).
     /// Blocks until the tool exits. Afterwards the caller refreshes: if the tool
-    /// (or git's "was the merge successful?" prompt, which gets a headless EOF)
-    /// didn't stage the file, the UI still offers “Mark Resolved”.
+    /// (or git's "was the merge successful?" prompt, which gets a headless EOF
+    /// because `GitShell.run` gives every child `/dev/null` on stdin) didn't
+    /// stage the file, the UI still offers “Mark Resolved”.
+    ///
+    /// **`--no-prompt` is load-bearing.** With `mergetool.prompt` on, git's
+    /// "Hit return to start merge resolution tool" reads the `/dev/null` stdin
+    /// every child now gets, hits EOF, and skips the file without launching
+    /// anything — invisibly, since the prompt goes to the captured stdout pipe.
+    /// Unset behaves as false because this call always passes `--tool=`, so the
+    /// flag protects users who set the option themselves. If the tool returns
+    /// the file unresolved, mergetool exits 1 and `runChecked` throws; before
+    /// the `/dev/null` change that same case blocked forever on the launching
+    /// terminal's tty. (Measured matrix at the invocation below.)
     public func runMergeTool(_ tool: String, path: String) throws {
         // git-mergetool is a shell script. Even after its initial git command
         // selects a literal path, it expands the returned filename with an
@@ -683,6 +694,14 @@ public final class GitClient {
                     """,
                 exitCode: -1)
         }
+        // Measured against git 2.43, fake tool, stdin from /dev/null:
+        //
+        //     mergetool.prompt=true,  no flag      → tool NEVER launched
+        //     mergetool.prompt=true,  --no-prompt  → tool launched
+        //     mergetool.prompt unset, no flag      → tool launched
+        //
+        // Kept next to the flag it justifies, so re-verifying means re-running
+        // the command on this line rather than trusting a doc block.
         try runChecked(
             ["-C", worktree.path,
              "-c", "mergetool.keepBackup=false",   // don't litter .orig files
