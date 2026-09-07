@@ -161,6 +161,10 @@ final class GitIgnoreTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: link.path),
                        "precondition: fileExists resolves the link, so a dangling one is 'missing'")
         assertRefusesSymlinkedIgnore(at: link, stillPointingTo: outside.path)
+        // The link surviving is not the whole guarantee: a regression that
+        // wrote through it *before* throwing would satisfy that assertion.
+        XCTAssertFalse(FileManager.default.fileExists(atPath: outside.path),
+                       "nothing may be created through the dangling link")
 
         // Live: the append branch's shape. Same link, target now real.
         try "existing\n".write(to: outside, atomically: true, encoding: .utf8)
@@ -212,6 +216,16 @@ final class GitIgnoreTests: XCTestCase {
     /// looks. Asserted against real git rather than quoted in a comment,
     /// because the whole design turns on it — and the previous design turned on
     /// the opposite being true.
+    ///
+    /// The mechanism is `O_NOFOLLOW`, not a loop: git opens `.gitignore`
+    /// without following symlinks, and "Too many levels of symbolic links" is
+    /// just `strerror(ELOOP)`. Verified on a link that provably cannot cycle —
+    /// one hop to a regular file, which `cat` reads through fine while git
+    /// refuses it. Behaviour is version-dependent in principle, which is what
+    /// makes this a test rather than a comment: it runs on both CI platforms,
+    /// so git 2.43 (Ubuntu) and git 2.55 (macOS) are both pinned on every run,
+    /// and a git that starts following the link fails here rather than silently
+    /// making the product's refusal over-strict.
     func testGitIgnoresASymlinkedGitignoreEntirely() throws {
         guard GitShell.shared.isAvailable else {
             throw XCTSkip("git is not installed")
@@ -226,12 +240,23 @@ final class GitIgnoreTests: XCTestCase {
 
         try "shared.txt\n".write(to: directory.appendingPathComponent("shared-ignore"),
                                  atomically: true, encoding: .utf8)
-        FileManager.default.createFile(
-            atPath: directory.appendingPathComponent("shared.txt").path, contents: Data())
+        XCTAssertTrue(
+            FileManager.default.createFile(
+                atPath: directory.appendingPathComponent("shared.txt").path, contents: Data()),
+            "precondition: shared.txt must exist, or its absence from status means nothing")
 
         func untracked() throws -> String {
+            // Shielded from ambient config: a contributor's global
+            // `core.excludesFile` naming `*.txt`, or `status.showUntrackedFiles
+            // = no`, would drop `shared.txt` from this listing before the
+            // symlink is even reached — and the first assertion below would
+            // then fail saying git honoured a symlinked .gitignore, which is
+            // the opposite of what happened.
             try GitShell.shared.runChecked(
-                ["-C", directory.path, "status", "--porcelain"], in: nil).stdout
+                ["-C", directory.path,
+                 "-c", "core.excludesFile=/dev/null",
+                 "-c", "status.showUntrackedFiles=all",
+                 "status", "--porcelain"], in: nil).stdout
         }
 
         let link = directory.appendingPathComponent(".gitignore")

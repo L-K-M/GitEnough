@@ -735,6 +735,14 @@ public final class RepoViewModel: ObservableObject, Identifiable {
             // The bytes to add, computed once in `GitIgnore` — see
             // `appendedBytes` for why this must not be a Character-count slice.
             let addition = GitIgnore.appendedBytes(change.path, to: existing)
+            // Quiet, unlike the creation branch above, and the asymmetry is
+            // real rather than an oversight. There, `existing` is `""`, so no
+            // rule can already be covered and empty can only be the broken
+            // invariant. Here it has a second reading: the literal rule is
+            // already in the file while `isIgnored` still said no — which
+            // happens when a later negation (`!build`) overrides it. Appending
+            // a duplicate would not help that user, and throwing would report a
+            // defect where the file is merely arguing with itself.
             guard !addition.isEmpty else { return }
             try handle.seekToEnd()
             try handle.write(contentsOf: addition)

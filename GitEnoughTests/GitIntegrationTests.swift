@@ -1004,13 +1004,18 @@ final class GitIntegrationTests: XCTestCase {
         // `ls-files` reads the index without consulting it.
         let indexed = try GitShell.shared.runChecked(
             ["-C", repoURL.path, "ls-files", "--", "a.txt"], in: nil).stdout
+        // Only the success branch asserts. The `else` used to require an
+        // untouched index, which quietly upgraded "don't destroy work" into
+        // "fail atomically" — a contract `discard` never claimed. It unstages
+        // and then checks out, so a throw in the second step legitimately
+        // leaves an emptied index, and that shape would have failed here with a
+        // message reading like data loss while every invariant this test is
+        // named for held. It is also unreachable on git 2.43, where `reset`
+        // treats an unresolvable HEAD as the empty tree, so its only effect
+        // would have been to mislead.
         if discardSucceeded {
             XCTAssertTrue(indexed.isEmpty,
                           "discard must degrade to an unstage, not to a no-op")
-        } else {
-            XCTAssertFalse(indexed.isEmpty,
-                           "a discard that failed outright must leave the index alone "
-                           + "rather than half-applying")
         }
     }
 

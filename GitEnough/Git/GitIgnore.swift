@@ -92,8 +92,14 @@ public enum GitIgnore {
         // Loud in debug, harmless in release. `precondition` was the other
         // candidate, and it trades one user's corrupted `.gitignore` for every
         // user's crashed app; returning nothing instead makes a broken
-        // invariant show up as "the rule wasn't added" — a visible no-op the
-        // user can retry, rather than a file they have to restore from git.
+        // invariant a no-op rather than a corrupted file.
+        //
+        // How visible that no-op is differs by caller, and the earlier wording
+        // here ("a visible no-op the user can retry") was only true of one of
+        // them: the creation path throws, so it reaches the banner, while the
+        // append path reads empty as "already present" and reports success. In
+        // release, only that first path tells anyone. The debug `assert` is
+        // what catches it on the second.
         //
         // One evaluation, used by both. Written twice, the debug trap and the
         // release guard could come to check different predicates — and the

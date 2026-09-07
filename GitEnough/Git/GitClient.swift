@@ -560,9 +560,19 @@ public final class GitClient {
     /// terminal, an editor plugin, a hook) sends now-*tracked* files to
     /// `rm --cached`, which stages deletions. That is precisely the bug this
     /// function exists to prevent, arriving through the guard added to prevent
-    /// it. Attempting the restore first closes that direction — if a commit
-    /// lands, `restore --staged` simply succeeds and the `rm` branch is never
-    /// reached.
+    /// it. Attempting the restore first closes *that* direction — if a commit
+    /// lands before the restore, it simply succeeds and the `rm` branch is
+    /// never reached.
+    ///
+    /// It does not close the window, it moves it and makes it smaller. A commit
+    /// landing after `isUnbornHEAD()` answers but before the `rm` still meets
+    /// now-tracked files, and the same is true between `hasHEAD()` and
+    /// `symbolic-ref` inside that check. Only an index lock closes it. A
+    /// compensating "if `hasHEAD()` now, restore" was considered and left out:
+    /// it throws for paths the racing commit did not include (`restore --staged`
+    /// refuses a path absent from HEAD, measured), which is exactly the case
+    /// where the `rm` did no harm — so the repair fails loudest where it is
+    /// least needed.
     ///
     /// Safe because the failure is unambiguous rather than silent. Measured on
     /// git 2.43, `git restore --staged -- <path>` against an unborn HEAD exits
@@ -572,10 +582,17 @@ public final class GitClient {
     /// where `isUnbornHEAD()` used to run `rev-parse` before each one.
     ///
     /// The fallback stays narrow on purpose: only a *positive* unborn-HEAD
-    /// answer takes it. Any other restore failure — most often a stale pathspec
-    /// from a selection the index has moved on from — is rethrown. Swallowing
-    /// those is the blanket `try?` this whole change removed, and a benign
-    /// error the user can read beats a silent no-op on a button they pressed.
+    /// answer takes it. **Where HEAD resolves**, any other restore failure —
+    /// most often a stale pathspec from a selection the index has moved on
+    /// from — is rethrown. Swallowing those is the blanket `try?` this whole
+    /// change removed, and a benign error the user can read beats a silent
+    /// no-op on a button they pressed.
+    ///
+    /// On an unborn HEAD the asymmetry is deliberate and worth stating, since
+    /// the sentence above does not cover it: every restore failure reaches the
+    /// fallback there, and `--ignore-unmatch` makes a pathspec matching nothing
+    /// exit 0. A repeat unstage on an unborn repo is therefore an idempotent
+    /// no-op rather than an error.
     public func unstage(paths: [String]) throws {
         guard !paths.isEmpty else { return }
         let literalSpecs = Self.literalPathspecs(paths)
@@ -637,6 +654,14 @@ public final class GitClient {
         // Check for an unborn HEAD explicitly instead of inferring it from a
         // `reset` failure — see `isUnbornHEAD()` for why the inferring version
         // turns an unrelated error into staged deletions.
+        //
+        // `-f` below makes this guard load-bearing rather than merely correct:
+        // a bare `rev-parse --verify --quiet HEAD` probe fails for a *corrupt*
+        // HEAD exactly as it does for an unborn one, and a corrupt repository
+        // reaching `rm --cached -f` would have its matched paths silently
+        // staged-deleted. `isUnbornHEAD()` is two commands for precisely this
+        // reason and separates the two, and the corrupt-ref integration test
+        // pins that it does.
         guard !isUnbornHEAD() else {
             // Unborn HEAD: there is nothing to restore against, so discarding
             // can only unstage. --cached never touches worktree files; -f just
