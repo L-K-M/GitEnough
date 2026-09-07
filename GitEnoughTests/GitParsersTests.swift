@@ -159,6 +159,14 @@ final class GitParsersTests: XCTestCase {
         XCTAssertEqual(status.changeCount, 5)
     }
 
+    /// The `staged`/`unstaged` assertions here are **load-bearing, not
+    /// incidental**. `GitClient.stage(paths:)` is deliberately unguarded against
+    /// conflicts — naming a path is the user resolving it, which is what
+    /// `git add` means mid-merge — and what keeps the UI's row-level Stage
+    /// action from reaching an unmerged path is precisely that unmerged entries
+    /// never appear in the two lists those actions iterate. Weaken this and
+    /// `stage(paths:)` silently becomes a way to commit conflict markers.
+    /// See `GitClient.stageAll`, which carries the guard for the bulk case.
     func testParseStatusDetachedAndConflicted() {
         let output = """
         # branch.oid 1234567890abcdef
@@ -175,6 +183,25 @@ final class GitParsersTests: XCTestCase {
         XCTAssertTrue(status.unstaged.isEmpty)
         XCTAssertTrue(status.isDirty)
         XCTAssertEqual(status.changeCount, 1)
+    }
+
+    /// The same invariant for every other unmerged shape, not just `UU`. A
+    /// modify/delete (`UD`/`DU`) has no conflict markers anywhere, so if one of
+    /// these leaked into `unstaged` the row-level Stage action would silently
+    /// pick a winner with nothing on screen looking wrong.
+    func testEveryUnmergedShapeStaysOutOfTheStagedAndUnstagedLists() {
+        for code in ["UU", "AA", "UD", "DU", "AU", "UA", "DD"] {
+            let output = """
+            # branch.oid 1234567890abcdef
+            # branch.head main
+            u \(code) N... 100644 100644 100644 100644 aaa bbb ccc f.txt
+
+            """
+            let status = GitParsers.parseStatus(output)
+            XCTAssertEqual(status.conflicted.map(\.path), ["f.txt"], "for u \(code)")
+            XCTAssertTrue(status.staged.isEmpty, "u \(code) must not reach the staged list")
+            XCTAssertTrue(status.unstaged.isEmpty, "u \(code) must not reach the unstaged list")
+        }
     }
 
     func testParseStatusUnbornBranch() {

@@ -185,10 +185,19 @@ struct ChangesView: View {
                     Text("Changes (\(viewModel.status.unstaged.count))")
                     Spacer()
                     if !viewModel.status.unstaged.isEmpty {
+                        // Never offered while anything is unmerged: `git add -A`
+                        // would stage the conflict markers as the resolution,
+                        // which also empties the conflict section and enables
+                        // Commit — every signal saying "resolved" at the moment
+                        // the conflict is buried. GitClient refuses too; this is
+                        // so the user is told before clicking rather than after.
                         Button("Stage All") { viewModel.stageAll() }
                             .buttonStyle(.borderless)
                             .font(.caption)
-                            .disabled(viewModel.isBusy)
+                            .disabled(viewModel.isBusy || !conflicts.isEmpty)
+                            .help(conflicts.isEmpty
+                                  ? "Stage every change"
+                                  : Self.stageAllBlockedHelp(conflicts))
                     }
                 }
             } footer: {
@@ -340,6 +349,27 @@ struct ChangesView: View {
             }
         }
         .padding(20)
+    }
+}
+
+// Internal rather than private: `stageAllBlockedHelp` is the copy a macOS user
+// actually reads — the button is disabled whenever anything is unmerged, so
+// `GitClient.stageAll`'s refusal almost never reaches this front end — and it
+// was the one string in this change with no test behind it.
+extension ChangesView {
+    /// The disabled Stage All tooltip. Says what the refusal says, in the same
+    /// words for the part that matters: `conflictStagingConsequence` is shared,
+    /// so the two cannot make different claims about what staging a conflict
+    /// does, and `namingFiles` is shared so they cannot name the files
+    /// differently either.
+    static func stageAllBlockedHelp(_ conflicts: [FileChange]) -> String {
+        let names = GitClient.namingFiles(conflicts.map(\.path))
+        // One binding for both agreements. The noun was already pluralised and
+        // the pronoun was not, so a single conflict read "Resolve 1 conflicted
+        // file first (a.txt) — staging them…" — and one file is the common case.
+        let singular = conflicts.count == 1
+        return "Resolve \(conflicts.count) conflicted file\(singular ? "" : "s") first (\(names)). "
+            + "Staging \(singular ? "it" : "them") \(GitClient.conflictStagingConsequence)."
     }
 }
 
