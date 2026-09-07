@@ -943,6 +943,14 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertTrue(gitError.message.contains(path),
                       "the refusal must name what to resolve, got \(gitError.message)",
                       file: file, line: line)
+        // The other half of the shared-constant guarantee. `StageAllBlockedHelpTests`
+        // pins the tooltip to `conflictStagingConsequence`; without this, the
+        // refusal could be reworded to say something else entirely and every
+        // test would stay green — the drift the constant was extracted to make
+        // impossible, still possible on the side nobody was asserting.
+        XCTAssertTrue(gitError.message.contains(GitClient.conflictStagingConsequence),
+                      "the refusal must state the shared consequence verbatim, got \(gitError.message)",
+                      file: file, line: line)
     }
 
     /// main and other both change a.txt's middle line, then merge.

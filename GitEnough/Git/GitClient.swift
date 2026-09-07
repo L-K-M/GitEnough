@@ -477,14 +477,21 @@ public final class GitClient {
     /// Names up to `limit` paths and counts the rest — the "a.txt, b.txt and 2
     /// more" fragment that tells the user *which* files are in the way.
     ///
-    /// Public because a front end needs the same fragment. The refusal above
-    /// and the SwiftUI Stage All tooltip state one rule about one list, and on
-    /// macOS the tooltip is the copy the user actually reads: the button is
-    /// disabled while anything is unmerged, so the refusal is a backstop for
-    /// callers rather than a message anyone sees. Written twice, the two drift
-    /// on the first edit to either — and the copy that drifts unnoticed is the
-    /// one nobody is looking at.
-    public static func namingFiles(_ paths: [String], limit: Int = 3) -> String {
+    /// Shared with the SwiftUI tooltip, which states the same rule about the
+    /// same list — and on macOS is the copy the user actually reads, since the
+    /// button is disabled while anything is unmerged and the refusal is a
+    /// backstop for callers rather than a message anyone sees. Written twice,
+    /// the two drift on the first edit to either, and the copy that drifts
+    /// unnoticed is the one nobody is looking at.
+    ///
+    /// Internal, like `stageAllRefusalPrefix` and `conflictStagingConsequence`
+    /// below. This was `public` on the reasoning that "a front end needs it" —
+    /// true, but the front end that needs it is `UI/`, which is *excluded from*
+    /// the SwiftPM library rather than a separate module, so it compiles into
+    /// this one and sees internal fine. The GTK front end is genuinely separate
+    /// and renders no Stage All tooltip; when it does, all three become public
+    /// together rather than one of them guessing ahead.
+    static func namingFiles(_ paths: [String], limit: Int = 3) -> String {
         // Clamped, because both failure modes below the floor are silent or
         // fatal rather than merely wrong. `limit: 0` names nothing and returns
         // " and 3 more" — a leading separator in a user-facing alert. A
