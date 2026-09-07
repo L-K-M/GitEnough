@@ -518,8 +518,11 @@ public final class GitClient {
     /// `reset` have no baseline and dropping the index entry is the correct
     /// equivalent.
     ///
-    /// Both callers check this *explicitly* rather than inferring it from a
-    /// failure. Inferring is the dangerous version: a blanket `catch` around
+    /// Both callers *verify* with this after a failure rather than treating the
+    /// failure as proof — which is a different thing from checking beforehand,
+    /// and the difference matters: a pre-check is the check-then-act ordering
+    /// `unstage` was restructured to avoid. Inferring is the dangerous version:
+    /// a blanket `catch` around
     /// `restore --staged` accepts every other cause too — a locked index, a
     /// permissions problem, a path that moved underneath the click — and falls
     /// through to `rm --cached`, which succeeds. The user clicks Unstage, the
@@ -719,6 +722,14 @@ public final class GitClient {
                 try runChecked(
                     ["-C", worktree.path, "reset", "-q", "HEAD", "--"] + literalSpecs,
                     in: nil)
+                // Still returns, and now for a different reason than the line
+                // above gives. Once the repair has run the paths *are* tracked,
+                // so "nothing is tracked" no longer explains the skip — but the
+                // checkout below would restore the worktree from a commit that
+                // landed mid-operation and that the user never saw, discarding
+                // edits made since. Leaving the index correct and the worktree
+                // untouched is the safer half to deliver.
+                return
             }
             return
         }

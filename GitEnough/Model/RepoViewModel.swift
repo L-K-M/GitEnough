@@ -734,20 +734,36 @@ public final class RepoViewModel: ObservableObject, Identifiable {
             }
             // The bytes to add, computed once in `GitIgnore` — see
             // `appendedBytes` for why this must not be a Character-count slice.
-            // `nil` is the broken invariant and throws, as on the creation
-            // branch. Empty is a different thing here and returns quietly: the
-            // literal rule is already in the file while `isIgnored` still said
-            // no, which is what a later negation (`!build`) produces. Appending
-            // a duplicate would not help that user, and throwing would report a
-            // defect where the file is merely arguing with itself. The two used
-            // to be one value, which is how the invariant break came to be
-            // reported as success on this path.
+            // `nil` is the broken invariant, as on the creation branch.
             guard let addition = GitIgnore.appendedBytes(change.path, to: existing) else {
                 throw GitError(
                     message: "Couldn't build a .gitignore rule for “\(change.path)”. Nothing was written.",
                     exitCode: -1)
             }
-            guard !addition.isEmpty else { return }
+            // Empty means something specific here, and it used to return
+            // quietly on the reasoning that appending a duplicate "would not
+            // help". That was wrong: gitignore is **last-match-wins**, so
+            // appending the rule again after the negation does re-ignore the
+            // path. Measured, git 2.43:
+            //
+            //     /build          →  check-ignore exit 1  (not ignored)
+            //     !/build
+            //     /build          →  check-ignore exit 0, matched at line 3
+            //
+            // So the quiet return discarded a click that would have worked.
+            // Reaching here at all means `isIgnored` said no while the literal
+            // rule is present, which only a later `!` negation produces — a
+            // state the user can act on. Saying so beats reporting success and
+            // writing nothing; appending automatically is the better answer
+            // still, and needs `appending` to stop suppressing the duplicate at
+            // this one call site. Recorded rather than reached for here.
+            guard !addition.isEmpty else {
+                throw GitError(
+                    message: "Can't ignore “\(change.path)”: it is already listed in "
+                        + ".gitignore, but a later “!” rule un-ignores it. Move the rule "
+                        + "below that negation, or remove the negation.",
+                    exitCode: -1)
+            }
             try handle.seekToEnd()
             try handle.write(contentsOf: addition)
             // Flagged before the call, not after: if `close()` throws, POSIX has
@@ -797,10 +813,19 @@ public final class RepoViewModel: ObservableObject, Identifiable {
     /// failure.
     static func requireRegularIgnoreFile(at url: URL,
                                          fileManager: FileManager = .default) throws {
-        // A directory named `.gitignore` is not a symlink and would sail past the
-        // check below, then fail at the open with a raw Cocoa "Is a directory"
-        // — the one error in this flow with no guidance attached. Cheap to name
-        // properly, and it makes the function's name true.
+        // Symlink first, and the order is load-bearing: `fileExists` *follows*
+        // links, so `.gitignore -> some-directory` would otherwise be reported
+        // as a directory and the user told to fix the wrong thing.
+        if (try? fileManager.destinationOfSymbolicLink(atPath: url.path)) != nil {
+            throw GitError(
+                message: "Can't ignore this path: “.gitignore” is a symbolic link, and git "
+                    + "does not read a symlinked .gitignore — the rule would be written "
+                    + "somewhere git never looks. Replace it with a regular file and try again.",
+                exitCode: -1)
+        }
+        // A directory named `.gitignore` is not a symlink and would otherwise
+        // sail through to the open, failing with a raw Cocoa "Is a directory" —
+        // the one error in this flow with no guidance attached.
         var isDirectory: ObjCBool = false
         if fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory),
            isDirectory.boolValue {
@@ -809,12 +834,6 @@ public final class RepoViewModel: ObservableObject, Identifiable {
                     + "can't read ignore rules from it.",
                 exitCode: -1)
         }
-        guard (try? fileManager.destinationOfSymbolicLink(atPath: url.path)) != nil else { return }
-        throw GitError(
-            message: "Can't ignore this path: “.gitignore” is a symbolic link, and git "
-                + "does not read a symlinked .gitignore — the rule would be written "
-                + "somewhere git never looks. Replace it with a regular file and try again.",
-            exitCode: -1)
     }
 
     /// Tracked paths are restored via git; untracked paths are moved to the Trash
