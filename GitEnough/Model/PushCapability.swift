@@ -192,6 +192,53 @@ public enum PushCapability: Equatable {
         }
     }
 
+    /// Where a force push would land, or the sentence saying why it can't.
+    ///
+    /// The one switch that decides whether remote history may be overwritten.
+    /// It used to be two — this predicate and the view model's
+    /// `forcePushResolution` — and exhaustiveness only catches a *new case*
+    /// added to one of them. A semantic flip in one (someone deciding
+    /// `.pushToGuessedRemote` should be force-pushable) would have compiled
+    /// fine and left the menu and the execution path gating different actions.
+    ///
+    /// Pure, and deliberately so: it names refs rather than building the argv,
+    /// so `allowsForcePush` below stays a pure predicate. Turning it into a
+    /// `GitClient.PushCommand` here would pull `supportsForceIfIncludes` — and
+    /// with it a `git --version` subprocess — into every caller that only
+    /// wanted to know whether the menu item does anything.
+    public enum ForcePushTarget: Equatable {
+        case allowed(remote: String, localBranch: String, remoteBranch: String)
+        case refused(String)
+    }
+
+    /// Switched rather than guarded, so a new capability has to make a decision
+    /// here instead of inheriting one from a fallthrough. This is the predicate
+    /// that decides whether remote history can be overwritten; silence is the
+    /// wrong default for it.
+    public var forcePushTarget: ForcePushTarget {
+        switch self {
+        case .push(let remote, let local, let remoteBranch):
+            return .allowed(remote: remote, localBranch: local, remoteBranch: remoteBranch)
+        case .pushToGuessedRemote(let remote, _, let remoteBranch):
+            return .refused(
+                "Can't force push: more than one configured remote could account "
+                + "for this branch's upstream, and GitEnough picked “\(remote)” by "
+                + "matching the branch name. A plain push to “\(remote)/\(remoteBranch)” "
+                + "is recoverable if that guess is wrong; a force push is not. "
+                + "Rename one of the remotes, or set the upstream again.")
+        case .publish:
+            // `.publish` means exactly one thing — no upstream at all.
+            return .refused("Can't force push: this branch has no upstream on a configured remote to overwrite. Publish it first.")
+        case .unavailable(let reason):
+            // Already names the real problem, including upstream-remote-is-gone
+            // — but in the wrong verb. Every reason opens "Can't push: …", so a
+            // user who chose Force Push and was refused read a sentence about a
+            // different action, while the two branches above carefully said
+            // "Can't force push". Same words, right verb.
+            return .refused(reason.forcePushMessage)
+        }
+    }
+
     /// Only a branch whose upstream is *known* has something safe to overwrite.
     ///
     /// This is why it was never a synonym for `tracksAnUpstream`: one asks "is
@@ -199,16 +246,9 @@ public enum PushCapability: Equatable {
     /// history we are certain enough about to destroy". `.pushToGuessedRemote`
     /// answers yes to the first and no to the second — an ahead count against a
     /// guessed ref is a cosmetic error, a force push to one is not.
-    ///
-    /// Switched rather than `if case`, for the reason `forcePushResolution`
-    /// gives: a new capability must force a decision here rather than inherit
-    /// `false` from a fallthrough. This is the predicate that decides whether
-    /// remote history can be overwritten; silence is the wrong default for it.
     public var allowsForcePush: Bool {
-        switch self {
-        case .push: return true
-        case .pushToGuessedRemote, .publish, .unavailable: return false
-        }
+        if case .allowed = forcePushTarget { return true }
+        return false
     }
 
     public var label: String {

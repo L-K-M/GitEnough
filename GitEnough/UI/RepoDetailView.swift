@@ -128,10 +128,21 @@ struct RepoDetailView: View {
                 // which it is, so label, tooltip and action can't drift apart.
                 // The ahead count rides on the plain-push label — that number is
                 // most of the reason to glance at this button. Split button:
-                // clicking pushes (or publishes); the menu half holds the rarely
-                // needed, confirmed force push, offered only for a plain push —
-                // a branch with no upstream yet has nothing to overwrite.
+                // clicking pushes (or publishes); the menu half holds the
+                // rarely needed, confirmed force push.
                 Menu {
+                    // Live even when a force push is impossible, deliberately.
+                    // A disabled menu item cannot explain itself on macOS:
+                    // `.help()` on `Menu` content becomes an NSMenuItem tooltip
+                    // that never renders, and the refusals are two to four
+                    // sentences — the wrong shape for a menu row at any length.
+                    // So the click resolves instead: the confirmation dialog
+                    // when a force push is possible, the reason in the error
+                    // banner when it is not, which is the channel every other
+                    // refused operation here already uses (`pushOrPublish`
+                    // surfaces `UnavailableReason.message` the same way).
+                    // Nothing destructive opens up — the dialog this can reach
+                    // still has to be confirmed.
                     Button("Force Push (with Lease)…") {
                         // Captured here, when the dialog opens, and not
                         // re-derived in the confirm action: re-deriving would
@@ -140,11 +151,8 @@ struct RepoDetailView: View {
                         // catch changing.
                         //
                         // Switched rather than guarded, and never a bare
-                        // `return`: `.disabled` is evaluated when the menu
-                        // renders, so a refresh landing between that and the
-                        // tap can still find no command — and a destructive
-                        // button that does nothing at all hides the state
-                        // change behind it. Say what happened instead.
+                        // `return`: a destructive button that does nothing at
+                        // all hides the state behind it. Say what happened.
                         switch viewModel.forcePushResolution {
                         case .command(let command):
                             pendingForcePush = command
@@ -163,15 +171,6 @@ struct RepoDetailView: View {
                             viewModel.errorMessage = reason
                         }
                     }
-                    // Gated on the command, not on the capability, so the
-                    // dialog can never open without the command it will show.
-                    // Two expressions of one predicate is how they drift.
-                    .disabled(forcePushCommand == nil)
-                    // The refusal sentences exist; without this they had no
-                    // surface. `forcePush` can only speak them once it runs,
-                    // and it cannot run while this item is disabled.
-                    .help(viewModel.forcePushRefusal
-                          ?? "Rewrite the remote branch to match your local history")
                 } label: {
                     Label(viewModel.pushCapability.tracksAnUpstream && viewModel.status.ahead > 0
                           ? "Push (\(viewModel.status.ahead))"
@@ -295,28 +294,15 @@ struct RepoDetailView: View {
         // protection its own command visibly does not carry.
         command.refusesUnfetchedRemoteWork
             ? "This rewrites the remote branch to match your local history. It refuses if the remote has commits you haven't merged in — including ones GitEnough fetched for you in the background — so a teammate's new work can't be lost silently. Anyone who already pulled the old history will still have to recover."
-            : "This rewrites the remote branch to match your local history. GitEnough can't confirm your git is 2.30 or newer, so it can only check that the remote still points where your last fetch left it: a teammate's commits that GitEnough has already fetched in the background will be overwritten without warning. Update git to 2.30 or newer — and make sure GitEnough can read its version — to be protected from that. Anyone who already pulled the old history will still have to recover."
-    }
-
-    /// The command a confirmed force push would run, as of right now.
-    ///
-    /// Showing it is not decoration: this is the one action in the app that can
-    /// destroy someone else's work, and the whole premise of GitEnough is that
-    /// it does what the command line would — so it should be willing to say
-    /// which command. It also makes the refspec visible, which is exactly what a
-    /// bare `git push` left to `push.default` did not have.
-    ///
-    /// `pendingForcePush` is the snapshot of this taken when the dialog opened;
-    /// this property is what gates the menu item.
-    ///
-    /// Delegated rather than derived: this used to repeat the
-    /// capability-to-command switch that `forcePush(confirming:)` also runs, so
-    /// the enablement logic and the execution logic could diverge as
-    /// `PushCapability` grew — the view's `guard case .push` silently yielding
-    /// nil for a new case while the view model handled it. On the one action
-    /// where they must agree, there is now one switch.
-    private var forcePushCommand: GitClient.PushCommand? {
-        viewModel.forcePushCommand
+            // Cut to the three facts that change the decision: what this does,
+            // what it can silently destroy, and who still has to recover. A
+            // `confirmationDialog` message does not scroll, and this is the
+            // branch where the protection is *weakest* — burying "a teammate's
+            // work can be overwritten" in a paragraph of remediation is the
+            // wrong trade at the moment of decision. The remediation survives
+            // as four words rather than two sentences, because this dialog is
+            // the only place that names the gap at all.
+            : "This rewrites the remote branch to match your local history. GitEnough can't confirm your git is 2.30 or newer, so a teammate's commits that GitEnough already fetched in the background can be overwritten without warning — updating git closes that gap. Anyone who already pulled the old history will still have to recover."
     }
 
     // MARK: - Toolbar pieces

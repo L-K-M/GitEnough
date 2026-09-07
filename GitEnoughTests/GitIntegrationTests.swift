@@ -1128,11 +1128,19 @@ final class GitIntegrationTests: XCTestCase {
             .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    /// `push.default` as it stands now, or nil when unset. `--get` exits
-    /// non-zero for a missing key, which `try?` turns into exactly that nil.
+    /// The repo-local `push.default`, or nil when there is no local override.
+    /// `--get` exits non-zero for a missing key, which `try?` turns into nil.
+    ///
+    /// `--local`, because the restore writes locally. Without it this read
+    /// resolves system + global + local, so a contributor with
+    /// `push.default = simple` in `~/.gitconfig` gets that value captured and
+    /// then *pinned into the repo's own config* by the restore — the read and
+    /// the write disagreeing about which scope "restore" means. Measured on git
+    /// 2.43 with a global value set and no local one: `--get` prints `simple`,
+    /// `--local --get` exits 1.
     private func currentPushDefault() -> String? {
         guard let value = try? GitShell.shared.runChecked(
-            ["config", "--get", "push.default"], in: repoURL)
+            ["config", "--local", "--get", "push.default"], in: repoURL)
             .stdout.trimmingCharacters(in: .whitespacesAndNewlines),
               !value.isEmpty else { return nil }
         return value
@@ -1146,11 +1154,26 @@ final class GitIntegrationTests: XCTestCase {
     /// silently drop a value the fixture had set, and every later test would run
     /// under git's built-in default instead: the same order-dependent leak,
     /// arriving through the cleanup meant to prevent it.
+    ///
+    /// Failures are reported, not swallowed. A restore that silently does
+    /// nothing produces exactly the far-away, order-dependent failures this
+    /// helper exists to prevent, and `try?` made that outcome indistinguishable
+    /// from success.
     private func restorePushDefault(_ prior: String?) {
-        if let prior {
-            try? run(["config", "push.default", prior])
-        } else {
-            try? run(["config", "--unset", "push.default"])
+        do {
+            if let prior {
+                try run(["config", "--local", "push.default", prior])
+            } else {
+                try run(["config", "--local", "--unset", "push.default"])
+            }
+        } catch {
+            // `--unset` on a key that is already gone exits 5 (git 2.43,
+            // measured). Both call sites write the key before registering this
+            // teardown, so that cannot happen today — but "already absent" is
+            // the state the restore was asking for, and failing a test for
+            // reaching it would be the wrong signal on a cleanup-only path.
+            if (error as? GitError)?.exitCode == 5 { return }
+            XCTFail("failed to restore push.default: \(error)")
         }
     }
 

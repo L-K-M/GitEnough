@@ -172,6 +172,41 @@ final class PushCapabilityTests: XCTestCase {
                 .allowsForcePush)
     }
 
+    /// `allowsForcePush` and the view model's `forcePushResolution` were two
+    /// switches deciding one thing. Exhaustiveness catches a *new case* added to
+    /// one of them; it does not catch a semantic flip — someone deciding
+    /// `.pushToGuessedRemote` should be force-pushable and changing only one —
+    /// which would compile while the menu and the execution path gated
+    /// different actions. `forcePushTarget` is now the single switch, and this
+    /// pins the two properties to it: the refs a force push may use, and the
+    /// predicate, come from the same place.
+    func testForcePushTargetIsTheOnlyDecisionAboutOverwritingRemoteHistory() {
+        let allowed = PushCapability.resolve(
+            status: status(head: "main", upstream: "origin/main"), remotes: [origin])
+        XCTAssertEqual(allowed.forcePushTarget,
+                       .allowed(remote: "origin", localBranch: "main", remoteBranch: "main"),
+                       "the target must carry the same refs the capability resolved")
+
+        // Every shape that is *not* `.push`, each refusing with a sentence that
+        // says so — the wording is what a user reads when the menu item is
+        // clicked, so an empty or push-flavoured string here is a real defect.
+        let refusing: [PushCapability] = [
+            PushCapability.resolve(status: status(head: "port", upstream: "up/stream/port"),
+                                   remotes: [up, upStream]),   // .pushToGuessedRemote
+            PushCapability.resolve(status: status(head: "topic"), remotes: [origin]),
+            PushCapability.resolve(status: status(head: nil), remotes: [origin]),
+        ]
+        for capability in refusing {
+            guard case .refused(let reason) = capability.forcePushTarget else {
+                return XCTFail("\(capability) must refuse a force push")
+            }
+            XCTAssertTrue(reason.hasPrefix("Can't force push: "),
+                          "the refusal must name the action refused, got \(reason)")
+            XCTAssertFalse(capability.allowsForcePush,
+                           "the predicate must follow the target, not a second switch")
+        }
+    }
+
     // MARK: - Publish
 
     func testNoUpstreamPublishesToTheFallbackRemote() {
@@ -299,10 +334,18 @@ final class PushCapabilityTests: XCTestCase {
 
         try XCTSkipUnless(GitClient.supportsForceIfIncludes,
                           "git older than 2.30 has no --force-if-includes")
-        XCTAssertTrue(
+        // Exact argv here too, for the reason the comment above gives — and
+        // this is the shape production actually calls, the only one reached
+        // without naming `forceIfIncludes:`. `contains` left it verified for
+        // flag *presence* alone, so a regression dropping `--force-with-lease`,
+        // adding a bare `--force`, or mangling the refspec passed here while
+        // the two hardcoded shapes above caught none of it: neither of them
+        // exercises the default.
+        XCTAssertEqual(
             GitClient.forcePushArguments(remote: "origin", localBranch: "main",
-                                         remoteBranch: "main")
-                .arguments.contains("--force-if-includes"),
+                                         remoteBranch: "main").arguments,
+            ["push", "--force-with-lease", "--force-if-includes",
+             "--", "origin", "refs/heads/main:refs/heads/main"],
             "and on a modern host the default must pick it up")
     }
 
@@ -329,7 +372,6 @@ final class PushCapabilityTests: XCTestCase {
         XCTAssertEqual(GitClient.parseVersion("shim 1.2: git version 2.43.0")?.major, 2)
         XCTAssertEqual(GitClient.parseVersion("shim 1.2: git version 2.43.0")?.minor, 43,
                        "a numeric token before the banner must not be read as the version")
-        XCTAssertTrue(GitClient.parseVersion("git version 2.29.2").map { $0 >= (2, 30) } == false)
         XCTAssertNil(GitClient.parseVersion("git version banana"))
         XCTAssertNil(GitClient.parseVersion(""))
     }

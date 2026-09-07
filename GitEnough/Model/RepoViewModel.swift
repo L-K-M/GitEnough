@@ -160,12 +160,18 @@ public final class RepoViewModel: ObservableObject, Identifiable {
         activityLog.onChange = { [weak self] entries in
             DispatchQueue.main.async { self?.activityEntries = entries }
         }
-        // Resolve the `--force-if-includes` probe off the main thread, before
-        // anything can ask for it there. It is a `static let`, so the first
-        // touch runs `git --version` — and the first touch would otherwise be
-        // the Push menu evaluating `.disabled(forcePushCommand == nil)` during
-        // a view body, putting a subprocess on the main thread. `swift_once`
-        // makes this exactly one probe however many repos open at once.
+        // Warm the `--force-if-includes` probe off the main thread. It is a
+        // `static let`, so the first touch runs `git --version`, and without
+        // this the first touch is a view body reading `forcePushResolution`.
+        //
+        // Best effort, not an ordering guarantee: `queue.async` only makes the
+        // background probe *likely* to win. If a body gets there first it
+        // blocks on `swift_once` for the length of one `git --version` — a
+        // bounded one-time stall, not a hang. Closing that properly means a
+        // stored, asynchronously-populated property rather than a race that is
+        // usually won; recorded rather than guessed at, because the fix costs
+        // more than the stall it removes. `swift_once` does make this exactly
+        // one probe however many repos open at once.
         queue.async { _ = GitClient.supportsForceIfIncludes }
     }
 
@@ -366,58 +372,26 @@ public final class RepoViewModel: ObservableObject, Identifiable {
 
     /// Whether a force push is possible right now, and the command it would run.
     ///
-    /// One definition, because the menu's enablement, the dialog's contents and
-    /// the execution path must agree about the single action in this app that
-    /// destroys someone else's work. The view derived its own copy of this
-    /// switch before; two expressions of one predicate is how they drift, and
-    /// here the drift would be silent — the menu greying out with no diagnostic.
+    /// The *decision* is not made here — `PushCapability.forcePushTarget` owns
+    /// it, so that `allowsForcePush` and this cannot disagree about the one
+    /// action in this app that destroys someone else's work. What is left here
+    /// is the part that needs a `GitClient`: turning the allowed refs into the
+    /// argv, which is deliberately not done in the pure decision type.
     ///
-    /// Switched rather than guarded, so a new `PushCapability` case has to be
-    /// handled here instead of silently inheriting "no upstream".
+    /// The single force-push surface the view uses. It was three — this plus a
+    /// `forcePushCommand` for the menu's `.disabled` and a `forcePushRefusal`
+    /// for its `.help` — and both extras existed to serve a disabled menu item
+    /// that could not explain itself. The item is no longer disabled, so the
+    /// refusal reaches the user through the same error banner every other
+    /// refused operation uses, and there is one surface again.
     public var forcePushResolution: ForcePushResolution {
-        switch pushCapability {
-        case .push(let remote, let local, let remoteBranch):
+        switch pushCapability.forcePushTarget {
+        case .allowed(let remote, let local, let remoteBranch):
             return .command(GitClient.forcePushArguments(
                 remote: remote, localBranch: local, remoteBranch: remoteBranch))
-        case .pushToGuessedRemote(let remote, _, let remoteBranch):
-            return .refused(
-                "Can't force push: more than one configured remote could account "
-                + "for this branch's upstream, and GitEnough picked “\(remote)” by "
-                + "matching the branch name. A plain push to “\(remote)/\(remoteBranch)” "
-                + "is recoverable if that guess is wrong; a force push is not. "
-                + "Rename one of the remotes, or set the upstream again.")
-        case .publish:
-            // `.publish` means exactly one thing — no upstream at all.
-            return .refused("Can't force push: this branch has no upstream on a configured remote to overwrite. Publish it first.")
-        case .unavailable(let reason):
-            // Already names the real problem, including upstream-remote-is-gone
-            // — but in the wrong verb. Every reason opens "Can't push: …", so a
-            // user who chose Force Push and was refused read a sentence about a
-            // different action, while the two branches above carefully said
-            // "Can't force push". Same words, right verb.
-            return .refused(reason.forcePushMessage)
+        case .refused(let reason):
+            return .refused(reason)
         }
-    }
-
-    /// The command a confirmed force push would run, or nil when refused. What
-    /// the menu item gates on.
-    public var forcePushCommand: GitClient.PushCommand? {
-        if case .command(let command) = forcePushResolution { return command }
-        return nil
-    }
-
-    /// Why Force Push is unavailable, when it is — so the disabled menu item can
-    /// say so in its help rather than just greying out.
-    ///
-    /// Without this the refusal sentences were written and never shown: the item
-    /// is gated on `forcePushCommand == nil`, which is exactly when
-    /// `forcePushResolution` is `.refused`, so `forcePush` could not run to
-    /// surface them. "The menu greying out with no diagnostic" is the failure
-    /// this consolidation was supposed to prevent, and it had been reintroduced
-    /// one layer down.
-    public var forcePushRefusal: String? {
-        if case .refused(let reason) = forcePushResolution { return reason }
-        return nil
     }
 
     /// Force push with lease. The UI gates this behind an explicit

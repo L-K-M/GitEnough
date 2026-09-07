@@ -652,8 +652,20 @@ public final class GitClient {
         // is `git push origin :x`. `PushCommand` exists so no caller can build a
         // destructive command on the way to `push(_:)`, and a zero-length branch
         // name is the one shape that smuggles the worst one through the type.
-        precondition(!localBranch.isEmpty && !remoteBranch.isEmpty,
-                     "an empty branch name builds a refspec git reads as a delete")
+        //
+        // `remote` is checked too, for symmetry rather than for danger: an empty
+        // remote makes git fail loudly ("does not appear to be a git
+        // repository") rather than do something unintended, but leaving it out
+        // invited the question of why only the branches, with no answer here.
+        //
+        // A `precondition` rather than a thrown error because every value on
+        // this path comes from parsed git output, so an empty one is a bug in
+        // this app and not a state a user can reach or a message a UI could
+        // usefully show. If a future caller ever feeds this user-typed text,
+        // the validation belongs at *that* boundary — `push(remote:…)` already
+        // throws — and this stays the net underneath it.
+        precondition(!remote.isEmpty && !localBranch.isEmpty && !remoteBranch.isEmpty,
+                     "an empty remote or branch name cannot build a valid push refspec")
         args.append("refs/heads/\(localBranch):refs/heads/\(remoteBranch)")
         return PushCommand(args)
     }
