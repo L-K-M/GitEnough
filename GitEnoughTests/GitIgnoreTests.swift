@@ -109,6 +109,8 @@ final class GitIgnoreTests: XCTestCase {
             ("/build\n", "build"),                 // already covered: no bytes
             ("\u{1F600}", "emoji.txt"),          // multi-byte final character
             ("e\u{301}", "combining.txt"),       // combining mark at the join
+            ("a\u{2028}", "x"),                    // multi-byte Unicode line separator
+            ("a\u{0B}", "x"),                      // single-byte newline that isn't \n
         ]
         for (existing, path) in cases {
             let expected = GitIgnore.appending(path, to: existing)
@@ -170,6 +172,37 @@ final class GitIgnoreTests: XCTestCase {
             "the symlink must survive, not be replaced by a regular file")
         XCTAssertEqual(try String(contentsOf: target, encoding: .utf8), "/build\n",
                        "and the rule must land in its target")
+    }
+
+    /// Every other symlink test here creates its links with an *absolute*
+    /// destination, which is the shape least likely to catch a resolver bug.
+    /// On disk the common shape is relative — a dotfile manager's
+    /// `.gitignore -> shared-ignore` — and `destinationOfSymbolicLink` hands
+    /// back that raw string, so resolution has to rebase it on the link's own
+    /// directory rather than the process's working directory. A regression
+    /// there passes every absolute-destination test in this file.
+    func testCreatingThroughADanglingSymlinkWithARelativeDestination() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitEnough-symlink-relative-\(UUID().uuidString)",
+                                    isDirectory: true)
+        try FileManager.default.createDirectory(at: directory,
+                                                withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+
+        let link = directory.appendingPathComponent(".gitignore")
+        let target = directory.appendingPathComponent("shared-ignore")
+        try FileManager.default.createSymbolicLink(atPath: link.path,
+                                                   withDestinationPath: "shared-ignore")
+
+        try GitIgnore.appendedBytes("build", to: "")
+            .write(to: try RepoViewModel.creationTarget(for: link), options: .atomic)
+
+        XCTAssertEqual(
+            try FileManager.default.destinationOfSymbolicLink(atPath: link.path),
+            "shared-ignore",
+            "the relative link must survive, still spelled relatively")
+        XCTAssertEqual(try String(contentsOf: target, encoding: .utf8), "/build\n",
+                       "and the rule lands beside the link, not beside the process")
     }
 
     /// One hop is not enough. `.gitignore -> shared -> real`, with `real` still

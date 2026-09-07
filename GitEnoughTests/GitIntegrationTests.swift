@@ -918,7 +918,18 @@ final class GitIntegrationTests: XCTestCase {
         let branch = try GitShell.shared.runChecked(
             ["-C", repoURL.path, "symbolic-ref", "--short", "HEAD"], in: nil).stdout
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        let headRef = repoURL.appendingPathComponent(".git/refs/heads/\(branch)")
+        // Asked, not assumed. `.git` is a *file* in a linked worktree or
+        // submodule, and `refs/heads` can live in the common dir — a hardcoded
+        // layout would write somewhere git never reads, HEAD would keep
+        // resolving, and the guard below would classify that as "not
+        // applicable" and skip. `--git-path` handles the remapping and prints a
+        // repo-relative path unless the git dir is absolute.
+        let refPath = try GitShell.shared.runChecked(
+            ["-C", repoURL.path, "rev-parse", "--git-path", "refs/heads/\(branch)"],
+            in: nil).stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let headRef = refPath.hasPrefix("/")
+            ? URL(fileURLWithPath: refPath)
+            : repoURL.appendingPathComponent(refPath)
         // The directory chain, not just the file: a nested default branch name
         // (`feature/x`) has no `refs/heads/feature` in a fresh fixture, and a
         // reftable-backed repository may have no `refs/heads` at all. Without

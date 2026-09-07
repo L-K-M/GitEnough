@@ -685,8 +685,15 @@ public final class RepoViewModel: ObservableObject, Identifiable {
                 // (`testCreatingThroughADanglingSymlinkWritesTheTargetNotTheLink`
                 // failed identically on macOS and Linux against that version).
                 let target = try RepoViewModel.creationTarget(for: url)
-                try GitIgnore.appendedBytes(change.path, to: "")
-                    .write(to: target, options: .atomic)
+                let bytes = GitIgnore.appendedBytes(change.path, to: "")
+                // The same guard the append branch carries. It cannot fire
+                // today — an empty file covers no rule — but `appendedBytes`
+                // now returns empty when its prefix invariant breaks, and
+                // without this the creation branch would write a zero-byte
+                // `.gitignore` and report success, leaving the path unignored
+                // on every retry.
+                guard !bytes.isEmpty else { return }
+                try bytes.write(to: target, options: .atomic)
                 return
             }
             // One handle across the read *and* the append, rather than reading
@@ -762,9 +769,9 @@ public final class RepoViewModel: ObservableObject, Identifiable {
     /// Only needed on the creation path. Appending goes through an open handle,
     /// which follows the chain on both platforms without help.
     static func creationTarget(for url: URL, fileManager: FileManager = .default) throws -> URL {
-        var current = url.standardizedFileURL
-        // Standardized paths, so the visited key is absolute and one file
-        // cannot be seen twice under two spellings.
+        var current = url
+        // The visited key is standardized, so one file cannot be seen twice
+        // under two spellings; `current` itself is not, for the reason below.
         var visited: Set<String> = []
         while true {
             // A repeat visit is a cycle, and it has to throw rather than
@@ -779,7 +786,12 @@ public final class RepoViewModel: ObservableObject, Identifiable {
             // rename does not traverse the final symlink at all — the same
             // mechanism that makes the chain case above dangerous, applied to
             // the wrong branch of the same function.
-            guard visited.insert(current.path).inserted else {
+            // Standardized for the *key* only. `standardizedFileURL` collapses
+            // `..` textually while the kernel resolves it against the already-
+            // resolved directory, so a destination like `sub/../real` behind a
+            // symlinked `sub` would differ. Keeping `current` raw lets lstat
+            // and the final rename resolve it as the kernel does.
+            guard visited.insert(current.standardizedFileURL.path).inserted else {
                 throw GitError(
                     message: "Can't create “\(url.lastPathComponent)”: the path "
                         + "resolves through a loop of symbolic links, so there is no "
@@ -798,7 +810,6 @@ public final class RepoViewModel: ObservableObject, Identifiable {
                 ? URL(fileURLWithPath: destination)
                 : current.deletingLastPathComponent()
                     .appendingPathComponent(destination))
-                .standardizedFileURL
         }
     }
 
