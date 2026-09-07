@@ -39,4 +39,19 @@ final class GitClientNamingTests: XCTestCase {
         XCTAssertEqual(GitClient.namingFiles(["a.txt", "b.txt", "c.txt"], limit: 1),
                        "a.txt and 2 more")
     }
+
+    /// Below 1 the function has no sensible reading, and both shapes below the
+    /// floor fail badly rather than approximately: `limit: 0` names nothing and
+    /// leads with the separator (" and 3 more" in a user-facing alert), and a
+    /// negative limit traps, because `Collection.prefix(_:)` requires a
+    /// non-negative length. A caller computing `min(3, count)` reaches both
+    /// without meaning to, so the floor is enforced rather than documented.
+    func testANonPositiveLimitIsClampedRatherThanObeyed() {
+        XCTAssertEqual(GitClient.namingFiles(["a.txt", "b.txt"], limit: 0),
+                       "a.txt and 1 more")
+        XCTAssertEqual(GitClient.namingFiles(["a.txt", "b.txt"], limit: -1),
+                       "a.txt and 1 more")
+        XCTAssertEqual(GitClient.namingFiles([], limit: -1), "",
+                       "and empty stays empty — no remainder counted off a negative")
+    }
 }

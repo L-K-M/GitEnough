@@ -460,6 +460,13 @@ public final class GitClient {
     /// on the first edit to either — and the copy that drifts unnoticed is the
     /// one nobody is looking at.
     public static func namingFiles(_ paths: [String], limit: Int = 3) -> String {
+        // Clamped, because both failure modes below the floor are silent or
+        // fatal rather than merely wrong. `limit: 0` names nothing and returns
+        // " and 3 more" — a leading separator in a user-facing alert. A
+        // negative limit is worse: `Collection.prefix(_:)` requires a
+        // non-negative length, so it traps the process. A caller computing a
+        // limit (`min(3, count)`) reaches both without meaning to.
+        let limit = max(1, limit)
         let shown = paths.prefix(limit).joined(separator: ", ")
         guard paths.count > limit else { return shown }
         return shown + " and \(paths.count - limit) more"
