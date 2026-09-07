@@ -468,7 +468,12 @@ public final class RepoViewModel: ObservableObject, Identifiable {
         // readings is recoverable. Only `forcePush` withholds.
         case .push(let remote, let local, let remoteBranch),
              .pushToGuessedRemote(let remote, let local, let remoteBranch):
-            perform("Pushing…", invalidatesMessageGeneration: false) {
+            // The remote is named because it may have been *guessed*: with two
+            // configured remotes that both read the upstream, the tie-break
+            // picks one and nothing else on screen says which. Force push is
+            // withheld for that uncertainty; a plain push is allowed and
+            // recoverable, so the least this can do is say where it went.
+            perform("Pushing to \(remote)…", invalidatesMessageGeneration: false) {
                 try $0.push(remote: remote, localBranch: local, remoteBranch: remoteBranch,
                             setUpstream: false)
             }

@@ -71,6 +71,31 @@ final class PushCapabilityTests: XCTestCase {
                       "the message must not send the user looking for a remote")
     }
 
+    /// The other side of that heuristic, pinned as the *documented limit* rather
+    /// than as desired behaviour.
+    ///
+    /// `.localUpstream` keys on the upstream having no slash, so a local-tracking
+    /// branch whose branch name contains one reads identically to a vanished
+    /// remote: `git branch --track topic feature/foo` writes `remote = "."` and
+    /// porcelain v2 emits `# branch.upstream feature/foo` (measured, git 2.43),
+    /// which is indistinguishable from a remote named `feature` that went away.
+    /// Push is blocked either way — only the advice is wrong.
+    ///
+    /// Pinned so `o-G4` changes this deliberately. Threading
+    /// `%(upstream:remotename)` through `Remote.split` is the real fix, and when
+    /// it lands this assertion should *fail* and be flipped to `.localUpstream`
+    /// — rather than the limitation quietly disappearing with nothing recording
+    /// that it was ever there.
+    func testASlashBearingLocalUpstreamIsIndistinguishableFromAVanishedRemote() {
+        let resolved = PushCapability.resolve(
+            status: status(head: "topic", upstream: "feature/foo"), remotes: [origin])
+        XCTAssertEqual(
+            resolved,
+            .unavailable(.upstreamRemoteMissing(upstream: "feature/foo", branch: "topic")))
+        XCTAssertFalse(resolved.allowsForcePush,
+                       "wrong advice, but never a force push onto a guess")
+    }
+
     /// Every reason is phrased for Push, and Force Push re-phrases rather than
     /// duplicating them — which only works while they all share the prefix.
     func testEveryUnavailableReasonCarriesThePushPrefix() {
@@ -133,8 +158,6 @@ final class PushCapabilityTests: XCTestCase {
 
     /// Remote names may contain slashes, so the split is longest-prefix, not
     /// first-slash — the same rule `Remote.preferred` uses.
-    /// A remote whose own name contains a slash still splits on the longest
-    /// configured name, rather than at the first slash.
     ///
     /// Two remotes or one changes only whether the answer is a guess. With just
     /// `up/stream` configured there is a single reading of `up/stream/port`, so
@@ -307,7 +330,7 @@ final class PushCapabilityTests: XCTestCase {
     /// the host's git: `testGitVersionParsing` covers `parseVersion` alone, so
     /// without this the `>= (2, 30)` comparison itself was never asserted.
     func testTheVersionGateComparison() {
-        // Through `GitClient.supportsForceIfIncludes(version:)` — the function
+        // Through `GitClient.versionSupportsForceIfIncludes` — the function
         // the property itself calls — rather than a `>= (2, 30)` written here.
         // A test-local copy pins nothing: moving the threshold or regressing the
         // operator changes production and leaves this green. Worse, the only
@@ -635,11 +658,13 @@ final class PushCapabilityTests: XCTestCase {
         let publishArgs = GitClient.pushArguments(remote: "-f", localBranch: "main",
                                                   remoteBranch: "main",
                                                   setUpstream: true).arguments
-        guard let separator = publishArgs.firstIndex(of: "--") else {
-            return XCTFail("an option-shaped remote requires the `--` separator")
-        }
-        XCTAssertTrue(publishArgs[..<separator].contains("-u"),
-                      "the upstream flag must stay an option")
+        // Exact argv, matching the strictness of the `setUpstream: false` case
+        // above: a containment check cannot catch a duplicated or stray
+        // argument, and this is the path that creates the upstream mapping
+        // every later push and pull trusts.
+        XCTAssertEqual(publishArgs,
+                       ["push", "-u", "--", "-f", "refs/heads/main:refs/heads/main"],
+                       "the upstream flag must stay an option, ahead of the separator")
     }
 
     func testForcePushArgumentsAreTheOnesForcePushRuns() {
@@ -675,7 +700,11 @@ final class PushCapabilityTests: XCTestCase {
                                                    remoteBranch: "main",
                                                    forceIfIncludes: true).arguments
         XCTAssertEqual(flagged.filter { $0 != "--force-if-includes" }, plain,
-                       "the flagged variant is the shared definition plus exactly one flag")
+                       "the flagged variant is the shared definition plus only that flag")
+        // `filter` drops *every* occurrence, so the equality above holds for two
+        // copies as readily as one. The count is what pins "exactly one".
+        XCTAssertEqual(flagged.count, plain.count + 1,
+                       "exactly one --force-if-includes, not several")
         guard let separator = flagged.firstIndex(of: "--") else {
             return XCTFail("expected the operand separator")
         }

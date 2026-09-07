@@ -686,6 +686,15 @@ public final class GitClient {
         // that traps in release builds too. A future branch-name field would
         // have shipped a crash on empty input, and the comment inviting the
         // reliance was the thing that made that likely.
+        // Trimmed first: whitespace is how a user-typed field actually produces
+        // "empty" (a stray paste, a trailing newline), and `isEmpty` alone lets
+        // " " through to git as an operand, which fails with a refspec error
+        // rather than the clear one this guard exists to give. Safe to trim
+        // rather than reject, because neither a refname nor a remote name may
+        // carry leading or trailing whitespace — no legitimate name changes.
+        let remote = remote.trimmingCharacters(in: .whitespacesAndNewlines)
+        let localBranch = localBranch.trimmingCharacters(in: .whitespacesAndNewlines)
+        let remoteBranch = remoteBranch.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !remote.isEmpty, !localBranch.isEmpty, !remoteBranch.isEmpty else {
             throw GitError(
                 message: "Can't push: the remote and branch names must not be empty.",

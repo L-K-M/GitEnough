@@ -1269,11 +1269,26 @@ final class GitIntegrationTests: XCTestCase {
     /// 2.43 with a global value set and no local one: `--get` prints `simple`,
     /// `--local --get` exits 1.
     private func currentPushDefault() -> String? {
-        guard let value = try? GitShell.shared.runChecked(
-            ["config", "--local", "--get", "push.default"], in: repoURL)
-            .stdout.trimmingCharacters(in: .whitespacesAndNewlines),
-              !value.isEmpty else { return nil }
-        return value
+        do {
+            let value = try GitShell.shared.runChecked(
+                ["config", "--local", "--get", "push.default"], in: repoURL)
+                .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            return value.isEmpty ? nil : value
+        } catch let error as GitError where error.exitCode == 1 {
+            // `git config --get`'s "key not found" (measured, git 2.43: exit 1
+            // for `--local --get` on a key set only globally). Absent, not
+            // broken — which is what the caller means by nil.
+            return nil
+        } catch {
+            // The other half of the pair `restorePushDefault` already reports.
+            // `try?` made a read failure indistinguishable from "no local
+            // override", and in the shared-fixture world both these helpers are
+            // written for, that captures nil for a value that *did* exist and
+            // the restore then unsets it — the order-dependent leak they exist
+            // to prevent, arriving through the capture instead of the restore.
+            XCTFail("failed to read local push.default: \(error)")
+            return nil
+        }
     }
 
     /// Puts back what was there, rather than deleting the key.
