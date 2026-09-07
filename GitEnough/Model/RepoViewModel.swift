@@ -760,9 +760,12 @@ public final class RepoViewModel: ObservableObject, Identifiable {
 
     /// Refuses a `.gitignore` that is a symbolic link.
     ///
-    /// **git does not read one.** Measured on git 2.43, and the shape does not
-    /// matter — an absolute link out of the worktree and a relative link to a
-    /// sibling inside it behave identically:
+    /// **Modern git does not read one.** git opens working-tree pattern files
+    /// without following symlinks; older versions used a plain `fopen` and did
+    /// follow the link, so the refusal is merely conservative there rather than
+    /// matching git. Measured on 2.43 below and pinned on 2.43 + 2.55 by CI. The
+    /// shape does not matter — an absolute link out of the worktree and a
+    /// relative link to a sibling inside it behave identically:
     ///
     ///     $ ln -s shared-ignore .gitignore   # relative, inside the repo
     ///     $ touch shared.txt                 # named by a rule in shared-ignore
@@ -794,6 +797,18 @@ public final class RepoViewModel: ObservableObject, Identifiable {
     /// failure.
     static func requireRegularIgnoreFile(at url: URL,
                                          fileManager: FileManager = .default) throws {
+        // A directory named `.gitignore` is not a symlink and would sail past the
+        // check below, then fail at the open with a raw Cocoa "Is a directory"
+        // — the one error in this flow with no guidance attached. Cheap to name
+        // properly, and it makes the function's name true.
+        var isDirectory: ObjCBool = false
+        if fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory),
+           isDirectory.boolValue {
+            throw GitError(
+                message: "Can't ignore this path: “.gitignore” is a directory, so git "
+                    + "can't read ignore rules from it.",
+                exitCode: -1)
+        }
         guard (try? fileManager.destinationOfSymbolicLink(atPath: url.path)) != nil else { return }
         throw GitError(
             message: "Can't ignore this path: “.gitignore” is a symbolic link, and git "

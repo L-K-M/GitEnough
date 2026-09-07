@@ -567,18 +567,16 @@ public final class GitClient {
     /// lands before the restore, it simply succeeds and the `rm` branch is
     /// never reached.
     ///
-    /// It does not close the window, it moves it and makes it smaller. A commit
-    /// landing after `isUnbornHEAD()` answers but before the `rm` still meets
-    /// now-tracked files, and the same is true between `hasHEAD()` and
-    /// `symbolic-ref` inside that check. Only an index lock closes it. A
-    /// compensating "if `hasHEAD()` now, restore" was considered and left out,
-    /// because by then the `rm` has already dropped the index entries and
-    /// `restore --staged` refuses a pathspec absent from the **index** —
-    /// measured: a staged-new file still in the index but absent from HEAD
-    /// restores fine (exit 0), while one removed from the index fails with
-    /// "did not match any file(s) known to git". So the repair throws in the
-    /// case where the `rm` did no harm, which is loudest exactly where it is
-    /// least needed.
+    /// A window remains after the check — a commit landing between
+    /// `isUnbornHEAD()` and the `rm`, or between `hasHEAD()` and `symbolic-ref`
+    /// inside it — so the fallback **repairs** rather than assuming. See the
+    /// `reset` following the `rm` below.
+    ///
+    /// An earlier version of this comment claimed no repair was possible and
+    /// that only an index lock could close the window. That was wrong, and the
+    /// error was picking the wrong command to test: `restore --staged` refuses a
+    /// pathspec absent from the index, which is exactly what the `rm` leaves
+    /// behind, but `reset` re-creates the entry from HEAD regardless.
     ///
     /// Safe because the failure is unambiguous rather than silent. Measured on
     /// git 2.43, `git restore --staged -- <path>` against an unborn HEAD exits
@@ -635,6 +633,27 @@ public final class GitClient {
                 ["-C", worktree.path, "rm", "--cached", "-f", "-r", "--ignore-unmatch", "--"]
                     + literalSpecs,
                 in: nil)
+            // Repairs the window this ordering narrows but cannot close. If a
+            // first commit landed between `isUnbornHEAD()` and the `rm`, those
+            // paths are now tracked and the `rm` just staged their deletion —
+            // the exact damage this function exists to prevent.
+            //
+            // `reset`, not `restore --staged`, and that is the whole reason this
+            // repair works where the earlier one didn't: `restore --staged`
+            // refuses a pathspec absent from the index, which is precisely the
+            // state the `rm` leaves. `reset` re-creates the entry from HEAD
+            // regardless — measured, git 2.43:
+            //
+            //     git rm --cached -f f.txt   →  "D  f.txt" staged deletion
+            //     git reset -q HEAD -- f.txt →  exit 0, entry back, status clean
+            //
+            // Skipped entirely in the ordinary unborn case, where `hasHEAD()`
+            // is false and there was never anything to repair.
+            if hasHEAD() {
+                try runChecked(
+                    ["-C", worktree.path, "reset", "-q", "HEAD", "--"] + literalSpecs,
+                    in: nil)
+            }
         }
     }
 
@@ -692,6 +711,15 @@ public final class GitClient {
                 ["-C", worktree.path, "rm", "--cached", "-r", "-f", "--ignore-unmatch", "--"]
                     + literalSpecs,
                 in: nil)
+            // The same repair as `unstage`, for the same window — narrower here,
+            // since on git 2.43 the reset above succeeds on an unborn HEAD and
+            // this branch is unreachable. It matters on older git, where the
+            // reset fails and the race is live.
+            if hasHEAD() {
+                try runChecked(
+                    ["-C", worktree.path, "reset", "-q", "HEAD", "--"] + literalSpecs,
+                    in: nil)
+            }
             return
         }
         let tracked = try runReadChecked(

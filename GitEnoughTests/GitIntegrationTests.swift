@@ -986,17 +986,20 @@ final class GitIntegrationTests: XCTestCase {
         // destroyed. Both outcomes are acceptable; only the state afterwards
         // is not negotiable.
         var discardSucceeded = true
+        var discardError: Error?
         do {
             try client.discard(paths: ["a.txt"])
         } catch {
             discardSucceeded = false
+            discardError = error
         }
 
         let file = repoURL.appendingPathComponent("a.txt")
         XCTAssertTrue(FileManager.default.fileExists(atPath: file.path),
                       "the worktree file must survive a discard on a broken repository")
         XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "changed\n",
-                       "and keep the user's content — the checkout step must not run")
+                       "and keep the user's content — the checkout step must not run "
+                       + "(discard error: \(String(describing: discardError)))")
 
         // The half this test is named for, and was not checking: a `discard`
         // that silently no-opped would satisfy every assertion above. `ls-files`
@@ -1023,16 +1026,7 @@ final class GitIntegrationTests: XCTestCase {
     /// HEAD there is nothing to restore against, so unstaging drops the index
     /// entry and leaves the file on disk.
     func testUnstageOnUnbornHeadDropsTheIndexEntry() throws {
-        let fresh = FileManager.default.temporaryDirectory
-            .appendingPathComponent("GitEnoughTests-unborn-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: fresh, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: fresh) }
-        // No -b: this test never names the branch, only needs HEAD unborn.
-        // Initialised *before* the client is built: nothing in `GitClient.init`
-        // inspects the worktree today, but a client naming a repository that
-        // does not exist yet works only by that, and the ordering costs nothing.
-        _ = try GitShell.shared.runChecked(["init", fresh.path], in: nil)
-        let unborn = GitClient(worktree: fresh)
+        let (fresh, unborn) = try makeUnbornRepo(label: "unborn")
         try "new\n".write(to: fresh.appendingPathComponent("new.txt"),
                           atomically: true, encoding: .utf8)
         try unborn.stage(paths: ["new.txt"])
@@ -1064,12 +1058,7 @@ final class GitIntegrationTests: XCTestCase {
     /// `discard` path has always passed `-f`, so this was an inconsistency
     /// inside one file rather than a considered difference.
     func testUnstageOnUnbornHeadWorksAfterTheFileIsEditedAgain() throws {
-        let fresh = FileManager.default.temporaryDirectory
-            .appendingPathComponent("GitEnoughTests-unborn-edited-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: fresh, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: fresh) }
-        _ = try GitShell.shared.runChecked(["init", fresh.path], in: nil)
-        let unborn = GitClient(worktree: fresh)
+        let (fresh, unborn) = try makeUnbornRepo(label: "unborn-edited")
 
         let file = fresh.appendingPathComponent("new.txt")
         try "staged\n".write(to: file, atomically: true, encoding: .utf8)
@@ -1162,6 +1151,23 @@ final class GitIntegrationTests: XCTestCase {
 
         XCTAssertTrue(try client.conflictedPaths().isEmpty)
         XCTAssertTrue(try client.status().staged.contains { $0.path == "new.txt" })
+    }
+
+    /// A throwaway repository with an unborn HEAD, removed when the test ends.
+    ///
+    /// `git init` runs before the client is built: nothing in `GitClient.init`
+    /// inspects the worktree today, but a client naming a repository that does
+    /// not exist yet works only by that, and the ordering costs nothing. Shared
+    /// so that rationale cannot survive in one copy and be silently depended on
+    /// by the other.
+    private func makeUnbornRepo(label: String) throws -> (worktree: URL, client: GitClient) {
+        let fresh = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitEnoughTests-\(label)-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: fresh, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: fresh) }
+        // No -b: these tests never name the branch, only need HEAD unborn.
+        _ = try GitShell.shared.runChecked(["init", fresh.path], in: nil)
+        return (fresh, GitClient(worktree: fresh))
     }
 
     /// Asserts that `stageAll` refused *because of the guard*, and named the
