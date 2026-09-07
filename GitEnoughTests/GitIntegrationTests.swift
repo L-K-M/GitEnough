@@ -923,7 +923,9 @@ final class GitIntegrationTests: XCTestCase {
     /// A bare `XCTAssertThrowsError` is not enough here: `stageAll` runs
     /// `conflictedPaths()` first, so a parse failure there also throws — and its
     /// text can perfectly well embed the path — leaving the test green while the
-    /// guard never fired. Hence the type and the message prefix. `-1` marks
+    /// guard never fired. Hence the type and `stageAllRefusalPrefix`, which the
+    /// guard itself builds its message from — matching the literal here made a
+    /// reword of the copy turn these tests red. `-1` marks
     /// "synthesized, not from git", but it is not unique to this guard —
     /// GitShell uses it for "git isn't installed" and "failed to launch" too —
     /// so the prefix is what actually discriminates.
@@ -935,7 +937,7 @@ final class GitIntegrationTests: XCTestCase {
         }
         XCTAssertEqual(gitError.exitCode, -1, "synthesized, not git's own exit code",
                        file: file, line: line)
-        XCTAssertTrue(gitError.message.hasPrefix("Can't stage everything"),
+        XCTAssertTrue(gitError.message.hasPrefix(GitClient.stageAllRefusalPrefix),
                       "the guard refused, not some other GitError: \(gitError.message)",
                       file: file, line: line)
         XCTAssertTrue(gitError.message.contains(path),

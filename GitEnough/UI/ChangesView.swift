@@ -359,7 +359,11 @@ private extension ChangesView {
     /// that information has to appear instead.
     static func stageAllBlockedHelp(_ conflicts: [FileChange]) -> String {
         let names = GitClient.namingFiles(conflicts.map(\.path))
-        return "Resolve \(conflicts.count) conflicted file\(conflicts.count == 1 ? "" : "s") first (\(names)) — staging them accepts whatever is in the worktree"
+        // One binding for both agreements. The noun was already pluralised and
+        // the pronoun was not, so a single conflict read "Resolve 1 conflicted
+        // file first (a.txt) — staging them…" — and one file is the common case.
+        let singular = conflicts.count == 1
+        return "Resolve \(conflicts.count) conflicted file\(singular ? "" : "s") first (\(names)) — staging \(singular ? "it" : "them") accepts whatever is in the worktree"
     }
 }
 

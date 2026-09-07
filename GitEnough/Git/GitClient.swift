@@ -443,11 +443,23 @@ public final class GitClient {
         let conflicted = try conflictedPaths()
         guard conflicted.isEmpty else {
             throw GitError(
-                message: "Can't stage everything while \(conflicted.count) file\(conflicted.count == 1 ? " is" : "s are") still conflicted (\(Self.namingFiles(conflicted))). Staging one accepts whatever is in the worktree — markers and all, or one side silently winning. Resolve each first, then stage it.",
+                message: Self.stageAllRefusalPrefix + " while \(conflicted.count) file\(conflicted.count == 1 ? " is" : "s are") still conflicted (\(Self.namingFiles(conflicted))). Staging one accepts whatever is in the worktree — markers and all, or one side silently winning. Resolve each first, then stage it.",
                 exitCode: -1)
         }
         try runChecked(["-C", worktree.path, "add", "-A"], in: nil)
     }
+
+    /// The opening words of `stageAll`'s refusal, shared with the test that has
+    /// to tell that refusal apart from any other `GitError`.
+    ///
+    /// `exitCode: -1` cannot do that job — fourteen sites in this module use it
+    /// for "synthesized rather than from git", `GitShell`'s "git isn't
+    /// installed" among them — so the test matches the prefix. Which made the
+    /// sentence's first words load-bearing in a file that has no idea, and a
+    /// reword to "Cannot stage everything" would have turned the tests red while
+    /// the guard kept working perfectly. Internal rather than public: this is a
+    /// seam for the tests, not surface for a front end.
+    static let stageAllRefusalPrefix = "Can't stage everything"
 
     /// Names up to `limit` paths and counts the rest — the "a.txt, b.txt and 2
     /// more" fragment that tells the user *which* files are in the way.
