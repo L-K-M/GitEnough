@@ -13,6 +13,11 @@ first five waves of fixes.
 preserves it); when a new issue is found, add it with the same level of
 concreteness.
 
+Wave 5's six PRs are merged. What their review rounds raised and they did *not*
+do lives in **"Review follow-ups from the wave-5 PRs"** below — each with the
+measurement or `file:line` that makes it checkable, so none has to be
+re-derived.
+
 **How much to trust an entry.** Entries carry their own evidence, and the rule is
 uniform: an entry that quotes a `file:line`, shows git output, or says "verified
 against git 2.43" was **checked directly** — those are confirmed. An entry that
@@ -48,12 +53,12 @@ branch:
 
 | PR | Covers |
 |----|--------|
-| #96 | Push sends an explicit `refs/heads/x:refs/heads/y` refspec instead of letting `push.default` decide — and Force Push can no longer rewrite every matching branch. `PushCapability` rewritten around it |
-| #97 | A failed `restore --staged` no longer leaves a staged *deletion*; unborn HEAD unstages via `rm --cached`; `.gitignore` appends are computed in bytes so a bare CR at the join can't destroy the preceding rule |
+| #96 | Push sends an explicit `refs/heads/x:refs/heads/y` refspec instead of letting `push.default` decide — under `matching`, one force push rewrote every branch present on both sides. `PushCapability` rewritten around `forcePushTarget` as the single decision; force push withheld when the remote was *guessed* from a contested upstream; the confirmation dialog freezes the exact argv and refuses if it no longer matches at tap |
+| #97 | A failed `restore --staged` no longer leaves a staged *deletion* — restore-first, with the unborn-HEAD fallback verified *after* the failure rather than inferred from it, and a compensating `reset` repairing the residual race; `discard` carries the same shape. A symlinked `.gitignore` is refused, since git will not read one. `.gitignore` appends are computed in bytes so a bare CR at the join can't destroy the preceding rule |
 | #98 | Diff classification is a hunk state machine, so a diff line whose content starts with `--` or `++` stops rendering as a file header; every patch read passes `--no-color --no-ext-diff`, so a configured `diff.external` can no longer replace what the pane shows and what the model is handed |
 | #99 | GTK lists no longer stage, check out, and apply stashes on a *single* click (`activate-on-single-click = 0`), matching the macOS front end's double-click; per-row tooltips |
-| #100 | "Stage All" refuses while any path is unmerged, instead of `git add -A` staging conflict markers and clearing the unmerged state |
-| #101 | Every git child gets `/dev/null` on stdin, so a command that asks a question fails fast instead of blocking forever on the launching terminal's tty |
+| #100 | "Stage All" refuses while any path is unmerged, instead of `git add -A` staging conflict markers and clearing the unmerged state. One shared constant behind both the refusal and the tooltip, so they cannot describe the hazard differently — modify/delete conflicts have no markers at all |
+| #101 | Every git child gets `/dev/null` on stdin, so a command that asks a question fails fast instead of blocking forever on the launching terminal's tty. That makes `git mergetool --no-prompt` load-bearing rather than a convenience, which is now pinned by a test — both rows of the matrix exit 1, so only a marker file distinguishes them |
 
 Verified non-issues, kept for the record (don't re-audit):
 - **Graph width never includes trailing free lanes** — every lane is either
@@ -124,6 +129,27 @@ existing same-repo `if:` gate, and re-pin the action SHA deliberately rather
 than tracking a tag.
 
 **Status: blocked on that upstream release, not on anything in this repository.**
+
+**Timing correction (2026-09-07).** The 3–5 minute cluster above is stale, and
+reading it as current will make you call a healthy run dead. Wave-5 rounds on
+these diffs chunk into **four** sequential API calls, and successful rounds took
+**49–59 minutes** — the 300 s ceiling is *per chunk*, so total job time scales
+with chunk count. During this wave a round was nearly abandoned as timed out at
+56 minutes and completed normally at 59. "No result yet at 45 minutes" is not a
+timeout; distinguish by reading the job log, where a real timeout says
+`Request timed out` and rate limiting says `HTTP 429` in well under a second.
+
+**Two operational traps that cost real time this wave, neither of them about
+this workflow's configuration:**
+
+- **A PR whose merge ref GitHub cannot compute gets _no_ checks at all.** The
+  symptom is the *absence* of checks, not red ones, so it reads as "still
+  queued" indefinitely. After merging anything that conflicts an open PR, check
+  `git merge-tree --write-tree origin/main origin/<branch>` rather than waiting.
+- **Pushing a conflict-resolution merge cancels the in-flight review round.**
+  Two PRs each lost a ~50-minute round that way, on the exact commits whose
+  review mattered most. Sequence merges so a dependant's round lands *before*
+  you merge the PR that will conflict it.
 
 **Do not confuse this with the other red GLM check — `HTTP 429`.** Wave 5 opened
 five PRs in quick succession and two of their review runs failed like this:
@@ -530,6 +556,38 @@ first, then implement it whole.
 Compare `git`'s own `safe.directory` and VS Code's Workspace Trust: the useful
 part is the *prompt on first contact*, not the flag.
 
+**Widened (2026-09-07, PR #97): the repository can also choose where the app
+*writes*, not only what it *runs*.** Everything above is about repo-named
+**code** — textconv, hooks, `core.pager`. #97 found the other half. A clone can
+ship `.gitignore` as a symlink (mode `120000`, materialised by checkout), so
+`.gitignore -> ~/.zshrc` turned one "Ignore" click into an append to the user's
+shell config. No code execution required, and nothing in the app's threat model
+covered it.
+
+That instance is closed, and the reason is stronger than containment: **git
+itself will not read a symlinked `.gitignore`.** It opens working-tree pattern
+files without following symlinks, so a single-hop link raises `ELOOP` and the
+rule is silently never applied — "Too many levels of symbolic links" is
+`strerror(ELOOP)`, not evidence of a cycle. Verified on a one-hop link to a
+regular file that `cat` reads through fine while git refuses it, and pinned on
+git 2.43 (Ubuntu CI) and 2.55 (macOS CI) by
+`GitIgnoreTests.testGitIgnoresASymlinkedGitignoreEntirely`. Older git *did*
+follow the link, so for those users the refusal is conservative rather than
+matching git. Following it wrote rules where git never looks, so there was no
+legitimate configuration to preserve.
+
+**The generalisation is the part that matters here:** any feature that writes
+into the worktree *by path* has this exposure, and the guard has to be at the
+write. The next one is **M21** ("Ignore Locally" via `.git/info/exclude`) —
+`.git/info/exclude` is inside `.git`, so a checkout cannot plant a symlink
+there, but the same lstat-before-write discipline should be stated when it
+ships. **Stronger end state, not yet done:** `open(url.path, O_RDWR | O_NOFOLLOW)`
+on the append path makes the *open* the enforcement point, closing the
+check-then-use gap a pre-check leaves. Declined three times during #97 on the
+grounds that the remaining race needs a same-user local process that already has
+code execution — unlike the shipped-symlink vector, which is static and fully
+caught. Worth doing when this entry's trust work lands.
+
 **Decision (2026-09-06, repository owner).** Raised three times during PR #98's
 review, which pushed for shipping `--no-textconv` as a deny-by-default interim
 mitigation. Declined in favour of doing this properly: textconv stays enabled, so
@@ -612,6 +670,44 @@ authoritative remote name there is nothing left to be ambiguous about, so the
 refusal becomes unreachable in normal operation rather than something a user with
 nested remote names has to work around.
 
+**A second, sharper repro (raised on #96, 2026-09-07).** The case above has the
+same branch name on both sides, which makes the tie-break's failure feel like a
+coin flip. This one breaks it through a different door, with the branch names
+*differing*:
+
+- remotes `origin` and `origin/dev` both configured
+- local `dev` tracking `refs/heads/dev/dev` on `origin` (after
+  `git push -u origin dev:refs/heads/dev/dev`), so the shorthand is
+  `origin/dev/dev`
+- candidates: `origin` → `dev/dev`, and `origin/dev` → `dev`
+- the tie-break matches `dev`, so `split` returns `origin/dev` and
+  `isAmbiguous` returns **false** — a confident wrong answer
+
+Correct per config is `origin` + `dev/dev`. Pin this one when
+`%(upstream:remotename)` lands; it is the case a fallback-only implementation
+would still get wrong.
+
+**What shipped in the meantime (#96), so the residual is bounded rather than
+open.** `Remote.split` reports `remoteWasGuessed`, force push is withheld
+whenever it is true, and the push progress line names the remote it chose so a
+guessed destination is at least visible. A plain push to a guessed remote is
+still allowed: refusing would turn Push into an error for *every* nested-remote
+setup, which is worse than a recoverable push to one of two plausible refs —
+`%(upstream:remotename)` removes the guess rather than the button. Also pinned:
+`testASlashBearingLocalUpstreamIsIndistinguishableFromAVanishedRemote`, which
+records a *limitation* deliberately — a local-tracking branch whose branch name
+contains a slash (`branch.<n>.remote = "."`, upstream `feature/foo`) is reported
+as a vanished remote. That assertion is expected to **fail** when this entry
+lands, and to be flipped then, rather than the limitation quietly disappearing.
+
+**While you are here:** `Remote.isAmbiguous` and `Remote.split` are two entry
+points that must encode the same tie-break, and `resolve` calls both. Consider
+one `Remote.resolveUpstream(...)` returning `resolved` / `ambiguous` /
+`unmatched`, so a caller cannot consult half the contract — the divergence is
+most likely precisely while this change is being made. `Remote.preferred` also
+splits *without* the local-branch tie-break, so a status-bar label can name a
+different remote than a push would target; harmless today, worth aligning.
+
 ### o-R1 · `GitShell.gitURL` is written on main and read from every repo queue — S
 
 `reprobe()` writes `gitURL` from the main thread while every repo's serial queue
@@ -631,6 +727,145 @@ initialization rather than returning early. **Fix:** an `hasStarted` guard.
 below, which is the more serious instance.
 
 ---
+
+## Review follow-ups from the wave-5 PRs (`#96`, `#97`, `#100`, `#101`)
+
+Raised during those PRs' review rounds, judged real, and deliberately **not**
+done there — each was either out of the PR's scope or a ripple large enough to
+deserve its own change. Every one carries the measurement or the file:line that
+makes it checkable, so none needs re-deriving.
+
+### w5-1 · Append the `.gitignore` rule when a later `!` negation wins — S
+
+`RepoViewModel.ignore` reaches its append branch only when
+`client.isIgnored(path:)` said **no**. If `GitIgnore.appendedBytes` then returns
+empty, the literal rule is already in the file *and* git still does not ignore
+the path — which only a later negation produces. That case now throws an
+actionable error; it used to return quietly, reporting success and writing
+nothing.
+
+Throwing is not the right end state. gitignore is **last-match-wins**, so
+appending the rule again does re-ignore the path (measured, git 2.43):
+
+```
+/build          →  git check-ignore build/x.o   exit 1  (not ignored)
+!/build
+/build          →  git check-ignore build/x.o   exit 0, .gitignore:3:/build
+```
+
+**Fix:** let `GitIgnore.appending` skip its duplicate suppression at this one
+call site — a parameter, or a separate entry point that always emits the rule —
+and append. The duplicate check is right in general and wrong here, because the
+caller has already asked git and been told the rule is not taking effect.
+
+### w5-2 · Make the `.gitignore` open the enforcement point — S
+
+`requireRegularIgnoreFile` stats the path; the append branch opens it later with
+`FileHandle(forUpdating:)`, which follows symlinks. A link swapped in between is
+written through. Replace with `open(url.path, O_RDWR | O_NOFOLLOW)` wrapped in
+`FileHandle(fileDescriptor:closeOnDealloc:)`, mapping `ELOOP` and `EISDIR` to
+the existing messages. The creation branch is already safe — `.atomic` renames
+over the path rather than following it. See **o-L14**; declined three times
+during #97 because the race needs a same-user process that already has code
+execution, unlike the shipped-symlink vector that guard actually closes.
+
+### w5-3 · Drive the `.gitignore` refusals through the public path — S/M
+
+Every symlink-refusal test calls `RepoViewModel.requireRegularIgnoreFile`
+directly. Nothing executes `ignore` end to end against a symlinked `.gitignore`,
+so a refactor that stopped calling the guard from one of the two branches would
+keep the whole suite green. Same gap for the byte-append contract: no test
+asserts the *on-disk* result after `ignore` on a file ending in a bare CR. Needs
+a view model, a repo fixture and the async `perform` path.
+
+### w5-4 · Pin `isUnbornHEAD`'s four-state matrix, and check it on old git — S
+
+The safety of `unstage`/`discard` rests on `rev-parse` and `symbolic-ref`
+separating unborn from corrupt (measured on git 2.43 only):
+
+| state | rev-parse | symbolic-ref | verdict |
+|---|---|---|---|
+| healthy | 0 | 0 | not unborn |
+| garbage ref contents | 1 | 128 | not unborn |
+| well-formed SHA, no object | 0 | 0 | not unborn |
+| genuinely unborn | 1 | 0 | **unborn** |
+
+Only prose enforces it. Build each state in a temp repo and assert the matrix,
+and run it against the oldest supported git — if an older `symbolic-ref` exits 0
+for a corrupt target, a corrupt repo is classified unborn and reaches
+`rm --cached -f`, which `-f` makes destructive.
+
+### w5-5 · Skip reftable repositories before mutating them — S
+
+`corruptHeadRef` writes a garbage loose ref and *then* infers the reftable
+backend from "HEAD still resolves". On reftable it leaves a stray loose ref file
+and both corrupt-ref tests skip — so the regression they pin has no coverage on
+the backend git is moving toward. Query `extensions.refstorage` (or
+`rev-parse --git-ref-format` on 2.45+) first, keep the post-hoc guard as a
+backstop, and ideally add a reftable-native corruption variant.
+
+### w5-6 · Kill the `"Can't push: "` prefix contract — S
+
+`UnavailableReason.forcePushMessage` rewrites `message` by stripping a hardcoded
+prefix that every case hand-writes. Reword one case's opening and that reason
+silently keeps the push verb in force-push contexts. Move each sentence into a
+private `detail` with no verb, and compose `message` and `forcePushMessage` from
+it. Declined three times during #96 because
+`testEveryUnavailableReasonCarriesThePushPrefix` polices it — that test is now
+genuinely exhaustive (its fixtures are built *inside* the exhaustive switch, so
+a new case cannot compile without one), but structural beats policed.
+
+### w5-7 · Validate push operands by throwing, not by trapping — S
+
+`pushArguments` guards the empty-name case with `precondition`, which survives
+release builds: a parser regression means a crash rather than an error, in a
+core feature. It guards a genuinely destructive shape — an empty source side
+makes `refs/heads/:refs/heads/x`, which git reads as a **delete** — so it cannot
+simply go. Make the builders `throws` (rippling to the confirmation-dialog
+builder and every test), or return `PushCommand?`. Declined four times during
+#96 on ripple size; the reasoning has not changed, only the count.
+
+### w5-8 · Publish auto-picks `remotes.first` when there is no `origin` — S/M
+
+On the no-upstream path `resolve` falls back to `origin`, else `remotes.first`,
+and `pushOrPublish` runs `push -u` — so one click binds `branch.<n>.remote` to
+whichever remote git happens to list first. This is **inconsistent with the
+deliberate refusal one block above**, where a configured-but-missing upstream
+refuses rather than falling back precisely because that heuristic is unsafe. A
+product decision: either add a "choose a remote" reason for the multi-remote,
+no-`origin` case, or state why publish may guess where push may not.
+
+### w5-9 · Smaller, all checkable — S each
+
+- **`parseVersion`'s unanchored fallback** now takes the last dotted token, so
+  `shim 3.5: git 2.20` reads (2, 20). A banner with *no* dotted token after a
+  wrapper's own is still unreachable-by-construction rather than proven; add
+  cases if a real wrapper shape turns up.
+- **Warm `supportsForceIfIncludes` at app launch**, not via `queue.async` in
+  `RepoViewModel.init`. The current warm-up is best-effort; a view body that
+  wins the race blocks on `swift_once` for one `git --version`. A stored,
+  asynchronously-populated property removes the race rather than usually winning
+  it.
+- **Carry a typed reason on `PushCommand`** instead of the dialog inferring the
+  cause from `refusesUnintegratedRemoteWork`. The boolean says the flag is
+  absent; the copy asserts *why*, and only the version gate produces that today.
+- **Bind a worktree into `PushCommand`** so `push(_:)` cannot run a command
+  built for another repository. Theoretical — the dialog pairs one command with
+  one client — but the type is meant to make this class impossible.
+- **Measure whether `FileHandle.nullDevice` leaks a descriptor per git spawn**
+  (`/proc/<pid>/fd` count across a loop of invocations, both platforms) before
+  caching it. Caching needs `nonisolated(unsafe)` on a non-`Sendable` type to
+  save one `open("/dev/null")` per process spawn, so only do it if measured.
+- **The three `GitClient` copy constants** (`stageAllRefusalPrefix`,
+  `conflictStagingConsequence`, `namingFiles`) are internal because `UI/`
+  compiles into the same module. They go public together if the GTK front end
+  ever grows the Stage All tooltip.
+- **`discard`'s unborn branch may be dead code.** `git reset -q HEAD -- <path>`
+  *succeeds* on an unborn HEAD in git 2.43 (exit 0, index emptied), so the
+  fallback is only reachable on older git. Confirm the floor before removing it.
+- **#98's two follow-ups:** a positive control on the staged-path guard in
+  `testDiffReadsIgnoreAConfiguredExternalDiffDriver`, and a test pinning the
+  `diff --combined` header shape.
 
 ## Performance & architecture
 
