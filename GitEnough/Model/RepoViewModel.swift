@@ -160,6 +160,26 @@ public final class RepoViewModel: ObservableObject, Identifiable {
         activityLog.onChange = { [weak self] entries in
             DispatchQueue.main.async { self?.activityEntries = entries }
         }
+        // Warm the `--force-if-includes` probe off the main thread. It is a
+        // `static let`, so the first touch runs `git --version`, and without
+        // this the first touch is a view body reading `forcePushResolution`.
+        //
+        // A global queue, not `queue`. The repo queue is serial and exists to
+        // order *this repository's* git operations; `git --version` is not one
+        // of them — it takes no `-C` and has no relationship to repo state, so
+        // AGENTS.md's serial-access rule does not reach it. Putting it there
+        // only bought a choice between two bad orderings: ahead of the initial
+        // status load, delaying first paint by a subprocess, or behind it and
+        // therefore finishing right around when the first body reads the
+        // property — precisely the stall being avoided.
+        //
+        // Best effort either way, not an ordering guarantee. If a body wins the
+        // race it blocks on `swift_once` for one `git --version`: bounded and
+        // one-time, not a hang. Closing it properly means a stored,
+        // asynchronously-populated property, or warming once at launch before
+        // any window renders; recorded rather than guessed at. `swift_once`
+        // does make this exactly one probe however many repos open at once.
+        DispatchQueue.global(qos: .utility).async { _ = GitClient.supportsForceIfIncludes }
     }
 
     deinit {
@@ -350,11 +370,73 @@ public final class RepoViewModel: ObservableObject, Identifiable {
         perform(rebase ? "Pulling (rebase)…" : "Pulling…") { try $0.pull(rebase: rebase) }
     }
 
+    /// The outcome of asking "can this branch be force pushed right now?" —
+    /// carrying either the command or a sentence saying why not.
+    public enum ForcePushResolution {
+        case command(GitClient.PushCommand)
+        case refused(String)
+    }
+
+    /// Whether a force push is possible right now, and the command it would run.
+    ///
+    /// The *decision* is not made here — `PushCapability.forcePushTarget` owns
+    /// it, so that `allowsForcePush` and this cannot disagree about the one
+    /// action in this app that destroys someone else's work. What is left here
+    /// is the part that needs a `GitClient`: turning the allowed refs into the
+    /// argv, which is deliberately not done in the pure decision type.
+    ///
+    /// The single force-push surface the view uses. It was three — this plus a
+    /// `forcePushCommand` for the menu's `.disabled` and a `forcePushRefusal`
+    /// for its `.help` — and both extras existed to serve a disabled menu item
+    /// that could not explain itself. The item is no longer disabled, so the
+    /// refusal reaches the user through the same error banner every other
+    /// refused operation uses, and there is one surface again.
+    public var forcePushResolution: ForcePushResolution {
+        switch pushCapability.forcePushTarget {
+        case .allowed(let remote, let local, let remoteBranch):
+            return .command(GitClient.forcePushArguments(
+                remote: remote, localBranch: local, remoteBranch: remoteBranch))
+        case .refused(let reason):
+            return .refused(reason)
+        }
+    }
+
     /// Force push with lease. The UI gates this behind an explicit
     /// confirmation dialog — it rewrites the remote branch.
-    public func forcePush() {
+    ///
+    /// The capability is re-resolved here (through `forcePushResolution`)
+    /// rather than trusted from the click: force-pushing is the one action
+    /// where sending a stale refspec would rewrite the wrong branch, and only
+    /// `.push` has an upstream this app is certain enough about to overwrite.
+    ///
+    /// Re-resolving alone is not enough, which is why `confirming` exists. The
+    /// dialog renders its command when it opens; this runs at tap. A refresh
+    /// landing in between — the watcher fires every 2.5 s — can re-point the
+    /// branch's upstream, and the user would then confirm one refspec and
+    /// force-push another. So the caller passes back the command it *showed*,
+    /// and a mismatch refuses rather than proceeding. Narrow window, but this is
+    /// the one action in the app that destroys work, and "the command shown and
+    /// the command run cannot drift apart" is the whole claim being made.
+    ///
+    /// Required, not defaulted: with `= nil` a future caller — a keyboard
+    /// shortcut, a context menu — force-pushes with no staleness check at all
+    /// and the compiler says nothing. The parameter being mandatory is what
+    /// makes the guarantee one rather than a convention.
+    public func forcePush(confirming shown: GitClient.PushCommand) {
+        let command: GitClient.PushCommand
+        switch forcePushResolution {
+        case .command(let resolved):
+            command = resolved
+        case .refused(let reason):
+            errorMessage = reason
+            return
+        }
+        if shown != command {
+            errorMessage = "The force push changed while the confirmation was open, so the command shown is no longer the one that would run. Open Force Push again to review it."
+            return
+        }
         perform("Force pushing…", invalidatesMessageGeneration: false) {
-            try $0.push(setUpstream: false, forceWithLease: true)
+            try $0.push(command)
         }
     }
 
@@ -381,18 +463,27 @@ public final class RepoViewModel: ObservableObject, Identifiable {
     /// a remote, and the error explains the next useful step.
     public func pushOrPublish() {
         switch pushCapability {
-        case .push:
-            push()
-        case .publish(let remote):
-            publishBranch(to: remote)
+        // A guessed remote pushes exactly like a known one: the refspec is
+        // fully qualified either way, and a plain push to the wrong ref of two
+        // readings is recoverable. Only `forcePush` withholds.
+        case .push(let remote, let local, let remoteBranch),
+             .pushToGuessedRemote(let remote, let local, let remoteBranch):
+            // The remote is named because it may have been *guessed*: with two
+            // configured remotes that both read the upstream, the tie-break
+            // picks one and nothing else on screen says which. Force push is
+            // withheld for that uncertainty; a plain push is allowed and
+            // recoverable, so the least this can do is say where it went.
+            perform("Pushing to \(remote)…", invalidatesMessageGeneration: false) {
+                try $0.push(remote: remote, localBranch: local, remoteBranch: remoteBranch,
+                            setUpstream: false)
+            }
+        case .publish(let remote, let branch):
+            perform("Publishing branch…", invalidatesMessageGeneration: false) {
+                try $0.push(remote: remote, localBranch: branch, remoteBranch: branch,
+                            setUpstream: true)
+            }
         case .unavailable(let reason):
             errorMessage = reason.message
-        }
-    }
-
-    private func push() {
-        perform("Pushing…", invalidatesMessageGeneration: false) {
-            try $0.push(setUpstream: false)
         }
     }
 
@@ -403,14 +494,6 @@ public final class RepoViewModel: ObservableObject, Identifiable {
     /// would otherwise die on "You have not concluded your merge").
     public var canPull: Bool {
         !isBusy && !remotes.isEmpty && status.upstream != nil && !mergeState.isInProgress
-    }
-
-    /// Push -u <remote> HEAD for a branch with no upstream yet. Only invoked
-    /// with the remote selected by `PushCapability.resolve`.
-    private func publishBranch(to remote: String) {
-        perform("Publishing branch…", invalidatesMessageGeneration: false) {
-            try $0.push(setUpstream: true, remote: remote)
-        }
     }
 
     // MARK: Pull request

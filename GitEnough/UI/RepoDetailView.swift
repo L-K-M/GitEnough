@@ -18,6 +18,14 @@ struct RepoDetailView: View {
     /// the single most destructive unguarded action in the banner.
     @State private var confirmingAbort = false
     @State private var showingForcePushConfirmation = false
+    /// The exact command the open confirmation dialog is showing. Compared
+    /// against a freshly resolved one when the user confirms, so a refresh
+    /// between opening and confirming cannot swap the refspec underneath them.
+    @State private var pendingForcePush: GitClient.PushCommand?
+    /// The branch name as it read when the force-push dialog opened. Frozen
+    /// alongside `pendingForcePush` because the dialog's *title* closure is the
+    /// one place `presenting:` cannot reach.
+    @State private var pendingForcePushBranch: String?
 
     /// Lowercase noun of the in-progress operation for the abort dialog's
     /// sentence text ("… before the merge started").
@@ -120,16 +128,51 @@ struct RepoDetailView: View {
                 // which it is, so label, tooltip and action can't drift apart.
                 // The ahead count rides on the plain-push label — that number is
                 // most of the reason to glance at this button. Split button:
-                // clicking pushes (or publishes); the menu half holds the rarely
-                // needed, confirmed force push, offered only for a plain push —
-                // a branch with no upstream yet has nothing to overwrite.
+                // clicking pushes (or publishes); the menu half holds the
+                // rarely needed, confirmed force push.
                 Menu {
+                    // Live even when a force push is impossible, deliberately.
+                    // A disabled menu item cannot explain itself on macOS:
+                    // `.help()` on `Menu` content becomes an NSMenuItem tooltip
+                    // that never renders, and the refusals are two to four
+                    // sentences — the wrong shape for a menu row at any length.
+                    // So the click resolves instead: the confirmation dialog
+                    // when a force push is possible, the reason in the error
+                    // banner when it is not, which is the channel every other
+                    // refused operation here already uses (`pushOrPublish`
+                    // surfaces `UnavailableReason.message` the same way).
+                    // Nothing destructive opens up — the dialog this can reach
+                    // still has to be confirmed.
                     Button("Force Push (with Lease)…") {
-                        showingForcePushConfirmation = true
+                        // Captured here, when the dialog opens, and not
+                        // re-derived in the confirm action: re-deriving would
+                        // read whatever the capability says at *tap* time,
+                        // which is exactly the value the comparison exists to
+                        // catch changing.
+                        //
+                        // Switched rather than guarded, and never a bare
+                        // `return`: a destructive button that does nothing at
+                        // all hides the state behind it. Say what happened.
+                        switch viewModel.forcePushResolution {
+                        case .command(let command):
+                            pendingForcePush = command
+                            // Snapshotted with the command, for the same reason
+                            // the command is: the title closure does not receive
+                            // the `presenting:` value, so left interpolating
+                            // `viewModel.status.head` it would re-render live
+                            // while the refspec below stayed frozen — and the
+                            // user could confirm a title naming one branch over
+                            // a command pushing another. That is the drift this
+                            // whole flow exists to prevent, one line up from
+                            // where it was fixed.
+                            pendingForcePushBranch = viewModel.status.head
+                            showingForcePushConfirmation = true
+                        case .refused(let reason):
+                            viewModel.errorMessage = reason
+                        }
                     }
-                    .disabled(viewModel.pushCapability != .push)
                 } label: {
-                    Label(viewModel.pushCapability == .push && viewModel.status.ahead > 0
+                    Label(viewModel.pushCapability.tracksAnUpstream && viewModel.status.ahead > 0
                           ? "Push (\(viewModel.status.ahead))"
                           : viewModel.pushCapability.label,
                           systemImage: "arrow.up.to.line")
@@ -168,16 +211,107 @@ struct RepoDetailView: View {
             Text("Aborting returns the repository to the state before the \(inProgressNoun) started. Any conflict resolutions you haven't committed will be lost.")
         }
 
-        .confirmationDialog("Force push “\(viewModel.status.head ?? "")”?",
+        // `presenting:` rather than reading `pendingForcePush` inside the
+        // closures. Both are captured from the same snapshot, so the two
+        // spellings agree today — but only because SwiftUI happens to run a
+        // dialog button's action before the dismissal propagates `isPresented =
+        // false` to the `onChange` below. Nothing in the API contract promises
+        // that order, and if it ever flipped, confirm would read a nil snapshot
+        // and do nothing at all: a silent no-op on the one button whose whole
+        // claim is that the command shown and the command run cannot drift
+        // apart. Handing the value to the closures removes the question.
+        .confirmationDialog("Force push “\(pendingForcePushBranch ?? "")”?",
                             isPresented: $showingForcePushConfirmation,
-                            titleVisibility: .visible) {
+                            titleVisibility: .visible,
+                            presenting: pendingForcePush) { command in
+            // Neither action clears the snapshot: `onChange` below does, on
+            // every dismissal path including Esc and outside-click. Clearing
+            // here as well was belt-and-braces, and I kept it for a round on
+            // that reasoning — but it mutates the `presenting:` value while the
+            // dialog is still inside its dismissal transaction, which is the
+            // ordering assumption the comment above says not to rely on. Two
+            // fields kept in step across three sites is also how the next
+            // frozen field gets cleared in two of them.
             Button("Force Push (with Lease)", role: .destructive) {
-                viewModel.forcePush()
+                viewModel.forcePush(confirming: command)
             }
             Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("This rewrites the remote branch to match your local history. “With lease” refuses to overwrite commits you haven't fetched yet, so a teammate's new work can't be lost silently — but anyone who pulled the old history will have to recover.")
+        } message: { command in
+            Text(Self.forcePushWarning(for: command))
+            // Monospaced, because the refspec is the one part of this dialog
+            // the user has to actually read, and `local:remote` with its
+            // colon is exactly what proportional type renders worst.
+            //
+            // Interpolated rather than concatenated: `Text(someString)` picks
+            // the verbatim initializer, so building this with `+` would take
+            // the sentence out of localization while leaving the dialog
+            // around it in. The command itself stays verbatim, as it should.
+            Text("Will run in this repository:")
+            // `verbatim:`, not the localizing initialiser. The interpolated
+            // command is inserted as-is either way, but the literal "git "
+            // prefix becomes the extractable key "git %@" — so the one line in
+            // this dialog that must read byte-for-byte as the argv being
+            // approved was the only translatable thing in it. Everything else
+            // here is prose and stays localizable.
+            Text(verbatim: "git \(GitActivityLog.displayCommand(for: command.arguments))")
+                .font(.system(.footnote, design: .monospaced))
         }
+        // Hygiene now rather than correctness: with `presenting:` the dialog
+        // can no longer show a stale command, but dismissing by clicking
+        // outside runs neither button action, and leaving a destructive
+        // refspec in view state is exactly the staleness this flow exists to
+        // eliminate.
+        .onChange(of: showingForcePushConfirmation) { _, showing in
+            if !showing {
+                pendingForcePush = nil
+                pendingForcePushBranch = nil
+            }
+        }
+    }
+
+    /// Two literals, picked by what the command about to run actually carries.
+    ///
+    /// The strong sentence is only true because `pushArguments` sends
+    /// `--force-if-includes` alongside `--force-with-lease`. Measured against
+    /// git 2.43 on one fixture — teammate pushes, our background auto-fetch
+    /// pulls their commit into the tracking ref, we force push: the bare lease
+    /// is *accepted* and their commit is destroyed, while the same push with
+    /// `--force-if-includes` is rejected and it survives.
+    ///
+    /// But that flag is gated on git 2.30, and dropped when `git --version`
+    /// cannot be read or parsed. On such a git the lease compares only against
+    /// the tracking ref that the app's own fetch just moved, so the strong
+    /// sentence would promise protection precisely where there is none — the
+    /// most destructive dialog in the app, confidently wrong. So it says the
+    /// weaker, true thing instead.
+    ///
+    /// And the weak branch says "can't confirm", not "your git is old", because
+    /// those are different facts and only one of them is knowable here. Telling
+    /// someone on a modern git whose banner merely failed to parse that their
+    /// git is out of date hands them a remedy that cannot work, which is the
+    /// same failure this whole property exists to avoid — one dialog down.
+    ///
+    /// Typed as `LocalizedStringKey`, and each a single literal rather than a
+    /// concatenation, so `Text` takes the localizing initializer. A `String`
+    /// constant here would silently make the app's most safety-critical
+    /// sentence the only untranslated one on screen.
+    private static func forcePushWarning(for command: GitClient.PushCommand) -> LocalizedStringKey {
+        // Keyed off the argv actually about to run, not off the capability the
+        // builder consulted. Those are two readings of one fact, and the
+        // monospaced line directly below this sentence shows the user the
+        // flags — so if they ever disagreed, the dialog would promise a
+        // protection its own command visibly does not carry.
+        command.refusesUnintegratedRemoteWork
+            ? "This rewrites the remote branch to match your local history. It refuses if the remote has commits you haven't merged in — including ones GitEnough fetched for you in the background — so a teammate's new work can't be lost silently. Anyone who already pulled the old history will still have to recover."
+            // Cut to the three facts that change the decision: what this does,
+            // what it can silently destroy, and who still has to recover. A
+            // `confirmationDialog` message does not scroll, and this is the
+            // branch where the protection is *weakest* — burying "a teammate's
+            // work can be overwritten" in a paragraph of remediation is the
+            // wrong trade at the moment of decision. The remediation survives
+            // as four words rather than two sentences, because this dialog is
+            // the only place that names the gap at all.
+            : "This rewrites the remote branch to match your local history. GitEnough can't confirm your git is 2.30 or newer, so a teammate's commits that GitEnough already fetched in the background can be overwritten without warning — updating git closes that gap. Anyone who already pulled the old history will still have to recover."
     }
 
     // MARK: - Toolbar pieces

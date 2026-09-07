@@ -150,6 +150,92 @@ public final class GitClient {
         return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// `(major, minor)` from a `git --version` banner, or nil when it doesn't
+    /// look like one. Pure, so the version gate below is testable without a git.
+    ///
+    /// Handles the shapes real gits emit: `git version 2.43.0`,
+    /// `git version 2.39.3 (Apple Git-146)`, `git version 2.30.1.windows.1`.
+    public static func parseVersion(_ banner: String) -> (major: Int, minor: Int)? {
+        let fields = banner.split(separator: " ")
+        // Anchored on git's literal `version` token when the banner has one, so
+        // a numeric token in wrapper output ("shim 1.2: git version 2.43.0")
+        // cannot be misread as the version and cached as "too old" for the life
+        // of the process. Falling back to scanning every field keeps a bare
+        // `2.43.0` — which some wrappers print instead of a full banner —
+        // parsing as it did. That fallback is why the anchored form is worth
+        // having at all: a purely anchored parse would return nil there.
+        // Anchored: the first numeric token after `version` is the answer.
+        // Unanchored: the *last* one is, because a wrapper prints its own
+        // version before git's, never after — `shim 3.5: git 2.20` must read
+        // (2, 20), and first-match read (3, 5).
+        //
+        // The two misreads are not symmetric, which is why this is worth the
+        // extra pass. Reading too low silently drops `--force-if-includes`, and
+        // the dialog already says it cannot confirm the version. Reading too
+        // high appends the flag on a git that lacks it, and every force push
+        // then fails with "unknown option" until the app restarts, because the
+        // probe is a `static let` cached for the process.
+        let anchor = fields.firstIndex(of: "version")
+        let start = anchor.map { $0 + 1 } ?? fields.startIndex
+        var parsed: (major: Int, minor: Int)?
+        for field in fields[start...] {
+            let parts = field.split(separator: ".")
+            guard parts.count >= 2,
+                  let major = Int(parts[0]), let minor = Int(parts[1]) else { continue }
+            parsed = (major, minor)
+            if anchor != nil { break }
+        }
+        return parsed
+    }
+
+    /// Whether this git understands `--force-if-includes` (2.30, Dec 2020).
+    ///
+    /// Resolved once per process. `pushArguments` stays referentially
+    /// transparent within a run, which is what the confirmation dialog needs:
+    /// it and the client call the same function and get the same command.
+    ///
+    /// That is also why an *indeterminate* probe — `version()` nil, or a banner
+    /// `parseVersion` cannot read — is cached as `false` rather than retried.
+    /// Retrying looks safer and is not: a probe that failed when the dialog
+    /// opened and succeeded when the user confirmed would build a different
+    /// command, and `forcePush(confirming:)` would refuse a legitimate push
+    /// with "the upstream changed while the confirmation was open". The
+    /// staleness guarantee needs this constant within a run more than it needs
+    /// a second chance at the answer.
+    ///
+    /// The user-visible half is handled where it belongs: the confirmation
+    /// dialog reads this flag and, when it is false, says it cannot confirm the
+    /// git version rather than promising a protection that is not there.
+    /// `RepoViewModel.init` warms it on the repo queue so the first touch is
+    /// not a subprocess on the main thread.
+    /// Public because `pushArguments` and `forcePushArguments` are public and
+    /// name it as a default argument value — Swift requires a default on a
+    /// public function to be visible wherever that function is. It sits beside
+    /// `version()` and `parseVersion(_:)`, which were already public; internal
+    /// was the anomaly.
+    public static let supportsForceIfIncludes: Bool = {
+        guard let banner = version(), let v = parseVersion(banner) else { return false }
+        return versionSupportsForceIfIncludes(v)
+    }()
+
+    /// The gate itself, as a pure function of a parsed version.
+    ///
+    /// Extracted so a test can pin *this* comparison rather than its own copy of
+    /// it. `testTheVersionGateComparison` used to write `>= (2, 30)` inline, so
+    /// moving the threshold or regressing the operator changed production and
+    /// left the test green — and the only end-to-end check sits behind
+    /// `XCTSkipUnless(supportsForceIfIncludes)`, meaning a gate regression makes
+    /// the runner *skip* the assertion that would have caught it. On every host.
+    /// Deliberately *not* an overload of the property above: `pushArguments`
+    /// names `supportsForceIfIncludes` as a default argument value, and putting
+    /// a function into that name's overload set makes a resolvable-but-fragile
+    /// expression out of one that is currently unambiguous. A distinct name
+    /// costs nothing and cannot go wrong.
+    public static func versionSupportsForceIfIncludes(
+        _ version: (major: Int, minor: Int)) -> Bool {
+        (version.major, version.minor) >= (2, 30)
+    }
+
     // MARK: - Status / branches / remotes
 
     public func status() throws -> RepoStatus {
@@ -764,18 +850,184 @@ public final class GitClient {
         try runChecked(args, in: nil)
     }
 
+    /// Pushes exactly one branch to exactly one remote.
+    ///
+    /// The refspec is never left implicit. A bare `git push` delegates the
+    /// choice of what to send to `push.default`, `remote.pushDefault` and
+    /// `branch.<name>.pushRemote`: under `push.default = matching` (git's
+    /// default before 2.0, and still present in plenty of inherited configs) it
+    /// pushes *every* branch that exists on both sides, so a single force push
+    /// rewrites branches the user never selected; under `current` it pushes to a
+    /// same-named branch that need not be the configured upstream the app's
+    /// ahead/behind counters are measured against; under `nothing` it fails
+    /// outright. Naming the refspec makes all three irrelevant.
+    ///
+    /// Both sides are fully qualified so that a branch sharing its short name
+    /// with a tag cannot be selected instead, and so a name beginning with `-`
+    /// can never land in option position.
+    ///
     /// `forceWithLease` rewrites the remote branch to the local history, but —
     /// unlike a bare --force — refuses when the remote moved past what this
     /// repo last fetched, so a teammate's unpulled commits can't be clobbered
-    /// silently.
-    public func push(setUpstream: Bool, remote: String = "origin",
-              forceWithLease: Bool = false) throws {
-        var args = ["-C", worktree.path, "push"]
-        if forceWithLease { args.append("--force-with-lease") }
-        if setUpstream {
-            args.append(contentsOf: ["-u", remote, "HEAD"])
+    /// silently. With an explicit refspec the lease applies to that one ref.
+    public func push(remote: String, localBranch: String, remoteBranch: String,
+                     setUpstream: Bool, forceWithLease: Bool = false) throws {
+        // The boundary `pushArguments`' comment names, which until now did not
+        // exist: it said user-typed input should be validated here because this
+        // API throws, while the only check was a `precondition` one level down
+        // that traps in release builds too. A future branch-name field would
+        // have shipped a crash on empty input, and the comment inviting the
+        // reliance was the thing that made that likely.
+        // Trimmed first: whitespace is how a user-typed field actually produces
+        // "empty" (a stray paste, a trailing newline), and `isEmpty` alone lets
+        // " " through to git as an operand, which fails with a refspec error
+        // rather than the clear one this guard exists to give. Safe to trim
+        // rather than reject, because neither a refname nor a remote name may
+        // carry leading or trailing whitespace — no legitimate name changes.
+        let remote = remote.trimmingCharacters(in: .whitespacesAndNewlines)
+        let localBranch = localBranch.trimmingCharacters(in: .whitespacesAndNewlines)
+        let remoteBranch = remoteBranch.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !remote.isEmpty, !localBranch.isEmpty, !remoteBranch.isEmpty else {
+            throw GitError(
+                message: "Can't push: the remote and branch names must not be empty.",
+                exitCode: -1)
         }
-        try runChecked(args, in: nil)
+        try push(Self.pushArguments(
+            remote: remote, localBranch: localBranch, remoteBranch: remoteBranch,
+            setUpstream: setUpstream, forceWithLease: forceWithLease))
+    }
+
+    /// Runs a command built by `pushArguments`/`forcePushArguments`, so a caller
+    /// that has already resolved the exact command (the force-push confirmation
+    /// shows it to the user first) runs that command rather than rebuilding it.
+    public func push(_ command: PushCommand) throws {
+        try runChecked(["-C", worktree.path] + command.arguments, in: nil)
+    }
+
+    /// A push argv that came from `pushArguments`/`forcePushArguments`.
+    ///
+    /// The point is the `fileprivate` initializer: there is no way to build one
+    /// from raw `[String]`, so no caller can add `--force` or drop the refspec
+    /// on the way to `push(_:)`. An `assert` was the first attempt and does not
+    /// hold — it compiles out of release builds, which are the ones users run,
+    /// and inspecting `arguments.first` would have let `["push", "--force", …]`
+    /// straight through anyway. The type makes the contract structural.
+    public struct PushCommand: Equatable {
+        public let arguments: [String]
+
+        /// Whether this command carries `--force-if-includes`, i.e. whether it
+        /// refuses remote work that *was fetched into this repository but never
+        /// integrated* into the local branch.
+        ///
+        /// That is the flag's incremental guarantee, and naming it precisely
+        /// matters because the dialog's wording comes from here. Remote work
+        /// that was never fetched is already refused by `--force-with-lease`
+        /// alone — the remote tip differs from the stale remote-tracking ref, so
+        /// the lease fails. What the lease cannot catch is the case this app
+        /// creates for itself: auto-fetch updates the tracking ref behind the
+        /// user, the lease then matches, and only `--force-if-includes` still
+        /// objects that the fetched tip is not reachable from what is being
+        /// pushed. An earlier version of this doc said "commits the local branch
+        /// never had", which describes the lease's job, not this one.
+        ///
+        /// Lives here, beside the builder that appends the flag, because the
+        /// confirmation dialog picks its wording from it. A literal
+        /// `contains("--force-if-includes")` at the view would be a second
+        /// spelling of the emitter's decision, and the one that produces the
+        /// user-facing safety claim.
+        public var refusesUnintegratedRemoteWork: Bool {
+            arguments.contains("--force-if-includes")
+        }
+        fileprivate init(_ arguments: [String]) { self.arguments = arguments }
+    }
+
+    /// The argv `push` runs, without the repo-scoping `-C` pair. Pure, so the
+    /// confirmation dialog can show the user the exact command rather than a
+    /// description of it — and so the command shown and the command run cannot
+    /// drift apart.
+    /// `forceIfIncludes` defaults to the probed capability, and exists as a
+    /// parameter so the tests can pin *both* flag shapes on any host. Deriving
+    /// the expectation from `supportsForceIfIncludes` — the same property the
+    /// builder reads — made those tests tautological: a gate that regressed to
+    /// `<= (2, 30)` would have flipped the argv and the assertion together, and
+    /// the suite would have stayed green on every machine while the protection
+    /// that decides whether a teammate's commits survive was silently off.
+    public static func pushArguments(remote: String, localBranch: String, remoteBranch: String,
+                                     setUpstream: Bool,
+                                     forceWithLease: Bool = false,
+                                     forceIfIncludes: Bool = supportsForceIfIncludes) -> PushCommand {
+        // Trimmed here as well as in the throwing `push`, because the
+        // confirmation dialog reaches git through this builder and `push(_:)`,
+        // never through that guard — so validation placed only there would sit
+        // on the path typed input is *least* likely to take. The `precondition`
+        // below then sees the normalised values.
+        let remote = remote.trimmingCharacters(in: .whitespacesAndNewlines)
+        let localBranch = localBranch.trimmingCharacters(in: .whitespacesAndNewlines)
+        let remoteBranch = remoteBranch.trimmingCharacters(in: .whitespacesAndNewlines)
+        var args = ["push"]
+        if forceWithLease {
+            args.append("--force-with-lease")
+            // `--force-with-lease` alone compares against the remote-tracking
+            // ref, which this app updates behind the user's back: auto-fetch
+            // (`AppState.autoFetchIfDue`) runs on a timer when enabled. So a
+            // teammate's commit can arrive in `refs/remotes/origin/main`
+            // *between* the confirmation opening and the user pressing the
+            // button, the lease then matches, and the push destroys work the
+            // user was never shown.
+            //
+            // Reproduced against git 2.43: rewrite locally, fetch, then
+            // `push --force-with-lease` → "forced update", teammate's commit
+            // gone. Adding `--force-if-includes` → rejected, commit survives.
+            // It requires the fetched tip to be reachable from what is being
+            // pushed, which is precisely "you actually integrated what you
+            // fetched".
+            //
+            // Gated because it needs git 2.30+; without the gate an older git
+            // fails every force push with "unknown option".
+            if forceIfIncludes { args.append("--force-if-includes") }
+        }
+        if setUpstream { args.append("-u") }
+        // `--` ends option parsing. Qualifying the refspec covers the branch
+        // names, but the remote is its own operand — and a remote really can be
+        // called `-f`: `git remote add -- -f <url>` is accepted, and without the
+        // separator `git push … -f refs/…` would parse it as --force.
+        args.append("--")
+        args.append(remote)
+        // git reads an empty source side as a *delete*: `refs/heads/:refs/heads/x`
+        // is `git push origin :x`. `PushCommand` exists so no caller can build a
+        // destructive command on the way to `push(_:)`, and a zero-length branch
+        // name is the one shape that smuggles the worst one through the type.
+        //
+        // `remote` is checked too, for symmetry rather than for danger: an empty
+        // remote makes git fail loudly ("does not appear to be a git
+        // repository") rather than do something unintended, but leaving it out
+        // invited the question of why only the branches, with no answer here.
+        //
+        // A `precondition` rather than a thrown error because every value on
+        // this path comes from parsed git output, so an empty one is a bug in
+        // this app and not a state a user can reach or a message a UI could
+        // usefully show. If a future caller ever feeds this user-typed text,
+        // the validation belongs at *that* boundary — `push(remote:…)` already
+        // throws — and this stays the net underneath it.
+        precondition(!remote.isEmpty && !localBranch.isEmpty && !remoteBranch.isEmpty,
+                     "an empty remote or branch name cannot build a valid push refspec")
+        args.append("refs/heads/\(localBranch):refs/heads/\(remoteBranch)")
+        return PushCommand(args)
+    }
+
+    /// The argv a force push runs. One definition so the confirmation dialog and
+    /// the command it describes share their *flags* too, not just the refspec.
+    ///
+    /// That paid off immediately: `--force-if-includes` was added to
+    /// `pushArguments` after this comment was written, and the dialog picked it
+    /// up with no change here — which is exactly the drift this shape prevents.
+    public static func forcePushArguments(
+        remote: String, localBranch: String, remoteBranch: String,
+        forceIfIncludes: Bool = supportsForceIfIncludes
+    ) -> PushCommand {
+        pushArguments(remote: remote, localBranch: localBranch,
+                      remoteBranch: remoteBranch, setUpstream: false,
+                      forceWithLease: true, forceIfIncludes: forceIfIncludes)
     }
 
     // MARK: - Branches
