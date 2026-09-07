@@ -200,8 +200,11 @@ final class GitShellEnvironmentTests: XCTestCase {
         // Restored before anything else runs: leaving the suite's fd 0 pointing
         // at a deleted temp file would be a very confusing thing to debug.
         defer {
-            dup2(savedStdin, STDIN_FILENO)
-            close(savedStdin)
+            // Closed only if the restore took. A failed `dup2` would otherwise
+            // leave fd 0 on the sentinel — about to be deleted — *and* drop the
+            // last reference to the runner's real stdin, which is the opposite
+            // of what this defer is for.
+            if dup2(savedStdin, STDIN_FILENO) >= 0 { close(savedStdin) }
         }
         // Skip, not assert, and for the reason the `dup` above already skips:
         // an assertion records a failure and keeps going, so a failed `dup2`
