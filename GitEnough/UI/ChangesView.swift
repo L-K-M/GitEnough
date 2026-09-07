@@ -352,18 +352,24 @@ struct ChangesView: View {
     }
 }
 
-private extension ChangesView {
-    /// The disabled Stage All tooltip. Because the button is disabled whenever
-    /// anything is unmerged, `GitClient.stageAll`'s refusal — which names the
-    /// count and the files — almost never reaches this front end; this is where
-    /// that information has to appear instead.
+// Internal rather than private: `stageAllBlockedHelp` is the copy a macOS user
+// actually reads — the button is disabled whenever anything is unmerged, so
+// `GitClient.stageAll`'s refusal almost never reaches this front end — and it
+// was the one string in this change with no test behind it.
+extension ChangesView {
+    /// The disabled Stage All tooltip. Says what the refusal says, in the same
+    /// words for the part that matters: `conflictStagingConsequence` is shared,
+    /// so the two cannot make different claims about what staging a conflict
+    /// does, and `namingFiles` is shared so they cannot name the files
+    /// differently either.
     static func stageAllBlockedHelp(_ conflicts: [FileChange]) -> String {
         let names = GitClient.namingFiles(conflicts.map(\.path))
         // One binding for both agreements. The noun was already pluralised and
         // the pronoun was not, so a single conflict read "Resolve 1 conflicted
         // file first (a.txt) — staging them…" — and one file is the common case.
         let singular = conflicts.count == 1
-        return "Resolve \(conflicts.count) conflicted file\(singular ? "" : "s") first (\(names)) — staging \(singular ? "it" : "them") accepts whatever is in the worktree"
+        return "Resolve \(conflicts.count) conflicted file\(singular ? "" : "s") first (\(names)). "
+            + "Staging \(singular ? "it" : "them") \(GitClient.conflictStagingConsequence)."
     }
 }
 

@@ -443,7 +443,7 @@ public final class GitClient {
         let conflicted = try conflictedPaths()
         guard conflicted.isEmpty else {
             throw GitError(
-                message: Self.stageAllRefusalPrefix + " while \(conflicted.count) file\(conflicted.count == 1 ? " is" : "s are") still conflicted (\(Self.namingFiles(conflicted))). Staging one accepts whatever is in the worktree — markers and all, or one side silently winning. Resolve each first, then stage it.",
+                message: Self.stageAllRefusalPrefix + " while \(conflicted.count) file\(conflicted.count == 1 ? " is" : "s are") still conflicted (\(Self.namingFiles(conflicted))). Staging one " + Self.conflictStagingConsequence + ". Resolve each first, then stage it.",
                 exitCode: -1)
         }
         try runChecked(["-C", worktree.path, "add", "-A"], in: nil)
@@ -460,6 +460,19 @@ public final class GitClient {
     /// the guard kept working perfectly. Internal rather than public: this is a
     /// seam for the tests, not surface for a front end.
     static let stageAllRefusalPrefix = "Can't stage everything"
+
+    /// What staging a conflicted path actually does — stated once, because the
+    /// refusal above and the front ends' tooltips make the same claim and the
+    /// tooltip is the one users read.
+    ///
+    /// `namingFiles` deduplicated the file list and left this duplicated, and it
+    /// had already drifted: the tooltip said only "accepts whatever is in the
+    /// worktree", which reads as "go find the markers" — and a modify/delete
+    /// conflict (`UD`/`DU`/`DD`) has no markers anywhere. That is the shape
+    /// `testStageAllRefusesAModifyDeleteConflictThatHasNoMarkers` exists for,
+    /// and the quieter of the two failures: nothing looks wrong afterwards.
+    static let conflictStagingConsequence =
+        "accepts whatever is in the worktree — markers and all, or one side silently winning"
 
     /// Names up to `limit` paths and counts the rest — the "a.txt, b.txt and 2
     /// more" fragment that tells the user *which* files are in the way.
