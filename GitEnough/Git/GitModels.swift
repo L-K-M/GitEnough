@@ -79,14 +79,130 @@ public struct Remote: Identifiable, Hashable {
     /// Selects the remote named by an upstream (`remote/branch`). Remote names
     /// may themselves contain slashes, so split-at-first-slash is ambiguous;
     /// the longest configured prefix is the exact match.
+    ///
+    /// Deliberately **does not** refuse the ambiguous case that
+    /// `PushCapability.resolve` refuses: with no `localBranch` to compare, this
+    /// falls through to longest-prefix. That divergence is intended — this feeds
+    /// labels and other read-only surfaces, where a best guess beats an empty
+    /// field, while Push must not guess about where it writes.
+    ///
+    /// So `split`'s `remoteWasGuessed` is deliberately ignored here rather than
+    /// overlooked: a label naming the wrong one of two plausible remotes is a
+    /// cosmetic error. Any caller that *writes* must read that flag —
+    /// `PushCapability.resolve` does, and withholds force push on it.
     public static func preferred(for upstream: String?, among remotes: [Remote]) -> Remote? {
-        if let upstream,
-           let matched = remotes
-            .filter({ upstream.hasPrefix($0.name + "/") })
-            .max(by: { $0.name.count < $1.name.count }) {
-            return matched
+        split(upstream: upstream, among: remotes)?.remote
+            ?? remotes.first { $0.name == "origin" } ?? remotes.first
+    }
+
+    /// Every configured remote whose name could be the remote half of
+    /// `upstream`. More than one means the string is genuinely ambiguous:
+    /// with `origin` and `origin/features` both configured, `origin/features/x`
+    /// is two well-formed readings and nothing in the string picks between them.
+    public static func splitCandidates(upstream: String?, among remotes: [Remote]) -> [Remote] {
+        guard let upstream else { return [] }
+        // Via `branchHalf`, so that "is this a well-formed reading" has exactly
+        // one definition here. Equivalent on real input — a candidate can only
+        // leave an empty branch half when the upstream ends in a slash, which
+        // `git check-ref-format` rejects — but the equivalence is a fact about
+        // git, not about this filter, and the next reader shouldn't have to
+        // rediscover it.
+        return remotes.filter { branchHalf(of: upstream, under: $0) != nil }
+    }
+
+    /// Whether `upstream` reads two or more ways under the configured remotes
+    /// with nothing to choose between them.
+    ///
+    /// Lives here, beside `split`, on purpose. `PushCapability.resolve` refuses
+    /// when this is true and otherwise takes what `split` returns — so the two
+    /// have to agree, and the way they stop agreeing is a future edit to one
+    /// tie-break that the other never hears about. Same rule, same file, one
+    /// definition.
+    public static func isAmbiguous(upstream: String?, among remotes: [Remote],
+                                   localBranch: String?) -> Bool {
+        // Optional to match `split`, `splitCandidates` and `preferred`. When it
+        // was the only sibling demanding a non-optional, every caller holding
+        // the usual `branch.upstream: String?` had to invent its own answer for
+        // nil — which is how one definition becomes several.
+        guard let upstream else { return false }
+        let (candidates, tieBreakMatch) = readings(upstream: upstream, among: remotes,
+                                                   localBranch: localBranch)
+        return candidates.count > 1 && tieBreakMatch == nil
+    }
+
+    /// The candidate readings of `upstream`, and the one the local branch name
+    /// settles on — the single definition of the tie-break.
+    ///
+    /// `isAmbiguous` and `split` both need it and used to spell it separately.
+    /// The doc on `isAmbiguous` warned they had to agree and named drift as the
+    /// failure mode, which is an argument for one definition rather than a
+    /// comment asking two to stay in step. The invariant it makes structural:
+    /// `isAmbiguous` is true exactly when there are several readings and none
+    /// matches, and a successful tie-break leaves `isAmbiguous` false while
+    /// `remoteWasGuessed` stays true.
+    private static func readings(upstream: String, among remotes: [Remote],
+                                 localBranch: String?)
+        -> (candidates: [Remote], tieBreakMatch: Remote?) {
+        let candidates = splitCandidates(upstream: upstream, among: remotes)
+        let tieBreakMatch = localBranch.flatMap { branch in
+            candidates.first { branchHalf(of: upstream, under: $0) == branch }
         }
-        return remotes.first { $0.name == "origin" } ?? remotes.first
+        return (candidates, tieBreakMatch)
+    }
+
+    /// The branch half of `upstream` under `remote`, or nil when that reading
+    /// leaves nothing behind.
+    public static func branchHalf(of upstream: String, under remote: Remote) -> String? {
+        guard upstream.hasPrefix(remote.name + "/") else { return nil }
+        let branch = String(upstream.dropFirst(remote.name.count + 1))
+        return branch.isEmpty ? nil : branch
+    }
+
+    /// Splits an upstream ref (`origin/main`, `up/stream/topic`) into the
+    /// configured remote it names and the branch **on that remote**.
+    ///
+    /// The branch half matters as much as the remote half: a local branch may
+    /// track a differently-named upstream, and the upstream is what the app's
+    /// own ahead/behind counters are measured against — so it is the ref Push
+    /// has to move. Returns nil when no configured remote is a prefix, which
+    /// means the upstream names a remote that no longer exists.
+    /// `localBranch`, when known, breaks the tie that nested remote names create.
+    /// With remotes `origin` and `origin/features`, the upstream
+    /// `origin/features/x` splits two ways and the string alone cannot say
+    /// which: it is `origin/features` + `x`, or `origin` + `features/x`. The
+    /// branch half matching the local branch name settles it in the case that
+    /// actually occurs — a branch tracking its own name on a remote — and
+    /// longest-prefix remains the fallback.
+    ///
+    /// The unambiguous answer is git's own `branch.<name>.remote`, available as
+    /// `%(upstream:remotename)` from the `for-each-ref` that already builds the
+    /// branch list. Carrying it through would remove the guess entirely; see
+    /// ANALYSIS.md.
+    ///
+    /// `remoteWasGuessed` reports which of those two things happened, because
+    /// the caller cannot tell from the result and the difference decides
+    /// whether force push is offered. It is true whenever more than one reading
+    /// existed — the tie-break and the longest-prefix fallback are both guesses,
+    /// however plausible. Returning it rather than letting callers recompute
+    /// `splitCandidates` keeps the rule in one place: a future `split` that
+    /// resolves multiple readings *definitively* (o-G4) reports `false` here and
+    /// every caller follows, where a caller counting candidates itself would
+    /// still be withholding force push on knowledge.
+    public static func split(upstream: String?,
+                             among remotes: [Remote],
+                             localBranch: String? = nil)
+        -> (remote: Remote, branch: String, remoteWasGuessed: Bool)? {
+        guard let upstream else { return nil }
+        // `Remote.branchHalf`, not a nested copy of it: the nested version
+        // returned "" where the shared one returns nil, so the same rule had two
+        // spellings that had to be kept in step by hand.
+        let (matches, tieBreakMatch) = readings(upstream: upstream, among: remotes,
+                                                localBranch: localBranch)
+        let matched = tieBreakMatch ?? matches.max(by: { $0.name.count < $1.name.count })
+        guard let matched, let branch = branchHalf(of: upstream, under: matched) else {
+            return nil
+        }
+        return (matched, branch, matches.count > 1)
     }
 
     /// Short host-ish label for the status bar, e.g. "github.com/L-K-M/GitEnough".

@@ -668,13 +668,10 @@ final class GitIntegrationTests: XCTestCase {
         // A local bare repo as the remote, under a non-default name: "origin"-
         // hardcoded publishing would fail here with "origin does not appear to
         // be a git repository".
-        let remoteURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("GitEnoughTests-remote-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: remoteURL) }
-        try run(["init", "--bare", remoteURL.path])
-        try run(["remote", "add", "work", remoteURL.path])
+        _ = try makeBareRemote(named: "work")
 
-        try client.push(setUpstream: true, remote: "work")
+        try client.push(remote: "work", localBranch: "main", remoteBranch: "main",
+                        setUpstream: true)
 
         let main = try XCTUnwrap(client.branches().first { $0.name == "main" },
                                  "expected default branch 'main'")
@@ -682,11 +679,7 @@ final class GitIntegrationTests: XCTestCase {
     }
 
     func testOrdinaryFetchAndPullDoNotForceUpdateEveryTag() throws {
-        let remoteURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("GitEnoughTests-remote-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: remoteURL) }
-        try run(["init", "--bare", remoteURL.path])
-        try run(["remote", "add", "origin", remoteURL.path])
+        let remoteURL = try makeBareRemote()
         try run(["push", "-u", "origin", "main"])
 
         let head = try GitShell.shared.runChecked(
@@ -711,12 +704,9 @@ final class GitIntegrationTests: XCTestCase {
     }
 
     func testBranchUpstreamGoneAfterRemoteDeletion() throws {
-        let remoteURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("GitEnoughTests-remote-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: remoteURL) }
-        try run(["init", "--bare", remoteURL.path])
-        try run(["remote", "add", "origin", remoteURL.path])
-        try client.push(setUpstream: true, remote: "origin")
+        let remoteURL = try makeBareRemote()
+        try client.push(remote: "origin", localBranch: "main", remoteBranch: "main",
+                        setUpstream: true)
 
         var main = try XCTUnwrap(client.branches().first { $0.name == "main" && !$0.isRemote })
         XCTAssertEqual(main.upstream, "origin/main")
@@ -737,12 +727,9 @@ final class GitIntegrationTests: XCTestCase {
         // No upstream configured: the concept doesn't apply — empty set.
         XCTAssertTrue(try client.unpushedCommitHashes().isEmpty)
 
-        let remoteURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("GitEnoughTests-remote-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: remoteURL) }
-        try run(["init", "--bare", remoteURL.path])
-        try run(["remote", "add", "origin", remoteURL.path])
-        try client.push(setUpstream: true, remote: "origin")
+        _ = try makeBareRemote()
+        try client.push(remote: "origin", localBranch: "main", remoteBranch: "main",
+                        setUpstream: true)
         XCTAssertTrue(try client.unpushedCommitHashes().isEmpty)
 
         try write("five\n", to: "e.txt")
@@ -758,20 +745,18 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertEqual(unpushed, Set(newest))
 
         // Pushing clears the markers.
-        try client.push(setUpstream: false)
+        try client.push(remote: "origin", localBranch: "main", remoteBranch: "main",
+                        setUpstream: false)
         XCTAssertTrue(try client.unpushedCommitHashes().isEmpty)
     }
 
     func testDeleteRemoteBranch() throws {
-        let remoteURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("GitEnoughTests-remote-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: remoteURL) }
-        try run(["init", "--bare", remoteURL.path])
-        try run(["remote", "add", "origin", remoteURL.path])
+        _ = try makeBareRemote()
         // Publish something to delete, then mirror the remote-tracking ref
         // like a fetch would.
         try run(["checkout", "-b", "to-delete"])
-        try client.push(setUpstream: true, remote: "origin")
+        try client.push(remote: "origin", localBranch: "to-delete", remoteBranch: "to-delete",
+                        setUpstream: true)
         try run(["checkout", "main"])
         try client.fetch()
         XCTAssertTrue(try client.branches().contains { $0.name == "origin/to-delete" })
@@ -814,7 +799,8 @@ final class GitIntegrationTests: XCTestCase {
         try run(["remote", "add", "up/stream", upStreamURL.path])
 
         try run(["checkout", "-b", "port"])
-        try client.push(setUpstream: true, remote: "up/stream")
+        try client.push(remote: "up/stream", localBranch: "port", remoteBranch: "port",
+                        setUpstream: true)
         try run(["push", "up", "port"])   // the same branch on both remotes
         try run(["checkout", "main"])
 
@@ -831,12 +817,9 @@ final class GitIntegrationTests: XCTestCase {
     }
 
     func testForcePushWithLease() throws {
-        let remoteURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("GitEnoughTests-remote-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: remoteURL) }
-        try run(["init", "--bare", remoteURL.path])
-        try run(["remote", "add", "origin", remoteURL.path])
-        try client.push(setUpstream: true, remote: "origin")
+        let remoteURL = try makeBareRemote()
+        try client.push(remote: "origin", localBranch: "main", remoteBranch: "main",
+                        setUpstream: true)
 
         // Rewrite local history so local and remote diverge.
         try write("amended\n", to: "a.txt")
@@ -844,15 +827,173 @@ final class GitIntegrationTests: XCTestCase {
         try client.commit(message: "Amended tip", amend: true)
 
         // A plain push is refused (non-fast-forward)…
-        XCTAssertThrowsError(try client.push(setUpstream: false))
+        let remoteMainBeforeRefusal = try remoteRef("refs/heads/main", in: remoteURL)
+        XCTAssertThrowsError(try client.push(remote: "origin", localBranch: "main",
+                                             remoteBranch: "main",
+                                             setUpstream: false)) { error in
+            // `XCTAssertThrowsError` alone accepts *any* failure — a bad
+            // refspec, an unknown remote, a client bug that throws before git
+            // runs — and every one of those also leaves the remote ref
+            // untouched, so the state check below cannot tell them apart
+            // either. git's own rejection text is what distinguishes a refusal
+            // from a caller error.
+            let described = String(describing: error)
+            // `rejected` too: git phrases the bracket hint as "(non-fast-forward)"
+            // or "(fetch first)" depending on why, but the `! [rejected]` prefix
+            // is the stable part across versions. This fixture's bare remote has
+            // no hooks, so the wider match cannot absorb a `[remote rejected]`
+            // from something else.
+            XCTAssertTrue(described.contains("non-fast-forward")
+                          || described.contains("fetch first")
+                          || described.contains("rejected"),
+                          "expected git's push rejection, got: \(described)")
+        }
+        // Kept as a state check alongside it: whatever the error said, the
+        // remote must not have moved.
+        XCTAssertEqual(try remoteRef("refs/heads/main", in: remoteURL),
+                       remoteMainBeforeRefusal,
+                       "a refused push must leave the remote ref untouched")
+
         // …the lease push succeeds, and the remote tip matches local HEAD.
-        try client.push(setUpstream: false, forceWithLease: true)
-        let localHead = try GitShell.shared.runChecked(["rev-parse", "HEAD"], in: repoURL)
-            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-        let remoteHead = try GitShell.shared.runChecked(
-            ["-C", remoteURL.path, "rev-parse", "refs/heads/main"], in: nil)
-            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        try client.push(remote: "origin", localBranch: "main", remoteBranch: "main",
+                        setUpstream: false, forceWithLease: true)
+        let localHead = try localRef("HEAD")
+        let remoteHead = try remoteRef("refs/heads/main", in: remoteURL)
         XCTAssertEqual(localHead, remoteHead)
+    }
+
+    /// The bug this signature exists to prevent: with `push.default = matching`
+    /// — git's default before 2.0, and still common in inherited configs — a
+    /// bare `git push --force-with-lease` force-updates *every* branch that
+    /// exists on both sides, while the confirmation dialog names exactly one.
+    func testForcePushRewritesOnlyTheNamedBranch() throws {
+        let remoteURL = try matchingRemoteWithMainAndTopic()
+
+        try run(["checkout", "main"])
+        try write("rewritten main\n", to: "a.txt")
+        try client.stage(paths: ["a.txt"])
+        try client.commit(message: "Rewritten main", amend: true)
+        try run(["checkout", "topic"])
+        try write("rewritten topic\n", to: "t.txt")
+        try client.stage(paths: ["t.txt"])
+        try client.commit(message: "Rewritten topic", amend: true)
+
+        let remoteMainBefore = try remoteRef("refs/heads/main", in: remoteURL)
+
+        // Force push topic only.
+        try client.push(remote: "origin", localBranch: "topic", remoteBranch: "topic",
+                        setUpstream: false, forceWithLease: true)
+
+        let localTopic = try localRef("topic")
+        XCTAssertEqual(try remoteRef("refs/heads/topic", in: remoteURL), localTopic,
+                       "the named branch is the one that moves")
+        XCTAssertEqual(try remoteRef("refs/heads/main", in: remoteURL), remoteMainBefore,
+                       "a branch the user did not select must not be force-updated")
+    }
+
+    /// The lease-free half of the `matching` hazard. `push.default = matching`
+    /// makes a bare `git push` publish *every* branch that exists on both sides,
+    /// not just the one named — the same surprise the force-push test guards
+    /// against, minus the lease. Verified against git 2.43.
+    func testPlainPushUnderMatchingMovesOnlyTheNamedBranch() throws {
+        let remoteURL = try matchingRemoteWithMainAndTopic()
+
+        // Give main a commit the remote doesn't have: under `matching`, a bare
+        // push of topic would fast-forward this one along with it.
+        try run(["checkout", "main"])
+        try write("quiet\n", to: "q.txt")
+        try client.stage(paths: ["q.txt"])
+        try client.commit(message: "Quiet main")
+        let remoteMainBefore = try remoteRef("refs/heads/main", in: remoteURL)
+
+        try run(["checkout", "topic"])
+        try write("more\n", to: "t.txt")
+        try client.stage(paths: ["t.txt"])
+        try client.commit(message: "More topic")
+        try client.push(remote: "origin", localBranch: "topic", remoteBranch: "topic",
+                        setUpstream: false)
+
+        XCTAssertEqual(try remoteRef("refs/heads/main", in: remoteURL), remoteMainBefore,
+                       "a plain push must not publish branches the user didn't name")
+        XCTAssertEqual(try remoteRef("refs/heads/topic", in: remoteURL),
+                       try localRef("topic"),
+                       "and the named one must actually move")
+    }
+
+    /// `push.default = nothing` makes a bare `git push` fail with "You didn't
+    /// specify any refspecs to push". An explicit refspec is immune.
+    func testPushWorksUnderPushDefaultNothing() throws {
+        let remoteURL = try makeBareRemote()
+        // Repo-local only while `setUpWithError` builds a fresh repository per
+        // test. A linked worktree shares its main repo's config, so restore the
+        // value rather than resting the isolation on a comment.
+        let priorPushDefault = currentPushDefault()
+        try run(["config", "--local", "push.default", "nothing"])
+        // The write is the premise, so assert it took. Every push below passes
+        // an explicit refspec, and git ignores `push.default` entirely when one
+        // is given — so these assertions pass under *any* value, and this test
+        // is a canary for "the app must never regress to a bare `git push`".
+        // If the write silently stopped applying, the canary could never fire.
+        // `--local` matches the scope `currentPushDefault` reads and
+        // `restorePushDefault` writes; without it the three disagreed.
+        XCTAssertEqual(currentPushDefault(), "nothing",
+                       "premise: without `nothing` in effect the bare-push canary is vacuous")
+        addTeardownBlock { self.restorePushDefault(priorPushDefault) }
+
+        try client.push(remote: "origin", localBranch: "main", remoteBranch: "main",
+                        setUpstream: true)
+
+        let localHead = try localRef("main")
+        XCTAssertEqual(try remoteRef("refs/heads/main", in: remoteURL), localHead)
+
+        // The `-u` half, which this test asked for and never checked. Other
+        // tests in this file lean on tracking being wired here, so a regression
+        // that dropped `-u` under this config would leave them failing
+        // somewhere else entirely.
+        let main = try XCTUnwrap(client.branches().first { $0.name == "main" && !$0.isRemote })
+        XCTAssertEqual(main.upstream, "origin/main",
+                       "an explicit refspec must still let -u configure tracking")
+    }
+
+    /// A branch tracking a differently-named upstream must move the upstream —
+    /// what the ahead/behind counters are measured against — not a same-named
+    /// branch on the remote (which is what `push.default = current` would do).
+    func testPushMovesTheUpstreamBranchNotTheSameNamedOne() throws {
+        let remoteURL = try makeBareRemote()
+        try client.push(remote: "origin", localBranch: "main", remoteBranch: "main",
+                        setUpstream: true)
+
+        // "sidecar" exists on both sides, but tracks origin/main. (Not
+        // "feature": the shared fixture already creates one.)
+        try run(["checkout", "-b", "sidecar"])
+        try run(["push", "origin", "sidecar"])
+        let sidecarBefore = try remoteRef("refs/heads/sidecar", in: remoteURL)
+        try run(["branch", "--set-upstream-to=origin/main", "sidecar"])
+        try write("via sidecar\n", to: "a.txt")
+        try client.stage(paths: ["a.txt"])
+        try client.commit(message: "Through the upstream")
+
+        let capability = PushCapability.resolve(status: try client.status(),
+                                                remotes: try client.remotes())
+        guard case .push(let remote, let local, let remoteBranch) = capability else {
+            return XCTFail("expected a push capability, got \(capability)")
+        }
+        // Assert the resolution itself, not only its downstream effect. Without
+        // this, a regression to the same-named branch fails at the tail of the
+        // test with "the configured upstream is what moves" — true, but it
+        // points at the assertion rather than at the step that went wrong.
+        XCTAssertEqual(remote, "origin")
+        XCTAssertEqual(local, "sidecar")
+        XCTAssertEqual(remoteBranch, "main",
+                       "the target is the configured upstream, not the same-named branch")
+        try client.push(remote: remote, localBranch: local, remoteBranch: remoteBranch,
+                        setUpstream: false)
+
+        let localHead = try localRef("sidecar")
+        XCTAssertEqual(try remoteRef("refs/heads/main", in: remoteURL), localHead,
+                       "the configured upstream is what moves")
+        XCTAssertEqual(try remoteRef("refs/heads/sidecar", in: remoteURL), sidecarBefore,
+                       "the same-named remote branch is untouched")
     }
 
     // MARK: - Stage All during a conflict
@@ -1057,6 +1198,152 @@ final class GitIntegrationTests: XCTestCase {
         let commitDiff = try client.commitFileDiff(hash: head, path: "a.txt")
         XCTAssertTrue(commitDiff.contains("diff --git"), "got \(commitDiff)")
         XCTAssertFalse(commitDiff.contains("EXTERNAL-TOOL-OUTPUT"))
+    }
+
+    /// A fresh bare remote with `main` and `topic` published to it, and
+    /// `push.default = matching` in effect. Shared by the two tests that guard
+    /// the `matching` hazard, so the scenario cannot drift between them and
+    /// quietly weaken one of the guards. Leaves `topic` checked out.
+    private func matchingRemoteWithMainAndTopic() throws -> URL {
+        let remoteURL = try makeBareRemote()
+        // Restored in teardown for the same reason as the `nothing` write: a
+        // shared or linked-worktree fixture would leak `matching` into every
+        // later test, and the leak would surface as order-dependent failures
+        // far from here rather than as anything pointing back at this line.
+        let priorPushDefault = currentPushDefault()
+        try run(["config", "--local", "push.default", "matching"])
+        // Same premise, same reason: `matching` is what makes a bare push
+        // move every same-named branch, and the tests built on this fixture
+        // guard exactly that hazard. Unasserted, they would keep passing with
+        // the config write doing nothing at all.
+        XCTAssertEqual(currentPushDefault(), "matching",
+                       "premise: without `matching` in effect the matching-hazard guards are vacuous")
+        addTeardownBlock { self.restorePushDefault(priorPushDefault) }
+        try client.push(remote: "origin", localBranch: "main", remoteBranch: "main",
+                        setUpstream: true)
+        try run(["checkout", "-b", "topic"])
+        try write("topic\n", to: "t.txt")
+        try client.stage(paths: ["t.txt"])
+        try client.commit(message: "Topic")
+        try client.push(remote: "origin", localBranch: "topic", remoteBranch: "topic",
+                        setUpstream: true)
+        return remoteURL
+    }
+
+    /// A bare repository registered as a remote, cleaned up with the test.
+    private func makeBareRemote(named name: String = "origin") throws -> URL {
+        let remoteURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitEnoughTests-remote-\(UUID().uuidString)")
+        addTeardownBlock {
+            try? FileManager.default.removeItem(at: remoteURL)
+            // The registration must not outlive the directory it points at.
+            // The doc above says the fixture is cleaned up with the test, and
+            // deleting only the directory left `git remote` naming a path that
+            // is gone — the same config leak `restorePushDefault` was hardened
+            // against one helper away, in the shared-fixture world both
+            // anticipate. `try?` because two tests remove the remote themselves.
+            _ = try? self.run(["remote", "remove", name])
+        }
+        try run(["init", "--bare", remoteURL.path])
+        // Pin the remote's HEAD rather than inheriting the machine's
+        // `init.defaultBranch`, which is still `master` on a stock git. Nothing
+        // asserts on it today — every interaction here uses explicit refspecs —
+        // but this helper is shared by every test that needs a remote, and the
+        // clones or reads `ls-remote origin HEAD` would behave differently on
+        // different developers' machines. `symbolic-ref` rather than
+        // `init --initial-branch=`, which older git does not have.
+        _ = try GitShell.shared.runChecked(
+            ["-C", remoteURL.path, "symbolic-ref", "HEAD", "refs/heads/main"], in: nil)
+        try run(["remote", "add", name, remoteURL.path])
+        return remoteURL
+    }
+
+    /// `--verify` on both, because every caller means "this exact ref": without
+    /// it `rev-parse` will happily resolve a short or ambiguous argument to
+    /// something surprising instead of failing.
+    private func remoteRef(_ ref: String, in remoteURL: URL) throws -> String {
+        try GitShell.shared.runChecked(
+            ["-C", remoteURL.path, "rev-parse", "--verify", ref], in: nil)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// The repo-local `push.default`, or nil when there is no local override.
+    /// `--get` exits 1 when the key has no *local* value; the catch below maps
+    /// that to nil and reports anything else.
+    ///
+    /// `--local`, because the restore writes locally. Without it this read
+    /// resolves system + global + local, so a contributor with
+    /// `push.default = simple` in `~/.gitconfig` gets that value captured and
+    /// then *pinned into the repo's own config* by the restore — the read and
+    /// the write disagreeing about which scope "restore" means. Measured on git
+    /// 2.43 with a global value set and no local one: `--get` prints `simple`,
+    /// `--local --get` exits 1.
+    private func currentPushDefault() -> String? {
+        do {
+            let value = try GitShell.shared.runChecked(
+                ["config", "--local", "--get", "push.default"], in: repoURL)
+                .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            return value.isEmpty ? nil : value
+        } catch let error as GitError where error.exitCode == 1 {
+            // `git config --get`'s "key not found" (measured, git 2.43: exit 1
+            // for `--local --get` on a key set only globally). Absent, not
+            // broken — which is what the caller means by nil.
+            return nil
+        } catch {
+            // The other half of the pair `restorePushDefault` already reports.
+            // `try?` made a read failure indistinguishable from "no local
+            // override", and in the shared-fixture world both these helpers are
+            // written for, that captures nil for a value that *did* exist and
+            // the restore then unsets it — the order-dependent leak they exist
+            // to prevent, arriving through the capture instead of the restore.
+            XCTFail("failed to read local push.default: \(error)")
+            return nil
+        }
+    }
+
+    /// Puts back what was there, rather than deleting the key.
+    ///
+    /// `--unset` and "restore" are the same thing only while every test gets a
+    /// fresh repository — which is the assumption these teardowns exist to stop
+    /// relying on. In the shared-fixture world they anticipate, unsetting would
+    /// silently drop a value the fixture had set, and every later test would run
+    /// under git's built-in default instead: the same order-dependent leak,
+    /// arriving through the cleanup meant to prevent it.
+    ///
+    /// Failures are reported, not swallowed. A restore that silently does
+    /// nothing produces exactly the far-away, order-dependent failures this
+    /// helper exists to prevent, and `try?` made that outcome indistinguishable
+    /// from success.
+    private func restorePushDefault(_ prior: String?) {
+        do {
+            if let prior {
+                try run(["config", "--local", "push.default", prior])
+            } else {
+                try run(["config", "--local", "--unset", "push.default"])
+            }
+        } catch {
+            // `--unset` on a key that is already gone exits 5 (git 2.43,
+            // measured). Both call sites write the key before registering this
+            // teardown, so that cannot happen today — but "already absent" is
+            // the state the restore was asking for, and failing a test for
+            // reaching it would be the wrong signal on a cleanup-only path.
+            if (error as? GitError)?.exitCode == 5 { return }
+            XCTFail("failed to restore push.default: \(error)")
+        }
+    }
+
+    /// The local-side mirror of `remoteRef`. The push tests compare one against
+    /// the other constantly, and hand-rolling this at each site is how the two
+    /// halves of the same comparison drift apart.
+    ///
+    /// `--verify` here means "resolves to exactly one object", not "is a fully
+    /// qualified ref": it still DWIMs short names, and these callers pass
+    /// `HEAD`, `main`, `topic`, `sidecar`. That is fine while no fixture has a
+    /// tag sharing a branch name — pass `refs/heads/…` if you need the stricter
+    /// reading, as every `remoteRef` caller already does.
+    private func localRef(_ ref: String) throws -> String {
+        try GitShell.shared.runChecked(["rev-parse", "--verify", ref], in: repoURL)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     func testCreateTagLightweightAndAnnotated() throws {
