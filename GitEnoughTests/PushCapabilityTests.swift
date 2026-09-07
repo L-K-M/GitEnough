@@ -103,17 +103,25 @@ final class PushCapabilityTests: XCTestCase {
         // whole point is that no case escapes the contract. An eighth case
         // breaks this switch rather than slipping past a still-green test.
         // No `default:` — that would defeat it.
+        // The fixtures are built *inside* the exhaustive switch, not beside it.
+        // As two lists, the compiler forced an eighth case into the switch and
+        // nothing forced a value into the array — so the error could be silenced
+        // by adding the case to the pattern and the new reason's messages would
+        // never be asserted. The switch guaranteed compilation; it did not
+        // guarantee coverage, which is what this test claims to give.
+        var reasons: [PushCapability.UnavailableReason] = []
         switch PushCapability.UnavailableReason.noCurrentBranch {
-        case .detachedHead, .unbornHead, .noRemotes, .noCurrentBranch,
-             .upstreamRemoteMissing, .ambiguousUpstream, .localUpstream:
-            break
+        case .detachedHead: reasons.append(.detachedHead)
+        case .unbornHead: reasons.append(.unbornHead)
+        case .noRemotes: reasons.append(.noRemotes)
+        case .noCurrentBranch: reasons.append(.noCurrentBranch)
+        case .upstreamRemoteMissing:
+            reasons.append(.upstreamRemoteMissing(upstream: "origin/main", branch: "main"))
+        case .ambiguousUpstream:
+            reasons.append(.ambiguousUpstream(upstream: "origin/features/x", branch: "trunk"))
+        case .localUpstream:
+            reasons.append(.localUpstream(upstream: "main", branch: "topic"))
         }
-        let reasons: [PushCapability.UnavailableReason] = [
-            .detachedHead, .unbornHead, .noRemotes, .noCurrentBranch,
-            .upstreamRemoteMissing(upstream: "origin/main", branch: "main"),
-            .ambiguousUpstream(upstream: "origin/features/x", branch: "trunk"),
-            .localUpstream(upstream: "main", branch: "topic"),
-        ]
         for reason in reasons {
             XCTAssertTrue(reason.message.hasPrefix("Can't push: "),
                           "\(reason) must open with the shared prefix")
@@ -604,9 +612,16 @@ final class PushCapabilityTests: XCTestCase {
             .unavailable(.upstreamRemoteMissing(upstream: "origin/main", branch: "main")))
         XCTAssertTrue(orphaned.help.contains("origin/main"),
                       "the user who most needs the specific guidance must get it")
+    }
 
-        // No upstream and no remotes is still just "no remotes" — the generic
-        // message is right when there is genuinely nothing more to say.
+    /// No upstream and no remotes is still just "no remotes" — the generic
+    /// message is right when there is genuinely nothing more to say.
+    ///
+    /// Its own test rather than a rider on the upstream case above. As a rider
+    /// it reported failures under that test's name, pointing at the wrong
+    /// behaviour, and it would have disappeared with any trim of a test whose
+    /// own doc says it replaces an earlier one.
+    func testNoUpstreamAndNoRemotesIsReportedAsNoRemotes() {
         let bare = PushCapability.resolve(status: status(head: "main"), remotes: [])
         XCTAssertEqual(bare, .unavailable(.noRemotes))
         XCTAssertTrue(bare.help.contains("no remotes"))

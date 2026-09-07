@@ -247,7 +247,13 @@ struct RepoDetailView: View {
             // the sentence out of localization while leaving the dialog
             // around it in. The command itself stays verbatim, as it should.
             Text("Will run in this repository:")
-            Text("git \(GitActivityLog.displayCommand(for: command.arguments))")
+            // `verbatim:`, not the localizing initialiser. The interpolated
+            // command is inserted as-is either way, but the literal "git "
+            // prefix becomes the extractable key "git %@" — so the one line in
+            // this dialog that must read byte-for-byte as the argv being
+            // approved was the only translatable thing in it. Everything else
+            // here is prose and stays localizable.
+            Text(verbatim: "git \(GitActivityLog.displayCommand(for: command.arguments))")
                 .font(.system(.footnote, design: .monospaced))
         }
         // Hygiene now rather than correctness: with `presenting:` the dialog
@@ -295,7 +301,7 @@ struct RepoDetailView: View {
         // monospaced line directly below this sentence shows the user the
         // flags — so if they ever disagreed, the dialog would promise a
         // protection its own command visibly does not carry.
-        command.refusesUnfetchedRemoteWork
+        command.refusesUnintegratedRemoteWork
             ? "This rewrites the remote branch to match your local history. It refuses if the remote has commits you haven't merged in — including ones GitEnough fetched for you in the background — so a teammate's new work can't be lost silently. Anyone who already pulled the old history will still have to recover."
             // Cut to the three facts that change the decision: what this does,
             // what it can silently destroy, and who still has to recover. A

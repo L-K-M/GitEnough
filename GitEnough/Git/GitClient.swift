@@ -164,14 +164,28 @@ public final class GitClient {
         // `2.43.0` — which some wrappers print instead of a full banner —
         // parsing as it did. That fallback is why the anchored form is worth
         // having at all: a purely anchored parse would return nil there.
-        let start = fields.firstIndex(of: "version").map { $0 + 1 } ?? fields.startIndex
+        // Anchored: the first numeric token after `version` is the answer.
+        // Unanchored: the *last* one is, because a wrapper prints its own
+        // version before git's, never after — `shim 3.5: git 2.20` must read
+        // (2, 20), and first-match read (3, 5).
+        //
+        // The two misreads are not symmetric, which is why this is worth the
+        // extra pass. Reading too low silently drops `--force-if-includes`, and
+        // the dialog already says it cannot confirm the version. Reading too
+        // high appends the flag on a git that lacks it, and every force push
+        // then fails with "unknown option" until the app restarts, because the
+        // probe is a `static let` cached for the process.
+        let anchor = fields.firstIndex(of: "version")
+        let start = anchor.map { $0 + 1 } ?? fields.startIndex
+        var parsed: (major: Int, minor: Int)?
         for field in fields[start...] {
             let parts = field.split(separator: ".")
             guard parts.count >= 2,
                   let major = Int(parts[0]), let minor = Int(parts[1]) else { continue }
-            return (major, minor)
+            parsed = (major, minor)
+            if anchor != nil { break }
         }
-        return nil
+        return parsed
     }
 
     /// Whether this git understands `--force-if-includes` (2.30, Dec 2020).
@@ -724,14 +738,26 @@ public final class GitClient {
         public let arguments: [String]
 
         /// Whether this command carries `--force-if-includes`, i.e. whether it
-        /// refuses when the remote has commits the local branch never had.
+        /// refuses remote work that *was fetched into this repository but never
+        /// integrated* into the local branch.
+        ///
+        /// That is the flag's incremental guarantee, and naming it precisely
+        /// matters because the dialog's wording comes from here. Remote work
+        /// that was never fetched is already refused by `--force-with-lease`
+        /// alone — the remote tip differs from the stale remote-tracking ref, so
+        /// the lease fails. What the lease cannot catch is the case this app
+        /// creates for itself: auto-fetch updates the tracking ref behind the
+        /// user, the lease then matches, and only `--force-if-includes` still
+        /// objects that the fetched tip is not reachable from what is being
+        /// pushed. An earlier version of this doc said "commits the local branch
+        /// never had", which describes the lease's job, not this one.
         ///
         /// Lives here, beside the builder that appends the flag, because the
         /// confirmation dialog picks its wording from it. A literal
         /// `contains("--force-if-includes")` at the view would be a second
         /// spelling of the emitter's decision, and the one that produces the
         /// user-facing safety claim.
-        public var refusesUnfetchedRemoteWork: Bool {
+        public var refusesUnintegratedRemoteWork: Bool {
             arguments.contains("--force-if-includes")
         }
         fileprivate init(_ arguments: [String]) { self.arguments = arguments }
@@ -752,6 +778,14 @@ public final class GitClient {
                                      setUpstream: Bool,
                                      forceWithLease: Bool = false,
                                      forceIfIncludes: Bool = supportsForceIfIncludes) -> PushCommand {
+        // Trimmed here as well as in the throwing `push`, because the
+        // confirmation dialog reaches git through this builder and `push(_:)`,
+        // never through that guard — so validation placed only there would sit
+        // on the path typed input is *least* likely to take. The `precondition`
+        // below then sees the normalised values.
+        let remote = remote.trimmingCharacters(in: .whitespacesAndNewlines)
+        let localBranch = localBranch.trimmingCharacters(in: .whitespacesAndNewlines)
+        let remoteBranch = remoteBranch.trimmingCharacters(in: .whitespacesAndNewlines)
         var args = ["push"]
         if forceWithLease {
             args.append("--force-with-lease")

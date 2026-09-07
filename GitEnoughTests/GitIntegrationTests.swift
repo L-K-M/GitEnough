@@ -1234,7 +1234,16 @@ final class GitIntegrationTests: XCTestCase {
     private func makeBareRemote(named name: String = "origin") throws -> URL {
         let remoteURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("GitEnoughTests-remote-\(UUID().uuidString)")
-        addTeardownBlock { try? FileManager.default.removeItem(at: remoteURL) }
+        addTeardownBlock {
+            try? FileManager.default.removeItem(at: remoteURL)
+            // The registration must not outlive the directory it points at.
+            // The doc above says the fixture is cleaned up with the test, and
+            // deleting only the directory left `git remote` naming a path that
+            // is gone — the same config leak `restorePushDefault` was hardened
+            // against one helper away, in the shared-fixture world both
+            // anticipate. `try?` because two tests remove the remote themselves.
+            _ = try? self.run(["remote", "remove", name])
+        }
         try run(["init", "--bare", remoteURL.path])
         // Pin the remote's HEAD rather than inheriting the machine's
         // `init.defaultBranch`, which is still `master` on a stock git. Nothing
@@ -1259,7 +1268,8 @@ final class GitIntegrationTests: XCTestCase {
     }
 
     /// The repo-local `push.default`, or nil when there is no local override.
-    /// `--get` exits non-zero for a missing key, which `try?` turns into nil.
+    /// `--get` exits 1 when the key has no *local* value; the catch below maps
+    /// that to nil and reports anything else.
     ///
     /// `--local`, because the restore writes locally. Without it this read
     /// resolves system + global + local, so a contributor with
