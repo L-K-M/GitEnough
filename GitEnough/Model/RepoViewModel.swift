@@ -406,6 +406,20 @@ public final class RepoViewModel: ObservableObject, Identifiable {
         return nil
     }
 
+    /// Why Force Push is unavailable, when it is — so the disabled menu item can
+    /// say so in its help rather than just greying out.
+    ///
+    /// Without this the refusal sentences were written and never shown: the item
+    /// is gated on `forcePushCommand == nil`, which is exactly when
+    /// `forcePushResolution` is `.refused`, so `forcePush` could not run to
+    /// surface them. "The menu greying out with no diagnostic" is the failure
+    /// this consolidation was supposed to prevent, and it had been reintroduced
+    /// one layer down.
+    public var forcePushRefusal: String? {
+        if case .refused(let reason) = forcePushResolution { return reason }
+        return nil
+    }
+
     /// Force push with lease. The UI gates this behind an explicit
     /// confirmation dialog — it rewrites the remote branch.
     ///

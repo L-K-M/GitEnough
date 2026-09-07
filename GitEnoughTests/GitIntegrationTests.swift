@@ -838,9 +838,15 @@ final class GitIntegrationTests: XCTestCase {
             // either. git's own rejection text is what distinguishes a refusal
             // from a caller error.
             let described = String(describing: error)
+            // `rejected` too: git phrases the bracket hint as "(non-fast-forward)"
+            // or "(fetch first)" depending on why, but the `! [rejected]` prefix
+            // is the stable part across versions. This fixture's bare remote has
+            // no hooks, so the wider match cannot absorb a `[remote rejected]`
+            // from something else.
             XCTAssertTrue(described.contains("non-fast-forward")
-                          || described.contains("fetch first"),
-                          "expected git's non-fast-forward refusal, got: \(described)")
+                          || described.contains("fetch first")
+                          || described.contains("rejected"),
+                          "expected git's push rejection, got: \(described)")
         }
         // Kept as a state check alongside it: whatever the error said, the
         // remote must not have moved.

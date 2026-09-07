@@ -167,6 +167,11 @@ struct RepoDetailView: View {
                     // dialog can never open without the command it will show.
                     // Two expressions of one predicate is how they drift.
                     .disabled(forcePushCommand == nil)
+                    // The refusal sentences exist; without this they had no
+                    // surface. `forcePush` can only speak them once it runs,
+                    // and it cannot run while this item is disabled.
+                    .help(viewModel.forcePushRefusal
+                          ?? "Rewrite the remote branch to match your local history")
                 } label: {
                     Label(viewModel.pushCapability.tracksAnUpstream && viewModel.status.ahead > 0
                           ? "Push (\(viewModel.status.ahead))"
@@ -239,7 +244,8 @@ struct RepoDetailView: View {
             // the verbatim initializer, so building this with `+` would take
             // the sentence out of localization while leaving the dialog
             // around it in. The command itself stays verbatim, as it should.
-            Text("Will run in this repository:\ngit \(GitActivityLog.displayCommand(for: command.arguments))")
+            Text("Will run in this repository:")
+            Text("git \(GitActivityLog.displayCommand(for: command.arguments))")
                 .font(.system(.footnote, design: .monospaced))
         }
         // Hygiene now rather than correctness: with `presenting:` the dialog

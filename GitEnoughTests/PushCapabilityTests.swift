@@ -276,21 +276,34 @@ final class PushCapabilityTests: XCTestCase {
     /// locally, fetch, then force-push with a bare lease and a teammate's commit
     /// is destroyed; add `--force-if-includes` and the push is rejected instead.
     func testForcePushCarriesForceIfIncludesWhereGitSupportsIt() throws {
+        // Both shapes hardcoded, and *above* the version skip. `contains` alone
+        // let an argv like ["push", "--force", "--force-if-includes", …] pass —
+        // `--force-if-includes` is a no-op without a lease, so that command
+        // reads as protected while arming an unleased force push. And every
+        // assertion used to sit below `XCTSkipUnless`, so on a pre-2.30 host
+        // this test verified nothing at all about the most destructive command
+        // the app runs.
+        XCTAssertEqual(
+            GitClient.forcePushArguments(remote: "origin", localBranch: "main",
+                                         remoteBranch: "main",
+                                         forceIfIncludes: true).arguments,
+            ["push", "--force-with-lease", "--force-if-includes",
+             "--", "origin", "refs/heads/main:refs/heads/main"])
+        XCTAssertEqual(
+            GitClient.forcePushArguments(remote: "origin", localBranch: "main",
+                                         remoteBranch: "main",
+                                         forceIfIncludes: false).arguments,
+            ["push", "--force-with-lease",
+             "--", "origin", "refs/heads/main:refs/heads/main"],
+            "a force push must go through a lease on every git version")
+
         try XCTSkipUnless(GitClient.supportsForceIfIncludes,
                           "git older than 2.30 has no --force-if-includes")
         XCTAssertTrue(
             GitClient.forcePushArguments(remote: "origin", localBranch: "main",
                                          remoteBranch: "main")
                 .arguments.contains("--force-if-includes"),
-            "a lease that a background fetch can satisfy is not a lease")
-
-        // Forced off, so the pass-through is covered on any host rather than
-        // only where the probe happens to say yes.
-        XCTAssertFalse(
-            GitClient.forcePushArguments(remote: "origin", localBranch: "main",
-                                         remoteBranch: "main",
-                                         forceIfIncludes: false)
-                .arguments.contains("--force-if-includes"))
+            "and on a modern host the default must pick it up")
     }
 
     /// The gate is a version comparison on git's banner, so pin the shapes real
@@ -305,6 +318,9 @@ final class PushCapabilityTests: XCTestCase {
         XCTAssertEqual(GitClient.parseVersion("git version 2.39.3 (Apple Git-146)")?.minor, 39)
         XCTAssertEqual(GitClient.parseVersion("git version 2.30.1.windows.1")?.minor, 30)
         XCTAssertEqual(GitClient.parseVersion("git version 2.29.2")?.minor, 29)
+        // No `>= (2, 30)` reduction here: that boundary is
+        // `testTheVersionGateComparison`'s whole job, and two copies of it
+        // would drift apart the moment the boundary moved.
 
         // A bare version, which some wrappers print instead of a banner, and a
         // banner with numeric noise before the real version — the case the
@@ -536,6 +552,19 @@ final class PushCapabilityTests: XCTestCase {
         let args = GitClient.pushArguments(remote: "-f", localBranch: "main",
                                            remoteBranch: "main", setUpstream: false).arguments
         XCTAssertEqual(args, ["push", "--", "-f", "refs/heads/main:refs/heads/main"])
+
+        // The publish path too. The literal above passes no flags, and the
+        // force path is pinned separately, so `-u` was the one flag whose
+        // position relative to `--` nothing checked — and after the separator
+        // git reads it as a refspec, not an option.
+        let publishArgs = GitClient.pushArguments(remote: "-f", localBranch: "main",
+                                                  remoteBranch: "main",
+                                                  setUpstream: true).arguments
+        guard let separator = publishArgs.firstIndex(of: "--") else {
+            return XCTFail("an option-shaped remote requires the `--` separator")
+        }
+        XCTAssertTrue(publishArgs[..<separator].contains("-u"),
+                      "the upstream flag must stay an option")
     }
 
     func testForcePushArgumentsAreTheOnesForcePushRuns() {

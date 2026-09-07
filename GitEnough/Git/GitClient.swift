@@ -648,6 +648,12 @@ public final class GitClient {
         // separator `git push … -f refs/…` would parse it as --force.
         args.append("--")
         args.append(remote)
+        // git reads an empty source side as a *delete*: `refs/heads/:refs/heads/x`
+        // is `git push origin :x`. `PushCommand` exists so no caller can build a
+        // destructive command on the way to `push(_:)`, and a zero-length branch
+        // name is the one shape that smuggles the worst one through the type.
+        precondition(!localBranch.isEmpty && !remoteBranch.isEmpty,
+                     "an empty branch name builds a refspec git reads as a delete")
         args.append("refs/heads/\(localBranch):refs/heads/\(remoteBranch)")
         return PushCommand(args)
     }
