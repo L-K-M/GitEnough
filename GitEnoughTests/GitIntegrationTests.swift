@@ -867,23 +867,7 @@ final class GitIntegrationTests: XCTestCase {
         let before = try client.conflictedPaths()
         XCTAssertEqual(before, ["a.txt"], "precondition: a real conflict")
 
-        XCTAssertThrowsError(try client.stageAll()) { error in
-            // The *type* matters: `stageAll` calls `conflictedPaths()` first, so
-            // a parse failure there could throw an error whose text happens to
-            // embed the path, and this assertion would pass while the guard
-            // itself never fired.
-            guard let gitError = error as? GitError else {
-                return XCTFail("expected the guard's GitError, got \(type(of: error)): \(error)")
-            }
-            // `-1` marks "synthesized, not from git", but it is not unique to
-            // this guard — GitShell uses it for "git isn't installed" and
-            // "failed to launch" too. The message prefix is what discriminates.
-            XCTAssertEqual(gitError.exitCode, -1, "synthesized, not git's own exit code")
-            XCTAssertTrue(gitError.message.hasPrefix("Can't stage everything"),
-                          "the guard refused, not some other GitError: \(gitError.message)")
-            XCTAssertTrue(gitError.message.contains("a.txt"),
-                          "the refusal must name what to resolve, got \(gitError.message)")
-        }
+        XCTAssertThrowsError(try client.stageAll()) { assertStageAllRefusal($0, naming: "a.txt") }
 
         // The unmerged entry survives, so the conflict UI still shows and the
         // markers are still in the worktree rather than in the index.
@@ -915,7 +899,7 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertFalse(contents.contains("<<<<<<<"),
                        "precondition: this conflict shape has no markers")
 
-        XCTAssertThrowsError(try client.stageAll())
+        XCTAssertThrowsError(try client.stageAll()) { assertStageAllRefusal($0, naming: "a.txt") }
         XCTAssertEqual(try client.conflictedPaths(), ["a.txt"],
                        "the unmerged entry must survive, not be silently resolved")
     }
@@ -931,6 +915,32 @@ final class GitIntegrationTests: XCTestCase {
 
         XCTAssertTrue(try client.conflictedPaths().isEmpty)
         XCTAssertTrue(try client.status().staged.contains { $0.path == "new.txt" })
+    }
+
+    /// Asserts that `stageAll` refused *because of the guard*, and named the
+    /// file to resolve.
+    ///
+    /// A bare `XCTAssertThrowsError` is not enough here: `stageAll` runs
+    /// `conflictedPaths()` first, so a parse failure there also throws — and its
+    /// text can perfectly well embed the path — leaving the test green while the
+    /// guard never fired. Hence the type and the message prefix. `-1` marks
+    /// "synthesized, not from git", but it is not unique to this guard —
+    /// GitShell uses it for "git isn't installed" and "failed to launch" too —
+    /// so the prefix is what actually discriminates.
+    private func assertStageAllRefusal(_ error: Error, naming path: String,
+                                       file: StaticString = #filePath, line: UInt = #line) {
+        guard let gitError = error as? GitError else {
+            return XCTFail("expected the guard's GitError, got \(type(of: error)): \(error)",
+                           file: file, line: line)
+        }
+        XCTAssertEqual(gitError.exitCode, -1, "synthesized, not git's own exit code",
+                       file: file, line: line)
+        XCTAssertTrue(gitError.message.hasPrefix("Can't stage everything"),
+                      "the guard refused, not some other GitError: \(gitError.message)",
+                      file: file, line: line)
+        XCTAssertTrue(gitError.message.contains(path),
+                      "the refusal must name what to resolve, got \(gitError.message)",
+                      file: file, line: line)
     }
 
     /// main and other both change a.txt's middle line, then merge.

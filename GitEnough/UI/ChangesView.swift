@@ -358,9 +358,8 @@ private extension ChangesView {
     /// count and the files — almost never reaches this front end; this is where
     /// that information has to appear instead.
     static func stageAllBlockedHelp(_ conflicts: [FileChange]) -> String {
-        let names = conflicts.prefix(3).map(\.path).joined(separator: ", ")
-        let more = conflicts.count > 3 ? " and \(conflicts.count - 3) more" : ""
-        return "Resolve \(conflicts.count) conflicted file\(conflicts.count == 1 ? "" : "s") first (\(names)\(more)) — staging them accepts whatever is in the worktree"
+        let names = GitClient.namingFiles(conflicts.map(\.path))
+        return "Resolve \(conflicts.count) conflicted file\(conflicts.count == 1 ? "" : "s") first (\(names)) — staging them accepts whatever is in the worktree"
     }
 }
 

@@ -442,13 +442,27 @@ public final class GitClient {
     public func stageAll() throws {
         let conflicted = try conflictedPaths()
         guard conflicted.isEmpty else {
-            let names = conflicted.prefix(3).joined(separator: ", ")
-            let more = conflicted.count > 3 ? " and \(conflicted.count - 3) more" : ""
             throw GitError(
-                message: "Can't stage everything while \(conflicted.count) file\(conflicted.count == 1 ? " is" : "s are") still conflicted (\(names)\(more)). Staging one accepts whatever is in the worktree — markers and all, or one side silently winning. Resolve each first, then stage it.",
+                message: "Can't stage everything while \(conflicted.count) file\(conflicted.count == 1 ? " is" : "s are") still conflicted (\(Self.namingFiles(conflicted))). Staging one accepts whatever is in the worktree — markers and all, or one side silently winning. Resolve each first, then stage it.",
                 exitCode: -1)
         }
         try runChecked(["-C", worktree.path, "add", "-A"], in: nil)
+    }
+
+    /// Names up to `limit` paths and counts the rest — the "a.txt, b.txt and 2
+    /// more" fragment that tells the user *which* files are in the way.
+    ///
+    /// Public because a front end needs the same fragment. The refusal above
+    /// and the SwiftUI Stage All tooltip state one rule about one list, and on
+    /// macOS the tooltip is the copy the user actually reads: the button is
+    /// disabled while anything is unmerged, so the refusal is a backstop for
+    /// callers rather than a message anyone sees. Written twice, the two drift
+    /// on the first edit to either — and the copy that drifts unnoticed is the
+    /// one nobody is looking at.
+    public static func namingFiles(_ paths: [String], limit: Int = 3) -> String {
+        let shown = paths.prefix(limit).joined(separator: ", ")
+        guard paths.count > limit else { return shown }
+        return shown + " and \(paths.count - limit) more"
     }
 
     public func unstage(paths: [String]) throws {
