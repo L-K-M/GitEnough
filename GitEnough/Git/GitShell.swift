@@ -264,6 +264,20 @@ public final class GitShell {
         let errPipe = Pipe()
         process.standardOutput = outPipe
         process.standardError = errPipe
+        // Without this the child inherits *our* stdin — the launching terminal's
+        // tty when GitEnough is started from a shell, which is how the GTK build
+        // is documented to run and how the macOS app runs during development. A
+        // git command that then asks a question blocks forever on a terminal
+        // nobody is watching, and the question itself is invisible because it
+        // goes to stdout, which is captured in the pipe above.
+        //
+        // `git mergetool` is where this bites: closing the tool without saving
+        // makes `check_unchanged` ask "Was the merge successful [y/n]?", and
+        // `runMergeTool`'s own comment already assumes the answer it gets here
+        // is EOF. It is now. Hooks that read stdin during commit/pull/push get
+        // the same treatment, which is what `GIT_TERMINAL_PROMPT=0` intends and
+        // what `ProcessRunner` (Platform/ProcessRunner.swift) already does.
+        process.standardInput = FileHandle.nullDevice
 
         do {
             try process.run()

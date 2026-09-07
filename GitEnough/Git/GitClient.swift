@@ -399,14 +399,109 @@ public final class GitClient {
 
     // MARK: - Staging
 
+    /// Stages the named paths. Unlike `stageAll`, this takes no view on conflicts:
+    /// naming a path *is* the user saying "this one is resolved", which is what
+    /// git's own `add` means during a merge. The UI never routes a conflicted
+    /// path here — porcelain v2 `u` entries land in `RepoStatus.conflicted`
+    /// alone, so they are absent from the staged/unstaged lists these actions
+    /// read — and the deliberate gesture goes through `markResolved`, which
+    /// refuses while conflict markers are still in the file. A new caller that
+    /// can reach an unmerged path should call `markResolved` instead.
+    ///
+    /// The invariant is pinned by `GitParsersTests`
+    /// (`testEveryUnmergedShapeStaysOutOfTheStagedAndUnstagedLists`) rather than
+    /// asserted here, so it fails at the point of drift — the parser — instead
+    /// of costing a `git diff` subprocess on every stage.
     public func stage(paths: [String]) throws {
         guard !paths.isEmpty else { return }
         try runChecked(
             ["-C", worktree.path, "add", "--"] + Self.literalPathspecs(paths), in: nil)
     }
 
+    /// Stages everything — but never while a path is unmerged.
+    ///
+    /// `git add -A` on an unmerged path stages the **worktree content**, conflict
+    /// markers and all, and clears the unmerged state, which is git's way of
+    /// saying "I resolved this". Verified against git 2.43: during a conflicted
+    /// merge, `git add -A` turns `u UU … f.txt` into `1 M. … f.txt`, the commit
+    /// then succeeds, and the committed file contains
+    /// `<<<<<<< HEAD … ======= … >>>>>>> other`.
+    ///
+    /// The check and the `add` are two separate git processes, so a conflict
+    /// created *between* them — by a terminal, an editor integration — can still
+    /// slip through. This narrows the window to milliseconds; it does not close
+    /// it, and only an index lock would.
+    ///
+    /// In the app that is worse than the raw command, because the conflict UI is
+    /// rendered from the unmerged entries: staging them makes the warning
+    /// disappear and the Commit button light up. The user is shown every signal
+    /// that the conflict is resolved, at the moment it has been buried.
+    ///
+    /// So the guard lives here rather than only in a button's `disabled`: both
+    /// front ends call this, and only one of them renders conflicts at all.
     public func stageAll() throws {
+        let conflicted = try conflictedPaths()
+        guard conflicted.isEmpty else {
+            throw GitError(
+                message: Self.stageAllRefusalPrefix + " while \(conflicted.count) file\(conflicted.count == 1 ? " is" : "s are") still conflicted (\(Self.namingFiles(conflicted))). Staging one " + Self.conflictStagingConsequence + ". Resolve each first, then stage it.",
+                exitCode: -1)
+        }
         try runChecked(["-C", worktree.path, "add", "-A"], in: nil)
+    }
+
+    /// The opening words of `stageAll`'s refusal, shared with the test that has
+    /// to tell that refusal apart from any other `GitError`.
+    ///
+    /// `exitCode: -1` cannot do that job — fourteen sites in this module use it
+    /// for "synthesized rather than from git", `GitShell`'s "git isn't
+    /// installed" among them — so the test matches the prefix. Which made the
+    /// sentence's first words load-bearing in a file that has no idea, and a
+    /// reword to "Cannot stage everything" would have turned the tests red while
+    /// the guard kept working perfectly. Internal rather than public: this is a
+    /// seam for the tests, not surface for a front end.
+    static let stageAllRefusalPrefix = "Can't stage everything"
+
+    /// What staging a conflicted path actually does — stated once, because the
+    /// refusal above and the front ends' tooltips make the same claim and the
+    /// tooltip is the one users read.
+    ///
+    /// `namingFiles` deduplicated the file list and left this duplicated, and it
+    /// had already drifted: the tooltip said only "accepts whatever is in the
+    /// worktree", which reads as "go find the markers" — and a modify/delete
+    /// conflict (`UD`/`DU`/`DD`) has no markers anywhere. That is the shape
+    /// `testStageAllRefusesAModifyDeleteConflictThatHasNoMarkers` exists for,
+    /// and the quieter of the two failures: nothing looks wrong afterwards.
+    static let conflictStagingConsequence =
+        "accepts whatever is in the worktree — markers and all, or one side silently winning"
+
+    /// Names up to `limit` paths and counts the rest — the "a.txt, b.txt and 2
+    /// more" fragment that tells the user *which* files are in the way.
+    ///
+    /// Shared with the SwiftUI tooltip, which states the same rule about the
+    /// same list — and on macOS is the copy the user actually reads, since the
+    /// button is disabled while anything is unmerged and the refusal is a
+    /// backstop for callers rather than a message anyone sees. Written twice,
+    /// the two drift on the first edit to either, and the copy that drifts
+    /// unnoticed is the one nobody is looking at.
+    ///
+    /// Internal, like `stageAllRefusalPrefix` and `conflictStagingConsequence`
+    /// below. This was `public` on the reasoning that "a front end needs it" —
+    /// true, but the front end that needs it is `UI/`, which is *excluded from*
+    /// the SwiftPM library rather than a separate module, so it compiles into
+    /// this one and sees internal fine. The GTK front end is genuinely separate
+    /// and renders no Stage All tooltip; when it does, all three become public
+    /// together rather than one of them guessing ahead.
+    static func namingFiles(_ paths: [String], limit: Int = 3) -> String {
+        // Clamped, because both failure modes below the floor are silent or
+        // fatal rather than merely wrong. `limit: 0` names nothing and returns
+        // " and 3 more" — a leading separator in a user-facing alert. A
+        // negative limit is worse: `Collection.prefix(_:)` requires a
+        // non-negative length, so it traps the process. A caller computing a
+        // limit (`min(3, count)`) reaches both without meaning to.
+        let limit = max(1, limit)
+        let shown = paths.prefix(limit).joined(separator: ", ")
+        guard paths.count > limit else { return shown }
+        return shown + " and \(paths.count - limit) more"
     }
 
     /// True when HEAD resolves to a commit.
@@ -745,8 +840,19 @@ public final class GitClient {
 
     /// Hands one conflicted file to an external merge tool (`git mergetool`).
     /// Blocks until the tool exits. Afterwards the caller refreshes: if the tool
-    /// (or git's "was the merge successful?" prompt, which gets a headless EOF)
-    /// didn't stage the file, the UI still offers “Mark Resolved”.
+    /// (or git's "was the merge successful?" prompt, which gets a headless EOF
+    /// because `GitShell.run` gives every child `/dev/null` on stdin) didn't
+    /// stage the file, the UI still offers “Mark Resolved”.
+    ///
+    /// **`--no-prompt` is load-bearing.** With `mergetool.prompt` on, git's
+    /// "Hit return to start merge resolution tool" reads the `/dev/null` stdin
+    /// every child now gets, hits EOF, and skips the file without launching
+    /// anything — invisibly, since the prompt goes to the captured stdout pipe.
+    /// Unset behaves as false because this call always passes `--tool=`, so the
+    /// flag protects users who set the option themselves. If the tool returns
+    /// the file unresolved, mergetool exits 1 and `runChecked` throws; before
+    /// the `/dev/null` change that same case blocked forever on the launching
+    /// terminal's tty. (Measured matrix at the invocation below.)
     public func runMergeTool(_ tool: String, path: String) throws {
         // git-mergetool is a shell script. Even after its initial git command
         // selects a literal path, it expands the returned filename with an
@@ -774,6 +880,14 @@ public final class GitClient {
                     """,
                 exitCode: -1)
         }
+        // Measured against git 2.43, fake tool, stdin from /dev/null:
+        //
+        //     mergetool.prompt=true,  no flag      → tool NEVER launched
+        //     mergetool.prompt=true,  --no-prompt  → tool launched
+        //     mergetool.prompt unset, no flag      → tool launched
+        //
+        // Kept next to the flag it justifies, so re-verifying means re-running
+        // the command on this line rather than trusting a doc block.
         try runChecked(
             ["-C", worktree.path,
              "-c", "mergetool.keepBackup=false",   // don't litter .orig files

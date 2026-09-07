@@ -1096,6 +1096,121 @@ final class GitIntegrationTests: XCTestCase {
         }
     }
 
+    // MARK: - Stage All during a conflict
+
+    /// `git add -A` on an unmerged path stages the worktree content — conflict
+    /// markers included — and clears the unmerged state, so the commit that
+    /// follows lands `<<<<<<< HEAD` in history. In the app it is worse than the
+    /// raw command: the conflict section is rendered from the unmerged entries,
+    /// so staging them makes the warning vanish and the Commit button light up.
+    func testStageAllRefusesWhileAnythingIsConflicted() throws {
+        try makeConflict()
+        let before = try client.conflictedPaths()
+        XCTAssertEqual(before, ["a.txt"], "precondition: a real conflict")
+
+        XCTAssertThrowsError(try client.stageAll()) { assertStageAllRefusal($0, naming: "a.txt") }
+
+        // The unmerged entry survives, so the conflict UI still shows and the
+        // markers are still in the worktree rather than in the index.
+        XCTAssertEqual(try client.conflictedPaths(), ["a.txt"])
+        let staged = try client.status().staged
+        XCTAssertFalse(staged.contains { $0.path == "a.txt" },
+                       "a conflicted path must not become a staged modification")
+    }
+
+    /// A modify/delete conflict has **no conflict markers anywhere** — the
+    /// worktree simply holds the surviving side's content. `git add -A` there
+    /// doesn't commit markers; it silently picks a winner and clears the
+    /// unmerged state, which is the quieter and arguably worse failure. Verified
+    /// against git 2.43: the entry is `u UD`, `diff --diff-filter=U` reports it,
+    /// and `a.txt` contains no `<<<<<<<`.
+    func testStageAllRefusesAModifyDeleteConflictThatHasNoMarkers() throws {
+        try run(["checkout", "-b", "deleting", "main"])
+        try run(["rm", "-q", "a.txt"])
+        try run(["commit", "-m", "Delete a.txt"])
+        try run(["checkout", "main"])
+        try write("one\nedited\n", to: "a.txt")
+        try run(["commit", "-am", "Edit a.txt"])
+        _ = try GitShell.shared.run(["-C", repoURL.path, "merge", "deleting"], in: nil)
+
+        XCTAssertEqual(try client.conflictedPaths(), ["a.txt"],
+                       "precondition: a modify/delete conflict")
+        let contents = try String(contentsOf: repoURL.appendingPathComponent("a.txt"),
+                                  encoding: .utf8)
+        XCTAssertFalse(contents.contains("<<<<<<<"),
+                       "precondition: this conflict shape has no markers")
+
+        XCTAssertThrowsError(try client.stageAll()) { assertStageAllRefusal($0, naming: "a.txt") }
+        XCTAssertEqual(try client.conflictedPaths(), ["a.txt"],
+                       "the unmerged entry must survive, not be silently resolved")
+    }
+
+    /// The guard is about unmerged paths, not about being mid-merge: once every
+    /// conflict is resolved, Stage All works again for the rest of the tree.
+    func testStageAllWorksOnceTheConflictIsResolved() throws {
+        try makeConflict()
+        try client.resolveConflict(path: "a.txt", ours: true)
+        try write("unrelated\n", to: "new.txt")
+
+        try client.stageAll()
+
+        XCTAssertTrue(try client.conflictedPaths().isEmpty)
+        XCTAssertTrue(try client.status().staged.contains { $0.path == "new.txt" })
+    }
+
+    /// Asserts that `stageAll` refused *because of the guard*, and named the
+    /// file to resolve.
+    ///
+    /// A bare `XCTAssertThrowsError` is not enough here: `stageAll` runs
+    /// `conflictedPaths()` first, so a parse failure there also throws — and its
+    /// text can perfectly well embed the path — leaving the test green while the
+    /// guard never fired. Hence the type and `stageAllRefusalPrefix`, which the
+    /// guard itself builds its message from — matching the literal here made a
+    /// reword of the copy turn these tests red. `-1` marks
+    /// "synthesized, not from git", but it is not unique to this guard —
+    /// GitShell uses it for "git isn't installed" and "failed to launch" too —
+    /// so the prefix is what actually discriminates.
+    private func assertStageAllRefusal(_ error: Error, naming path: String,
+                                       file: StaticString = #filePath, line: UInt = #line) {
+        guard let gitError = error as? GitError else {
+            return XCTFail("expected the guard's GitError, got \(type(of: error)): \(error)",
+                           file: file, line: line)
+        }
+        XCTAssertEqual(gitError.exitCode, -1, "synthesized, not git's own exit code",
+                       file: file, line: line)
+        XCTAssertTrue(gitError.message.hasPrefix(GitClient.stageAllRefusalPrefix),
+                      "the guard refused, not some other GitError: \(gitError.message)",
+                      file: file, line: line)
+        XCTAssertTrue(gitError.message.contains(path),
+                      "the refusal must name what to resolve, got \(gitError.message)",
+                      file: file, line: line)
+        // The other half of the shared-constant guarantee. `StageAllBlockedHelpTests`
+        // pins the tooltip to `conflictStagingConsequence`; without this, the
+        // refusal could be reworded to say something else entirely and every
+        // test would stay green — the drift the constant was extracted to make
+        // impossible, still possible on the side nobody was asserting.
+        XCTAssertTrue(gitError.message.contains(GitClient.conflictStagingConsequence),
+                      "the refusal must state the shared consequence verbatim, got \(gitError.message)",
+                      file: file, line: line)
+    }
+
+    /// main and other both change a.txt's middle line, then merge.
+    private func makeConflict() throws {
+        try run(["checkout", "-b", "conflicting", "main"])
+        try write("one\nfrom-branch\n", to: "a.txt")
+        try run(["commit", "-am", "Branch edit"])
+        try run(["checkout", "main"])
+        try write("one\nfrom-main\n", to: "a.txt")
+        try run(["commit", "-am", "Main edit"])
+        _ = try GitShell.shared.run(["-C", repoURL.path, "merge", "conflicting"], in: nil)
+        // Without this, a merge that silently succeeded (or a fixture drift that
+        // stopped the two edits from overlapping) would leave every conflict
+        // test passing vacuously — including the ones asserting that a guard
+        // *fired*, which would then be asserting nothing at all.
+        XCTAssertEqual(try client.conflictedPaths(), ["a.txt"],
+                       "precondition: the fixture merge really conflicts")
+    }
+
     // MARK: - External diff drivers
 
     /// `diff.external` is what difftastic's own install instructions set
