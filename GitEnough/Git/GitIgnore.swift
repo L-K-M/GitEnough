@@ -52,6 +52,60 @@ public enum GitIgnore {
         return existing + separator + "/" + escaped + "\n"
     }
 
+    /// The bytes a caller must append to a file currently holding `existing` in
+    /// order to reach `appending(path, to: existing)`.
+    ///
+    /// `nil` means the byte-prefix invariant below failed — an internal defect,
+    /// never a normal outcome. Empty (non-nil) means the rule is already present
+    /// in `existing`, which is ordinary.
+    ///
+    /// The distinction used to be carried by empty `Data` alone, and each caller
+    /// disambiguated from context. That worked, and it made the wrong thing the
+    /// easy thing: `if bytes.isEmpty { return }` reads as "nothing to do" and
+    /// silently swallows a broken invariant, writing no rule while reporting
+    /// success. The type says it now, so a caller cannot forget to ask.
+    ///
+    /// This exists so the difference is taken in **bytes**, once, here. Deriving
+    /// it from Character counts is wrong in a way that is easy to miss and
+    /// destructive when it happens: `appending` returns `existing` plus a tail,
+    /// but the two can disagree on Character count at the join. An existing file
+    /// ending in a bare CR gains the separator "\n", and CR + LF is a single
+    /// grapheme cluster — so the result has one Character *fewer* at that point
+    /// than `existing` does, and `updated.dropFirst(existing.count)` drops the
+    /// separator along with it. The file becomes "a\r/x\n": the previous rule
+    /// destroyed, the new one matching nothing, and the caller reporting success.
+    /// The slicing happens on the UTF-8 *view* rather than on a materialized
+    /// `Data`, so the result is a fresh zero-based `Data` rather than a slice
+    /// whose `startIndex` is the byte count of `existing`. Both are equally
+    /// correct to append, but a slice traps on `addition[0]` — no caller does
+    /// that today, and none should have to know not to.
+    public static func appendedBytes(_ path: String, to existing: String) -> Data? {
+        let updated = appending(path, to: existing)
+        // The whole function is a byte offset into `updated`, and that offset
+        // is only meaningful while `appending` returns `existing` unchanged at
+        // the front. Nothing else enforces it, and a future edit there —
+        // normalizing line endings, trimming trailing space, re-escaping the
+        // existing text — would slice at the wrong place and hand the caller
+        // garbage to append to the user's file.
+        //
+        // Loud in debug, harmless in release. `precondition` was the other
+        // candidate, and it trades one user's corrupted `.gitignore` for every
+        // user's crashed app; returning `nil` instead makes a broken invariant a
+        // refusal rather than a corrupted file. Both callers now throw on it,
+        // so it reaches the banner in release too — which the earlier ambiguous
+        // empty `Data` could not promise: the append path read that as "already
+        // present" and reported success.
+        //
+        // One evaluation, used by both. Written twice, the debug trap and the
+        // release guard could come to check different predicates — and the
+        // whole point of the pair is that they check the same one.
+        let isPrefix = updated.utf8.starts(with: existing.utf8)
+        assert(isPrefix,
+               "appending(_:to:) must return `existing` as a byte-for-byte prefix")
+        guard isPrefix else { return nil }
+        return Data(updated.utf8.dropFirst(existing.utf8.count))
+    }
+
     /// git ignores unescaped trailing whitespace in patterns (and nothing
     /// else) — mirror exactly that for the duplicate comparison, so a line
     /// like " /build" (leading space is significant) can't false-positive,

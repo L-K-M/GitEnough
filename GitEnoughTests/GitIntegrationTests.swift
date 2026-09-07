@@ -862,6 +862,242 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertEqual(localHead, remoteHead)
     }
 
+    // MARK: - Unstage never becomes a deletion
+
+    /// `unstage` used to wrap `git restore --staged` in a blanket `catch` that
+    /// fell through to `git rm --cached`. That is only correct for an unborn
+    /// HEAD; on a repository that has commits, *any* failure — here, one bad
+    /// pathspec alongside a good one — turned every selected staged
+    /// modification into a staged **deletion**, and reported success while
+    /// doing it.
+    func testAFailedUnstageLeavesTheFileStagedRatherThanDeleted() throws {
+        try write("changed\n", to: "a.txt")
+        try client.stage(paths: ["a.txt"])
+
+        // `git restore --staged` refuses the whole invocation when a pathspec
+        // matches nothing, so this is a genuine failure with a real staged file
+        // in the same call — exactly the shape the old catch mishandled.
+        XCTAssertThrowsError(try client.unstage(paths: ["a.txt", "no-such-file.txt"]),
+                             "a pathspec that matches nothing must surface, not be swallowed")
+
+        let status = try client.status()
+        XCTAssertTrue(status.staged.contains { $0.path == "a.txt" && $0.stagedStatus == .modified },
+                      "the file must still be staged as a modification, got \(status.staged)")
+        XCTAssertFalse(status.staged.contains { $0.stagedStatus == .deleted },
+                       "a failed unstage must never stage a deletion")
+    }
+
+    /// A repository whose HEAD does not resolve is not necessarily unborn. With
+    /// a corrupt `refs/heads/<branch>`, `rev-parse --verify HEAD` fails exactly
+    /// as it does for an unborn HEAD — so keying the fallback off that alone
+    /// would run index surgery on a repository full of real files.
+    func testACorruptHeadRefFailsInsteadOfStagingDeletions() throws {
+        try write("changed\n", to: "a.txt")
+        try client.stage(paths: ["a.txt"])
+        try corruptHeadRef()
+
+        XCTAssertThrowsError(try client.unstage(paths: ["a.txt"]),
+                             "a corrupt HEAD must surface, not fall through to rm --cached")
+
+        // `ls-files` reads the index without needing HEAD, so it still answers
+        // in a repository this broken: the entry must still be there.
+        let indexed = try GitShell.shared.runChecked(
+            ["-C", repoURL.path, "ls-files", "--", "a.txt"], in: nil).stdout
+        XCTAssertTrue(indexed.contains("a.txt"),
+                      "the file must still be in the index, not removed from it")
+    }
+
+    /// Points HEAD's branch ref at garbage, restoring it when the test ends.
+    ///
+    /// Derived, not assumed: corrupting a ref that isn't HEAD's would leave HEAD
+    /// resolving fine and the call under test succeeding, so the test would fail
+    /// with "it didn't throw" — which points nowhere near the real cause.
+    ///
+    /// Hermetic by construction rather than by luck: `setUp` builds a fresh
+    /// repository per test today, so nothing inherits this corruption — but that
+    /// is a property of the fixture, not of the tests, and a shared fixture would
+    /// make every later test fail for an unrelated reason. `addTeardownBlock`
+    /// rather than `defer` because a `defer` written here would restore the ref
+    /// the moment this helper returns — before the code under test ever runs.
+    /// (XCTest's plain assertions don't throw, so the "survives a throwing
+    /// assertion" reasoning this comment used to give was not the mechanism.)
+    private func corruptHeadRef() throws {
+        let branch = try GitShell.shared.runChecked(
+            ["-C", repoURL.path, "symbolic-ref", "--short", "HEAD"], in: nil).stdout
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        // Asked, not assumed. `.git` is a *file* in a linked worktree or
+        // submodule, and `refs/heads` can live in the common dir — a hardcoded
+        // layout would write somewhere git never reads, HEAD would keep
+        // resolving, and the guard below would classify that as "not
+        // applicable" and skip. `--git-path` handles the remapping and prints a
+        // repo-relative path unless the git dir is absolute.
+        let refPath = try GitShell.shared.runChecked(
+            ["-C", repoURL.path, "rev-parse", "--git-path", "refs/heads/\(branch)"],
+            in: nil).stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let headRef = refPath.hasPrefix("/")
+            ? URL(fileURLWithPath: refPath)
+            : repoURL.appendingPathComponent(refPath)
+        // The directory chain, not just the file: a nested default branch name
+        // (`feature/x`) has no `refs/heads/feature` in a fresh fixture, and a
+        // reftable-backed repository may have no `refs/heads` at all. Without
+        // this the write throws an opaque Cocoa error *before* the skip guard
+        // below can classify the situation — turning the graceful degradation
+        // this helper is built around into the red suite it exists to avoid.
+        try FileManager.default.createDirectory(
+            at: headRef.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let originalHead = try GitShell.shared.runChecked(
+            ["-C", repoURL.path, "rev-parse", "HEAD"], in: nil).stdout
+        addTeardownBlock {
+            try? originalHead.write(to: headRef, atomically: true, encoding: .utf8)
+        }
+        try "not a sha\n".write(to: headRef, atomically: true, encoding: .utf8)
+
+        // Skip rather than fail. The branch name comes from `symbolic-ref`, so
+        // the path cannot be wrong — a HEAD that still resolves means the write
+        // was a no-op, and the realistic cause is the reftable backend
+        // (git 2.45+, increasingly the default), which does not read loose ref
+        // files at all. That is "not applicable here", not "broken": failing
+        // would give contributors on newer git a permanently red suite with a
+        // message that reads like a product regression.
+        guard try GitShell.shared.run(
+            ["-C", repoURL.path, "rev-parse", "--verify", "--quiet", "HEAD"],
+            in: nil).exitCode != 0 else {
+            throw XCTSkip("HEAD still resolves after corrupting \(branch), so this "
+                          + "repository is not on loose refs — the corrupt-ref tests "
+                          + "need the files backend.")
+        }
+    }
+
+    /// `discard` shares `isUnbornHEAD()` with `unstage`, so it is pinned too —
+    /// but it does **not** behave the same way, and the difference is the point.
+    ///
+    /// Verified against git 2.43: with `refs/heads/<branch>` pointing at garbage,
+    /// `git restore --staged` fails (which is what makes `unstage`'s guard load-
+    /// bearing) while `git reset -q HEAD --` *succeeds*, falling back to the
+    /// empty tree exactly as it does on a genuinely unborn HEAD. So `discard`
+    /// does not throw here; it degrades to an unstage.
+    ///
+    /// What this test protects is the thing that actually matters: **nothing is
+    /// destroyed**. The worktree file keeps the user's content, and discard on a
+    /// broken repository can only cost the staging, never the work.
+    func testDiscardOnACorruptHeadRefUnstagesRatherThanDestroying() throws {
+        try write("changed\n", to: "a.txt")
+        try client.stage(paths: ["a.txt"])
+        try corruptHeadRef()
+
+        // Recorded, not asserted. On git 2.43 `reset` treats an unresolvable
+        // HEAD like an unborn one and falls back to the empty tree, but that is
+        // incidental rather than promised — and asserting it would fail the
+        // test *before* the assertions that carry the real contract, in exactly
+        // the environments where you most want to know that nothing was
+        // destroyed. Both outcomes are acceptable; only the state afterwards
+        // is not negotiable.
+        var discardSucceeded = true
+        var discardError: Error?
+        do {
+            try client.discard(paths: ["a.txt"])
+        } catch {
+            discardSucceeded = false
+            discardError = error
+        }
+
+        let file = repoURL.appendingPathComponent("a.txt")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.path),
+                      "the worktree file must survive a discard on a broken repository")
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "changed\n",
+                       "and keep the user's content — the checkout step must not run "
+                       + "(discard error: \(String(describing: discardError)))")
+
+        // The half this test is named for, and was not checking: a `discard`
+        // that silently no-opped would satisfy every assertion above. `ls-files`
+        // rather than `client.status()` because HEAD is corrupt here and
+        // `ls-files` reads the index without consulting it.
+        let indexed = try GitShell.shared.runChecked(
+            ["-C", repoURL.path, "ls-files", "--", "a.txt"], in: nil).stdout
+        // Only the success branch asserts. The `else` used to require an
+        // untouched index, which quietly upgraded "don't destroy work" into
+        // "fail atomically" — a contract `discard` never claimed. It unstages
+        // and then checks out, so a throw in the second step legitimately
+        // leaves an emptied index, and that shape would have failed here with a
+        // message reading like data loss while every invariant this test is
+        // named for held. It is also unreachable on git 2.43, where `reset`
+        // treats an unresolvable HEAD as the empty tree, so its only effect
+        // would have been to mislead.
+        if discardSucceeded {
+            XCTAssertTrue(indexed.isEmpty,
+                          "discard must degrade to an unstage, not to a no-op")
+        }
+    }
+
+    /// The case the blanket catch was written for still works: on an unborn
+    /// HEAD there is nothing to restore against, so unstaging drops the index
+    /// entry and leaves the file on disk.
+    func testUnstageOnUnbornHeadDropsTheIndexEntry() throws {
+        let (fresh, unborn) = try makeUnbornRepo(label: "unborn")
+        try "new\n".write(to: fresh.appendingPathComponent("new.txt"),
+                          atomically: true, encoding: .utf8)
+        try unborn.stage(paths: ["new.txt"])
+        XCTAssertEqual(try unborn.status().staged.map(\.path), ["new.txt"])
+
+        try unborn.unstage(paths: ["new.txt"])
+
+        let status = try unborn.status()
+        XCTAssertTrue(status.staged.isEmpty, "got \(status.staged)")
+        XCTAssertEqual(status.unstaged.map(\.path), ["new.txt"])
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: fresh.appendingPathComponent("new.txt").path),
+            "unstaging must never remove the file from disk")
+    }
+
+    /// The shape that was broken: stage a file in a brand-new repository, keep
+    /// editing it, then unstage.
+    ///
+    /// `git rm --cached` refuses an entry whose content differs from *both* HEAD
+    /// and the worktree. On an unborn HEAD git diffs against the empty tree, so
+    /// every staged entry differs from HEAD and the check collapses to "refuse
+    /// if the file was edited after staging" — the ordinary flow, in the one
+    /// state this branch exists for. Measured on git 2.43:
+    ///
+    ///     error: the following file has staged content different from both the
+    ///     file and the HEAD: new.txt  (use -f to force removal)
+    ///
+    /// `--ignore-unmatch` does not bypass it; only `-f` does. The sibling
+    /// `discard` path has always passed `-f`, so this was an inconsistency
+    /// inside one file rather than a considered difference.
+    func testUnstageOnUnbornHeadWorksAfterTheFileIsEditedAgain() throws {
+        let (fresh, unborn) = try makeUnbornRepo(label: "unborn-edited")
+
+        let file = fresh.appendingPathComponent("new.txt")
+        try "staged\n".write(to: file, atomically: true, encoding: .utf8)
+        try unborn.stage(paths: ["new.txt"])
+        // The edit that makes the index entry differ from the worktree too.
+        try "staged\nand edited after staging\n".write(to: file, atomically: true,
+                                                       encoding: .utf8)
+
+        try unborn.unstage(paths: ["new.txt"])
+
+        let status = try unborn.status()
+        XCTAssertTrue(status.staged.isEmpty, "got \(status.staged)")
+        XCTAssertEqual(status.unstaged.map(\.path), ["new.txt"])
+        // The later edit must survive: `--cached` drops the index entry and
+        // must never reach into the worktree, `-f` included.
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8),
+                       "staged\nand edited after staging\n",
+                       "unstaging must not roll the file back to what was staged")
+    }
+
+    /// A stale pathspec on a *born* HEAD throws rather than passing quietly to
+    /// the unborn branch. That asymmetry is the design: only a positive
+    /// unborn-HEAD answer takes the fallback, so a selection the index has moved
+    /// on from cannot be answered by dropping index entries.
+    func testUnstageRethrowsWhenTheFallbackDoesNotApply() throws {
+        let missing = "no-such-file.txt"
+        XCTAssertThrowsError(try client.unstage(paths: [missing])) { error in
+            XCTAssertTrue("\(error)".contains(missing),
+                          "the error must name what could not be unstaged, got \(error)")
+        }
+    }
+
     /// The bug this signature exists to prevent: with `push.default = matching`
     /// — git's default before 2.0, and still common in inherited configs — a
     /// bare `git push --force-with-lease` force-updates *every* branch that
@@ -1056,6 +1292,23 @@ final class GitIntegrationTests: XCTestCase {
 
         XCTAssertTrue(try client.conflictedPaths().isEmpty)
         XCTAssertTrue(try client.status().staged.contains { $0.path == "new.txt" })
+    }
+
+    /// A throwaway repository with an unborn HEAD, removed when the test ends.
+    ///
+    /// `git init` runs before the client is built: nothing in `GitClient.init`
+    /// inspects the worktree today, but a client naming a repository that does
+    /// not exist yet works only by that, and the ordering costs nothing. Shared
+    /// so that rationale cannot survive in one copy and be silently depended on
+    /// by the other.
+    private func makeUnbornRepo(label: String) throws -> (worktree: URL, client: GitClient) {
+        let fresh = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitEnoughTests-\(label)-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: fresh, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: fresh) }
+        // No -b: these tests never name the branch, only need HEAD unborn.
+        _ = try GitShell.shared.runChecked(["init", fresh.path], in: nil)
+        return (fresh, GitClient(worktree: fresh))
     }
 
     /// Asserts that `stageAll` refused *because of the guard*, and named the

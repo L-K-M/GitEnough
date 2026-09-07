@@ -754,27 +754,168 @@ public final class RepoViewModel: ObservableObject, Identifiable {
             // A broader existing pattern (*.log, build/) already covers it.
             guard !client.isIgnored(path: change.path) else { return }
             let url = client.worktree.appendingPathComponent(".gitignore")
-            // Only a genuinely missing file maps to empty: a *read* failure
-            // (e.g. non-UTF-8 bytes) must throw rather than let the write
-            // below clobber the existing file with a single line.
-            let fileExists = FileManager.default.fileExists(atPath: url.path)
-            let existing = fileExists
-                ? try String(contentsOf: url, encoding: .utf8)
-                : ""
-            let updated = GitIgnore.appending(change.path, to: existing)
-            guard updated != existing else { return }
-            if fileExists {
-                // Append through the existing file (following symlinks, and
-                // preserving permissions/ownership) rather than replacing it
-                // atomically. `appending` only ever appends, so the new bytes
-                // are exactly the difference.
-                let handle = try FileHandle(forWritingTo: url)
-                try handle.seekToEnd()
-                try handle.write(contentsOf: Data(updated.dropFirst(existing.count).utf8))
-                try handle.close()
-            } else {
-                try updated.write(to: url, atomically: true, encoding: .utf8)
+            // Before either branch, because both would write *through* the link.
+            try RepoViewModel.requireRegularIgnoreFile(at: url)
+            guard FileManager.default.fileExists(atPath: url.path) else {
+                // No file yet, so the addition is the whole rule.
+                // `nil` is the broken byte-prefix invariant, and empty is "the
+                // rule is already covered" — which cannot happen here, because
+                // an empty file covers nothing. Both are therefore defects on
+                // this branch, and both throw: returning quietly would write
+                // nothing, report success, and leave the path unignored on
+                // every retry, with no banner to explain it.
+                guard let bytes = GitIgnore.appendedBytes(change.path, to: ""),
+                      !bytes.isEmpty else {
+                    throw GitError(
+                        message: "Couldn't build a .gitignore rule for “\(change.path)”. Nothing was written.",
+                        exitCode: -1)
+                }
+                try bytes.write(to: url, options: .atomic)
+                return
             }
+            // One handle across the read *and* the append, rather than reading
+            // the file and then reopening it to write. The separator decision
+            // and the duplicate check both come from these bytes, and an
+            // external editor appending between a separate read and write would
+            // make the separator stale and glue the new rule onto the previous
+            // line — the same damage this function fixes for the CR case.
+            //
+            // Appending through the open file also keeps what an atomic replace
+            // would lose: the symlink is followed rather than broken, and
+            // permissions and ownership survive.
+            //
+            // This narrows the window rather than closing it — nothing here
+            // holds an advisory lock, so a writer landing between `readToEnd`
+            // and `seekToEnd` is still possible. Closing it properly needs
+            // `flock`, which .gitignore does not warrant.
+            let handle = try FileHandle(forUpdating: url)
+            // Closed on every exit: a throwing read, seek or write (disk full,
+            // permissions revoked mid-flight) would otherwise leak the
+            // descriptor for the life of the process.
+            // Backstop for the throwing paths only. Closing is where a delayed
+            // write error surfaces on some filesystems, so the success path
+            // closes explicitly below and lets that error reach the banner
+            // rather than reporting a rule written that may not be on disk.
+            var closed = false
+            defer { if !closed { try? handle.close() } }
+            // Only a genuinely empty file maps to "": non-UTF-8 bytes must
+            // throw rather than let the append below treat the file as blank
+            // and write a rule that reads as the continuation of a real one.
+            // A GitError rather than a raw CocoaError, because this surfaces in
+            // the banner and "couldn't be opened because the text encoding is
+            // not applicable" does not tell anyone which file or what to do.
+            // `readToEnd()` returns nil for "nothing to read", which for a
+            // zero-byte .gitignore is the honest answer and must map to "" —
+            // throwing here would break ignoring a path in a repository whose
+            // .gitignore exists but is empty. A genuine read failure does not
+            // arrive as nil: the call is `throws`, so I/O errors are thrown.
+            let bytes = try handle.readToEnd() ?? Data()
+            guard let existing = String(data: bytes, encoding: .utf8) else {
+                throw GitError(
+                    message: "\(url.path) isn't valid UTF-8, so GitEnough can't safely append to it. Edit it by hand to ignore \(change.path).",
+                    exitCode: -1)
+            }
+            // The bytes to add, computed once in `GitIgnore` — see
+            // `appendedBytes` for why this must not be a Character-count slice.
+            // `nil` is the broken invariant, as on the creation branch.
+            guard let addition = GitIgnore.appendedBytes(change.path, to: existing) else {
+                throw GitError(
+                    message: "Couldn't build a .gitignore rule for “\(change.path)”. Nothing was written.",
+                    exitCode: -1)
+            }
+            // Empty means something specific here, and it used to return
+            // quietly on the reasoning that appending a duplicate "would not
+            // help". That was wrong: gitignore is **last-match-wins**, so
+            // appending the rule again after the negation does re-ignore the
+            // path. Measured, git 2.43:
+            //
+            //     /build          →  check-ignore exit 1  (not ignored)
+            //     !/build
+            //     /build          →  check-ignore exit 0, matched at line 3
+            //
+            // So the quiet return discarded a click that would have worked.
+            // Reaching here at all means `isIgnored` said no while the literal
+            // rule is present, which only a later `!` negation produces — a
+            // state the user can act on. Saying so beats reporting success and
+            // writing nothing; appending automatically is the better answer
+            // still, and needs `appending` to stop suppressing the duplicate at
+            // this one call site. Recorded rather than reached for here.
+            guard !addition.isEmpty else {
+                throw GitError(
+                    message: "Can't ignore “\(change.path)”: it is already listed in "
+                        + ".gitignore, but a later “!” rule un-ignores it. Move the rule "
+                        + "below that negation, or remove the negation.",
+                    exitCode: -1)
+            }
+            try handle.seekToEnd()
+            try handle.write(contentsOf: addition)
+            // Flagged before the call, not after: if `close()` throws, POSIX has
+            // already released the descriptor, and the `defer` must not close a
+            // number that may since have been handed to something else.
+            closed = true
+            try handle.close()
+        }
+    }
+
+    /// Refuses a `.gitignore` that is a symbolic link.
+    ///
+    /// **Modern git does not read one.** git opens working-tree pattern files
+    /// without following symlinks; older versions used a plain `fopen` and did
+    /// follow the link, so the refusal is merely conservative there rather than
+    /// matching git. Measured on 2.43 below and pinned on 2.43 + 2.55 by CI. The
+    /// shape does not matter — an absolute link out of the worktree and a
+    /// relative link to a sibling inside it behave identically:
+    ///
+    ///     $ ln -s shared-ignore .gitignore   # relative, inside the repo
+    ///     $ touch shared.txt                 # named by a rule in shared-ignore
+    ///     $ git status --porcelain
+    ///     warning: unable to access '.gitignore': Too many levels of symbolic links
+    ///     ?? shared.txt                      # the rule was NOT applied
+    ///     $ rm .gitignore && cp shared-ignore .gitignore
+    ///     $ git status --porcelain           # shared.txt now absent: ignored
+    ///
+    /// So following the link writes the rule into a file git will never consult.
+    /// This code used to resolve the whole chain, on the strength of a
+    /// "dotfile manager's `.gitignore -> shared-ignore`" use case that the
+    /// output above shows does not work with git at all — the premise was
+    /// wrong, and every hop of resolution built on it was serving nobody.
+    ///
+    /// It was also a way for a repository to choose where the app writes. A
+    /// clone can ship `.gitignore` as a symlink — mode `120000`, materialised
+    /// by checkout, verified end to end — so `.gitignore -> ~/.zshrc` in an
+    /// untrusted working copy turned one "Ignore" click into an append to the
+    /// user's shell config. Refusing closes that without a containment rule or
+    /// a confirmation prompt, because there is no legitimate case on the other
+    /// side of the line to weigh against it. See `o-L14` for the broader
+    /// untrusted-working-copy question this is one instance of.
+    ///
+    /// `try?` reads a failure as "not a symlink". An unreadable parent
+    /// directory therefore proceeds to the write, which fails on its own with a
+    /// real filesystem error — the right direction to be wrong in, since the
+    /// alternative is refusing to ignore a file because of a transient stat
+    /// failure.
+    static func requireRegularIgnoreFile(at url: URL,
+                                         fileManager: FileManager = .default) throws {
+        // Symlink first, and the order is load-bearing: `fileExists` *follows*
+        // links, so `.gitignore -> some-directory` would otherwise be reported
+        // as a directory and the user told to fix the wrong thing.
+        if (try? fileManager.destinationOfSymbolicLink(atPath: url.path)) != nil {
+            throw GitError(
+                message: "Can't ignore this path: “.gitignore” is a symbolic link, and git "
+                    + "does not read a symlinked .gitignore — the rule would be written "
+                    + "somewhere git never looks. Replace it with a regular file and try again.",
+                exitCode: -1)
+        }
+        // A directory named `.gitignore` is not a symlink and would otherwise
+        // sail through to the open, failing with a raw Cocoa "Is a directory" —
+        // the one error in this flow with no guidance attached.
+        var isDirectory: ObjCBool = false
+        if fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory),
+           isDirectory.boolValue {
+            throw GitError(
+                message: "Can't ignore this path: “.gitignore” is a directory, so git "
+                    + "can't read ignore rules from it.",
+                exitCode: -1)
         }
     }
 
