@@ -353,9 +353,9 @@ in a row both reachable until dismissed.
 ---
 ## Correctness & safety — wave 5 (`opus.md`)
 
-*Consolidated from `opus.md` (wave 5). Its fuller reasoning and git experiments
-lived only on that review branch, so once the branch is deleted the `file:line`
-citations below are the surviving record.*
+*Consolidated from `opus.md` (wave 5, reviewed on `claude/git-client-review-j5cut4`).
+Its fuller reasoning and git experiments lived only on that branch, so once it is
+deleted the `file:line` citations below are the surviving record.*
 
 ### o-L1 · The GTK history graph goes stale on checkout, push and branch creation — S
 
@@ -2917,7 +2917,7 @@ and independent, so each can ship and be deleted under its own sub-ID:
   `newBranchName` first (`RepoDetailView.swift:80`); the menu path does not
   (`AppCommands.swift:44`), and the sheet never resets it. Fix: clear it in the
   menu path too.
-- **o-UI10.5 · Activity History re-filters its whole store two to three times per render.**
+- **o-UI10.5 · Activity History re-filters its whole store on every render.**
   `filtered` (`ActivityHistoryView.swift:18`) is recomputed at `:34`, `:42`, and
   `:47`, and the body re-runs on every keystroke and every git command. P5 and P7
   scope this cost to the diff and History views, not this separate window. Fix:
