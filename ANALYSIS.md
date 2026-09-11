@@ -8,8 +8,8 @@ fixes: `glm.md` ×2, `kimi.md`, `fable.md`, `flash.md`, `sol.md`, and `k3.md`
 from the earlier waves, and `opus.md` from wave 5 (2026-09-06). As those
 eight review branches are retired, each finding was re-audited against
 `main` (2026-09-11); everything they raised is
-either shipped or already captured here, and the last live stragglers were
-rescued into the **"Rescued from the review branches"** section below.
+either shipped, already captured in this backlog, or rescued into the
+**"Rescued from the review branches"** section below.
 
 **Maintenance rule:** when an entry ships, delete it here (the git history
 preserves it); when a new issue is found, add it with the same level of
