@@ -3,11 +3,13 @@
 A living, shovel-ready backlog for GitEnough: every entry below is a concrete,
 self-contained task with suggested approach and test plan, ready for an LLM (or
 human) to pick up. This document consolidates eight independent full-codebase
-reviews — `glm.md` ×2 (the wave-4 record lives on `docs/glm-review-2`), plus
-`kimi.md`, `fable.md`, `flash.md`, `sol.md`, `k3.md`, and `opus.md` (wave 5,
-2026-09-06, on `claude/git-client-review-j5cut4`), each kept unedited on its
-review branch as the record — with everything learned while implementing the
-first five waves of fixes.
+reviews with everything learned while implementing the first five waves of
+fixes: `glm.md` ×2, `kimi.md`, `fable.md`, `flash.md`, `sol.md`, and `k3.md`
+from the earlier waves, and `opus.md` from wave 5 (2026-09-06). As those
+eight review branches are retired, each finding was re-audited against
+`main` (2026-09-11); everything they raised is
+either shipped, already captured in this backlog, or rescued into the
+**"Rescued from the review branches"** section below.
 
 **Maintenance rule:** when an entry ships, delete it here (the git history
 preserves it); when a new issue is found, add it with the same level of
@@ -351,8 +353,9 @@ in a row both reachable until dismissed.
 ---
 ## Correctness & safety — wave 5 (`opus.md`)
 
-*Full reasoning, file:line citations and the git experiments behind these live in
-`opus.md` on `claude/git-client-review-j5cut4`.*
+*Consolidated from `opus.md` (wave 5, reviewed on `claude/git-client-review-j5cut4`).
+Its fuller reasoning and git experiments lived only on that branch, so once it is
+deleted the `file:line` citations below are the surviving record.*
 
 ### o-L1 · The GTK history graph goes stale on checkout, push and branch creation — S
 
@@ -2873,6 +2876,104 @@ README's Linux section and the Settings copy both describe the watch folder and
 automatic fetch as working; per **o-X1** they are inert on Linux, and README's
 "Not yet ported" list omits them. **Fix the code** (**o-X1** is small) rather than
 the docs; if it is deferred, the list needs the entries.
+
+---
+
+## Rescued from the review branches (gap audit, 2026-09-11)
+
+As the eight review branches are retired, every finding in each document was
+re-checked against `main` at `55328b5`. Almost all had shipped or were already
+captured above. The entries below are the exceptions: live in the current code,
+absent from this backlog, and concrete. All are small, and most are polish or
+performance, but o-UI10's first item is a correctness bug: a masked Keychain
+save failure reported as success, which costs the user their API key on next
+launch. Each carries the `file:line` that made it checkable.
+
+### o-UI10 · The "smaller cuts" bundle from `opus.md` (Part 16 · S10) — S each
+
+The backlog imported `opus.md`'s Part 16 items S1 through S9 as `o-UI1`…`o-UI9`
+but dropped its S10 bundle. Seven items (`o-UI10.1`…`o-UI10.7`), each still live
+and independent, so each can ship and be deleted under its own sub-ID:
+
+- **o-UI10.1 · Test Connection reports success over a failed key save.** `testConnection()`
+  calls `save()`, then clears its status (`SettingsView.swift:261-263`), and on a
+  working round-trip shows "Connection works" (`:276`) using the in-memory key
+  (`:266`). A Keychain write that threw inside `save()` (`:225-227`) is masked, so
+  the user believes a key is stored that is not, and loses it next launch. Not
+  covered by o-A5 (a read failure deleting the key) or C5a (endpoint/credential
+  scope). Fix: surface the save failure instead of niling it, or do not `save()`
+  from Test.
+- **o-UI10.2 · The Add Repository sheet reopens showing the last failure.**
+  `addRepositoryError` is set on a bad add (`AppState.swift:196`) and cleared only
+  on the next success (`:206`); the sheet renders it (`AddRepositoryView.swift:72`)
+  and Close only dismisses (`:81`), so reopening shows the stale error. Distinct
+  from C4 (forms closing before git returns). Fix: clear it on the sheet's appear
+  or dismiss.
+- **o-UI10.3 · `⌥⌘F` Fetch is live in the menu with no remotes.** The toolbar disables Fetch
+  on `remotes.isEmpty` (`RepoDetailView.swift:108`); the menu item checks only
+  `isBusy` (`AppCommands.swift:28`), so the shortcut fires `git fetch --all` over
+  zero remotes. Fix: add the `remotes.isEmpty` guard to the menu item.
+- **o-UI10.4 · `⇧⌘B` opens New Branch pre-filled with the last name.** The toolbar clears
+  `newBranchName` first (`RepoDetailView.swift:80`); the menu path does not
+  (`AppCommands.swift:44`), and the sheet never resets it. Fix: clear it in the
+  menu path too.
+- **o-UI10.5 · Activity History re-filters its whole store on every render.**
+  `filtered` (`ActivityHistoryView.swift:18`) is recomputed at `:34`, `:42`, and
+  `:47`, and the body re-runs on every keystroke and every git command. P5 and P7
+  scope this cost to the diff and History views, not this separate window. Fix:
+  compute it once per body.
+- **o-UI10.6 · The toolbar progress spinner is inserted, not reserved.**
+  `RepoDetailView.swift:96-102` conditionally inserts `ProgressView()` ahead of
+  Fetch/Pull/Push, so the cluster jumps right the instant an op starts. Distinct
+  from glm-V5 (the Publish/Push label-width swap). Fix: reserve the width and
+  toggle opacity.
+- **o-UI10.7 · The history filter is a borderless `.plain` field.** `HistoryView.swift:286`
+  styles the filter `.plain`, so it reads as a label rather than an editable
+  field, unlike the sidebar's search field. Fix: use a search-field style.
+
+### glm-P3 · The status bar re-filters the activity list on every keystroke — S
+
+`runningActivityEntries` (`RepoViewModel.swift:60-62`) filters the 100-entry
+`activityEntries` on each access; the status bar reads it
+(`RepoDetailView.swift:401`) and `draftCommitMessage`'s `didSet` (`:98`)
+republishes on every keystroke, so the filter re-runs once per character typed.
+P7 is scoped to the History view, not this. Fix: maintain a stored
+`runningCommands` in the `activityLog.onChange` hop and read that.
+
+### glm-U2 · A conflict row gives no lasting "markers remain" signal — S
+
+When an external merge tool exits with conflict markers still present, the only
+feedback is a transient banner (`RepoViewModel.swift:706`); `ConflictRow`
+(`ChangesView.swift:444-503`) shows a static unmerged badge with no
+markers-remaining state, so the signal is lost the moment the banner is
+overwritten (see glm-G3 on the banner's lifecycle). The conflict-inspection
+entries (o-U5, C2, o-X4) concern viewing the conflict, not this. Fix: flag paths
+left with markers on tool exit and mark those rows.
+
+### kimi-4.3 · History ref chips have no per-chip width cap — S
+
+`RefChip` sets `Text(label).lineLimit(1)` with no `maxWidth` or truncation
+(`CommonViews.swift:36-37`), so one long branch or tag name grows the chip
+without bound. F28 caps the toolbar picker, F29 collapses the HEAD chip, V4 adds
+the `+N` overflow, and A5 tints chips, but none caps a single chip's own text.
+Fix: give the chip a bounded width such as `.frame(maxWidth: 180)` and
+`.truncationMode(.middle)`.
+
+### flash-U4 · The `⌘↩` commit shortcut is undiscoverable — S
+
+The Commit button carries `.keyboardShortcut(.return, modifiers: .command)`
+(`ChangesView.swift:302-312`) but nothing surfaces it: the placeholder is just
+"Commit message" (`:243`), with no hint and no `.help()`. o-V1 and F34 redesign
+the commit box but add no shortcut hint. Fix: put the hint in the placeholder or
+a caption near the button.
+
+### flash-V6 · Sidebar rows have no leading repository icon — S
+
+Sidebar rows render `Text(repo.name)` with no leading glyph
+(`SidebarView.swift:265`); only the invalid-repo triangle, star, and dirty dot
+appear inline. V11 scopes file-type icons to the Changes and CommitDetail lists;
+glm-A1 reorders the row's hierarchy without a leading icon. Fix: add a leading
+`folder` SF Symbol, or a per-type icon.
 
 ---
 
