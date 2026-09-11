@@ -353,8 +353,9 @@ in a row both reachable until dismissed.
 ---
 ## Correctness & safety — wave 5 (`opus.md`)
 
-*Consolidated from `opus.md` (wave 5); the `file:line` citations in each entry
-below are the record.*
+*Consolidated from `opus.md` (wave 5). Its fuller reasoning and git experiments
+lived only on that review branch, so once the branch is deleted the `file:line`
+citations below are the surviving record.*
 
 ### o-L1 · The GTK history graph goes stale on checkout, push and branch creation — S
 
@@ -2891,9 +2892,10 @@ launch. Each carries the `file:line` that made it checkable.
 ### o-UI10 · The "smaller cuts" bundle from `opus.md` (Part 16 · S10) — S each
 
 The backlog imported `opus.md`'s Part 16 items S1 through S9 as `o-UI1`…`o-UI9`
-but dropped its S10 bundle. Seven items, each still live and independent:
+but dropped its S10 bundle. Seven items (`o-UI10.1`…`o-UI10.7`), each still live
+and independent, so each can ship and be deleted under its own sub-ID:
 
-- **Test Connection reports success over a failed key save.** `testConnection()`
+- **o-UI10.1 · Test Connection reports success over a failed key save.** `testConnection()`
   calls `save()`, then clears its status (`SettingsView.swift:261-263`), and on a
   working round-trip shows "Connection works" (`:276`) using the in-memory key
   (`:266`). A Keychain write that threw inside `save()` (`:225-227`) is masked, so
@@ -2901,31 +2903,31 @@ but dropped its S10 bundle. Seven items, each still live and independent:
   covered by o-A5 (a read failure deleting the key) or C5a (endpoint/credential
   scope). Fix: surface the save failure instead of niling it, or do not `save()`
   from Test.
-- **The Add Repository sheet reopens showing the last failure.**
+- **o-UI10.2 · The Add Repository sheet reopens showing the last failure.**
   `addRepositoryError` is set on a bad add (`AppState.swift:196`) and cleared only
   on the next success (`:206`); the sheet renders it (`AddRepositoryView.swift:72`)
   and Close only dismisses (`:81`), so reopening shows the stale error. Distinct
   from C4 (forms closing before git returns). Fix: clear it on the sheet's appear
   or dismiss.
-- **`⌥⌘F` Fetch is live in the menu with no remotes.** The toolbar disables Fetch
+- **o-UI10.3 · `⌥⌘F` Fetch is live in the menu with no remotes.** The toolbar disables Fetch
   on `remotes.isEmpty` (`RepoDetailView.swift:108`); the menu item checks only
   `isBusy` (`AppCommands.swift:28`), so the shortcut fires `git fetch --all` over
   zero remotes. Fix: add the `remotes.isEmpty` guard to the menu item.
-- **`⇧⌘B` opens New Branch pre-filled with the last name.** The toolbar clears
+- **o-UI10.4 · `⇧⌘B` opens New Branch pre-filled with the last name.** The toolbar clears
   `newBranchName` first (`RepoDetailView.swift:80`); the menu path does not
   (`AppCommands.swift:44`), and the sheet never resets it. Fix: clear it in the
   menu path too.
-- **Activity History re-filters its whole store two to three times per render.**
+- **o-UI10.5 · Activity History re-filters its whole store two to three times per render.**
   `filtered` (`ActivityHistoryView.swift:18`) is recomputed at `:34`, `:42`, and
   `:47`, and the body re-runs on every keystroke and every git command. P5 and P7
   scope this cost to the diff and History views, not this separate window. Fix:
   compute it once per body.
-- **The toolbar progress spinner is inserted, not reserved.**
+- **o-UI10.6 · The toolbar progress spinner is inserted, not reserved.**
   `RepoDetailView.swift:96-102` conditionally inserts `ProgressView()` ahead of
   Fetch/Pull/Push, so the cluster jumps right the instant an op starts. Distinct
   from glm-V5 (the Publish/Push label-width swap). Fix: reserve the width and
   toggle opacity.
-- **The history filter is a borderless `.plain` field.** `HistoryView.swift:286`
+- **o-UI10.7 · The history filter is a borderless `.plain` field.** `HistoryView.swift:286`
   styles the filter `.plain`, so it reads as a label rather than an editable
   field, unlike the sidebar's search field. Fix: use a search-field style.
 
