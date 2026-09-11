@@ -3,10 +3,11 @@
 A living, shovel-ready backlog for GitEnough: every entry below is a concrete,
 self-contained task with suggested approach and test plan, ready for an LLM (or
 human) to pick up. This document consolidates eight independent full-codebase
-reviews (`glm.md` ×2, `kimi.md`, `fable.md`, `flash.md`, `sol.md`, `k3.md`, and
-`opus.md`, wave 5, 2026-09-06) with everything learned while implementing the
-first five waves of fixes. As those eight review branches are retired, each
-finding was re-audited against `main` (2026-09-11); everything they raised is
+reviews with everything learned while implementing the first five waves of
+fixes: `glm.md` ×2, `kimi.md`, `fable.md`, `flash.md`, `sol.md`, and `k3.md`
+from the earlier waves, and `opus.md` from wave 5 (2026-09-06). As those
+eight review branches are retired, each finding was re-audited against
+`main` (2026-09-11); everything they raised is
 either shipped or already captured here, and the last live stragglers were
 rescued into the **"Rescued from the review branches"** section below.
 
@@ -2882,9 +2883,10 @@ the docs; if it is deferred, the list needs the entries.
 As the eight review branches are retired, every finding in each document was
 re-checked against `main` at `55328b5`. Almost all had shipped or were already
 captured above. The entries below are the exceptions: live in the current code,
-absent from this backlog, and concrete. All are small, and none is a
-correctness, safety, or data-loss defect that escaped the earlier consolidation.
-Each carries the `file:line` that made it checkable.
+absent from this backlog, and concrete. All are small, and most are polish or
+performance, but o-UI10's first item is a correctness bug: a masked Keychain
+save failure reported as success, which costs the user their API key on next
+launch. Each carries the `file:line` that made it checkable.
 
 ### o-UI10 · The "smaller cuts" bundle from `opus.md` (Part 16 · S10) — S each
 
@@ -2927,7 +2929,7 @@ but dropped its S10 bundle. Seven items, each still live and independent:
   styles the filter `.plain`, so it reads as a label rather than an editable
   field, unlike the sidebar's search field. Fix: use a search-field style.
 
-### glm-P3 · The status bar re-filters the activity list on every publish — S
+### glm-P3 · The status bar re-filters the activity list on every keystroke — S
 
 `runningActivityEntries` (`RepoViewModel.swift:60-62`) filters the 100-entry
 `activityEntries` on each access; the status bar reads it
@@ -2952,7 +2954,8 @@ left with markers on tool exit and mark those rows.
 (`CommonViews.swift:36-37`), so one long branch or tag name grows the chip
 without bound. F28 caps the toolbar picker, F29 collapses the HEAD chip, V4 adds
 the `+N` overflow, and A5 tints chips, but none caps a single chip's own text.
-Fix: give the chip `.frame(maxWidth: ~180)` and `.truncationMode(.middle)`.
+Fix: give the chip a bounded width such as `.frame(maxWidth: 180)` and
+`.truncationMode(.middle)`.
 
 ### flash-U4 · The `⌘↩` commit shortcut is undiscoverable — S
 
