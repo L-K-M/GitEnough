@@ -1,56 +1,74 @@
+#if canImport(Combine)
+// The real thing on Apple platforms; GitEnough/Platform/ supplies the sliver of
+// it the model layer uses (ObservableObject, @Published) everywhere else.
+import Combine
+#endif
 import Foundation
 
 /// The detail pane's tabs. In AppState (not the view) so menu commands with
 /// keyboard shortcuts can switch tabs too.
-enum DetailTab: String, CaseIterable, Identifiable {
+public enum DetailTab: String, CaseIterable, Identifiable {
     case history = "History"
     case changes = "Changes"
     case branches = "Branches"
 
-    var id: String { rawValue }
+    public var id: String { rawValue }
 }
 
 /// Top-level app state: repository list (via `store`), the current selection, and
 /// the cache of per-repo view models (one per repo, created lazily, kept alive so
 /// switching repos doesn't lose scroll position or reload history).
-final class AppState: ObservableObject {
+public final class AppState: ObservableObject {
 
-    let store = RepoStore()
+    public static let selectedRepositoryKey = "selectedRepository"
 
-    @Published var selectedRepoPath: String? {
-        didSet { UserDefaults.standard.set(selectedRepoPath, forKey: "selectedRepository") }
+    private let defaults: UserDefaults
+    public let store: RepoStore
+
+    @Published public var selectedRepoPath: String? {
+        didSet {
+            Self.persistSelection(selectedRepoPath, in: defaults)
+            forwardActiveViewModelChanges()
+        }
     }
-    @Published var selectedTab: DetailTab = .history
+    @Published public var selectedTab: DetailTab = .history
 
     /// Add-repository sheet state and its validation error.
-    @Published var showingAddRepository = false
-    @Published var addRepositoryError: String?
+    @Published public var showingAddRepository = false
+    @Published public var addRepositoryError: String?
 
     /// Why a dropped folder couldn't be added. Unlike the Add sheet, a drop has
     /// no inline error surface, so ContentView shows this as an alert.
-    @Published var dropAddError: String?
+    @Published public var dropAddError: String?
 
     /// New-branch sheet (triggered from the Repository menu, shown by the detail pane).
-    @Published var showingNewBranch = false
+    @Published public var showingNewBranch = false
 
     /// Path of the most recently added repository. Purely a UI cue: the sidebar
     /// scrolls to reveal it — in a long manually-sorted list a new bottom/top
     /// row can otherwise land out of view and read as "didn't appear".
-    @Published var lastAddedRepoPath: String?
+    @Published public var lastAddedRepoPath: String?
 
     private var viewModels: [String: RepoViewModel] = [:]
+    /// Forwards the ACTIVE view model's objectWillChange through AppState, so
+    /// SwiftUI Commands (whose @ObservedObject is AppState) re-evaluate menu
+    /// enablement when repo state moves — without it, items gated on
+    /// canPull/canPushOrPublish go stale until AppState itself changes.
+    /// Only the active repo is forwarded: wiring every repo would invalidate
+    /// every AppState observer (the whole window) on any background publish.
+    private var activeVMCancellable: AnyCancellable?
 
     /// App-wide persistent git command history ("shell history" window).
     /// Every repo view model's activity log forwards events here.
-    let activityStore = GitActivityStore()
+    public let activityStore = GitActivityStore()
 
     /// UserDefaults key for the watch folder (Settings → General → Repository
     /// discovery). Shared with SettingsView's @AppStorage.
-    static let discoveryFolderKey = "discoveryFolder"
+    public static let discoveryFolderKey = "discoveryFolder"
 
     /// UserDefaults key for the auto-fetch interval in minutes (0 = never).
     /// Shared with SettingsView's @AppStorage.
-    static let autoFetchMinutesKey = "autoFetchMinutes"
+    public static let autoFetchMinutesKey = "autoFetchMinutes"
 
     private var discoveryTimer: Timer?
     /// repo path → last auto-fetch, so switching repos doesn't make a
@@ -58,15 +76,24 @@ final class AppState: ObservableObject {
     private var lastAutoFetchByRepo: [String: Date] = [:]
 
     /// The view model for the currently selected repository, if any.
-    var activeViewModel: RepoViewModel? {
+    public var activeViewModel: RepoViewModel? {
         guard let repo = selectedRepository else { return nil }
         return viewModel(for: repo)
     }
 
-    init() {
-        selectedRepoPath = UserDefaults.standard.string(forKey: "selectedRepository")
-        if selectedRepoPath == nil {
-            selectedRepoPath = store.repositories.first?.path
+    public init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        store = RepoStore(defaults: defaults)
+        let savedPath = defaults.string(forKey: Self.selectedRepositoryKey)
+        // Initialize the wrapped property before consulting another instance
+        // property (`store`), then replace it with the validated selection.
+        selectedRepoPath = savedPath
+        selectedRepoPath = Self.restoredSelection(
+            savedPath, repositories: store.repositories)
+        // Property observers don't run during initialization. Persist a repaired
+        // spelling or fallback so the stored value agrees with the live selection.
+        if selectedRepoPath != savedPath {
+            Self.persistSelection(selectedRepoPath, in: defaults)
         }
         // Watch-folder discovery: cheap file-system scan, no git invocation.
         let timer = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
@@ -77,18 +104,44 @@ final class AppState: ObservableObject {
         discoveryTimer = timer
     }
 
+    /// Resolves a persisted spelling to the corresponding registered row.
+    /// RepoStore treats normalized paths as identity, so startup must do the
+    /// same; otherwise a symlink or `.` spelling leaves the detail pane on the
+    /// Welcome screen even though that repository is visible in the sidebar.
+    private static func restoredSelection(_ savedPath: String?,
+                                          repositories: [Repository]) -> String? {
+        guard let savedPath else { return repositories.first?.path }
+        let normalizedSavedPath = Repository.normalizedPath(savedPath)
+        return repositories.first {
+            $0.normalizedPath == normalizedSavedPath
+        }?.path ?? repositories.first?.path
+    }
+
+    private static func persistSelection(_ path: String?, in defaults: UserDefaults) {
+        if let path {
+            defaults.set(path, forKey: selectedRepositoryKey)
+        } else {
+            defaults.removeObject(forKey: selectedRepositoryKey)
+        }
+    }
+
     deinit {
         discoveryTimer?.invalidate()
     }
 
-    var selectedRepository: Repository? {
+    public var selectedRepository: Repository? {
         store.repositories.first { $0.path == selectedRepoPath }
     }
 
     /// The view model for a repo, creating + starting it on first use.
-    func viewModel(for repo: Repository) -> RepoViewModel {
+    public func viewModel(for repo: Repository) -> RepoViewModel {
         if let existing = viewModels[repo.path] { return existing }
         let vm = RepoViewModel(repo: repo)
+        // Menu enablement is kept fresh by `forwardActiveViewModelChanges`
+        // below, which republishes the active view model's objectWillChange.
+        // Deliberately not also poked from here: two mechanisms for the same
+        // staleness would double-invalidate every AppState observer, and only
+        // one of them can stay correct as the surfaces change.
         vm.onStatusChange = { [weak self] summary in
             self?.store.summaries[repo.path] = summary
         }
@@ -96,11 +149,25 @@ final class AppState: ObservableObject {
             self?.activityStore.record(event, repoName: repo.name, repoPath: repo.path)
         }
         viewModels[repo.path] = vm
+        // The restored-selection path never goes through select(), so wire
+        // the forwarding here too when the created VM is the active one.
+        if repo.path == selectedRepoPath { forwardActiveViewModelChanges() }
         vm.start()
         return vm
     }
 
-    func select(_ repo: Repository) {
+    /// Re-subscribes the menu-enablement forwarding to the currently selected
+    /// repo's view model. Delivery is hopped to main: @Published mutations
+    /// are main-thread by contract, and the sink must not rely on it.
+    private func forwardActiveViewModelChanges() {
+        activeVMCancellable = selectedRepository
+            .flatMap { viewModels[$0.path] }?
+            .objectWillChange
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+    }
+
+    public func select(_ repo: Repository) {
         selectedRepoPath = repo.path
         store.markOpened(repo)
         // Warm the view model immediately so the detail pane has data.
@@ -114,7 +181,7 @@ final class AppState: ObservableObject {
     /// UI while the folder is probed. `completion` runs on the main thread with
     /// the registered repository, or nil when `url` isn't inside a git repository
     /// (in which case `addRepositoryError` is set for the sheet to show).
-    func addRepository(at url: URL, completion: ((Repository?) -> Void)? = nil) {
+    public func addRepository(at url: URL, completion: ((Repository?) -> Void)? = nil) {
         DispatchQueue.global(qos: .userInitiated).async {
             let validated = GitClient.isRepository(at: url) ? GitClient.topLevel(of: url) : nil
             DispatchQueue.main.async { [weak self] in
@@ -145,16 +212,19 @@ final class AppState: ObservableObject {
     /// Drop-path wrapper around `addRepository`: a drop has no inline error
     /// surface (the Add sheet isn't open), so failures surface as an alert on
     /// ContentView instead of failing silently.
-    func addDroppedRepository(at url: URL) {
+    public func addDroppedRepository(at url: URL) {
         addRepository(at: url) { [weak self] repo in
             guard repo == nil else { return }
             self?.dropAddError = "“\(url.lastPathComponent)” is not inside a git repository — nothing was added."
         }
     }
 
-    func remove(_ repo: Repository) {
+    public func remove(_ repo: Repository) {
         viewModels.removeValue(forKey: repo.path)
         store.remove(repo)
+        // The persisted commit draft goes with the repo — otherwise the key
+        // orphans, and re-adding the repo later would resurrect a stale draft.
+        RepoViewModel.removePersistedDraft(for: repo.path)
         if selectedRepoPath == repo.path {
             selectedRepoPath = store.repositories.first?.path
         }
@@ -165,7 +235,7 @@ final class AppState: ObservableObject {
     /// `--no-optional-locks` status query, so they run concurrently (windowed, to
     /// avoid a process-spawn burst with dozens of repos) instead of one-by-one —
     /// with 15+ repos a serial pass took seconds on every activation.
-    func refreshSummaries() {
+    public func refreshSummaries() {
         let repos = store.repositories
         guard !repos.isEmpty else { return }
         Task.detached(priority: .utility) { [weak self] in
@@ -176,7 +246,7 @@ final class AppState: ObservableObject {
 
     /// The per-repo sidebar summaries, computed for up to `maxConcurrent` repos at
     /// a time. Pure-ish (git reads only); static so tests can drive it directly.
-    static func summaries(for repos: [Repository],
+    public static func summaries(for repos: [Repository],
                           maxConcurrent: Int = 6) async -> [String: RepoSummary] {
         precondition(maxConcurrent > 0)
         return await withTaskGroup(of: (String, RepoSummary).self) { group in
@@ -214,7 +284,7 @@ final class AppState: ObservableObject {
     /// discovery timer; skipped while an operation is already running so an
     /// automatic fetch never queues behind (or double-books) a manual one.
     private func autoFetchIfDue() {
-        let minutes = UserDefaults.standard.integer(forKey: Self.autoFetchMinutesKey)
+        let minutes = defaults.integer(forKey: Self.autoFetchMinutesKey)
         guard minutes > 0 else { return }
         guard let viewModel = activeViewModel, !viewModel.isBusy else { return }
         // Multiply in Double: minutes comes from UserDefaults, where a
@@ -231,8 +301,8 @@ final class AppState: ObservableObject {
     /// queue and adds any new repositories it finds to the sidebar. Runs on a
     /// minute timer, on app activation, on launch, and right after the folder is
     /// changed in Settings. No-op when no folder is configured.
-    func scanDiscoveryFolder() {
-        let folder = UserDefaults.standard.string(forKey: Self.discoveryFolderKey) ?? ""
+    public func scanDiscoveryFolder() {
+        let folder = defaults.string(forKey: Self.discoveryFolderKey) ?? ""
         guard !folder.isEmpty else { return }
         let root = URL(fileURLWithPath: (folder as NSString).expandingTildeInPath)
         guard FileManager.default.fileExists(atPath: root.path) else { return }

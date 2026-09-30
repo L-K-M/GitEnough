@@ -10,32 +10,32 @@ import Foundation
 /// one row down into a passing lane (a lane folding into another). Endpoints on
 /// center lines are what make every line visibly attach — either to a dot or to
 /// the segment continuing it.
-struct GraphLayout: Equatable {
+public struct GraphLayout: Equatable {
 
     /// A commit node's placement.
-    struct Node: Equatable {
-        let row: Int
-        let column: Int
-        let colorIndex: Int
+    public struct Node: Equatable {
+        public let row: Int
+        public let column: Int
+        public let colorIndex: Int
     }
 
     /// A colored line piece of the graph.
-    struct Segment: Equatable {
-        enum Kind: Equatable {
+    public struct Segment: Equatable {
+        public enum Kind: Equatable {
             case vertical     // lane continues straight down to the next row
             case branchOut    // a new lane curves down-right out of a merge node
             case joinExisting // a node/lane merges into a passing lane one row down
         }
-        let fromRow: Int
-        let fromColumn: Int
-        let toRow: Int
-        let toColumn: Int
-        let colorIndex: Int
-        let kind: Kind
+        public let fromRow: Int
+        public let fromColumn: Int
+        public let toRow: Int
+        public let toColumn: Int
+        public let colorIndex: Int
+        public let kind: Kind
     }
 
-    private(set) var nodes: [Node] = []
-    private(set) var segments: [Segment] = []
+    public private(set) var nodes: [Node] = []
+    public private(set) var segments: [Segment] = []
     /// Segments bucketed by start row (every segment spans exactly one row:
     /// `toRow == fromRow + 1`, which reaches `commitCount` for folds on the
     /// last row of a truncated history). The UI draws the graph as per-row
@@ -45,10 +45,10 @@ struct GraphLayout: Equatable {
     /// 500-commit graph is 13,500 pt tall, 27,000 px at 2×) and misrenders:
     /// content at wrong offsets, e.g. the graph appearing under the sidebar
     /// instead of beside the commit list.
-    private(set) var segmentsByRow: [[Segment]] = []
-    private(set) var columnCount: Int = 0
+    public private(set) var segmentsByRow: [[Segment]] = []
+    public private(set) var columnCount: Int = 0
 
-    static let empty = GraphLayout()
+    public static let empty = GraphLayout()
 
     /// Computes the layout for `commits`, which must be newest-first and
     /// topologically ordered (`git log --all --topo-order --date-order`).
@@ -67,7 +67,7 @@ struct GraphLayout: Equatable {
     /// Invariant: at most one lane expects any given hash (parents always prefer
     /// an existing lane), so lanes never cross without an explicit segment
     /// showing the merge.
-    static func layout(commits: [Commit]) -> GraphLayout {
+    public static func layout(commits: [Commit]) -> GraphLayout {
         var layout = GraphLayout()
         guard !commits.isEmpty else { return layout }
 
@@ -176,8 +176,8 @@ struct GraphLayout: Equatable {
 
 /// The lane color palette. Hues are spread for distinguishability in both light
 /// and dark mode; lanes cycle through them in assignment order.
-enum GraphPalette {
-    static let hues: [Double] = [
+public enum GraphPalette {
+    public static let hues: [Double] = [
         0.62,   // blue
         0.35,   // green
         0.02,   // red-orange
@@ -190,5 +190,5 @@ enum GraphPalette {
         0.22,   // olive
     ]
 
-    static func colorIndex(forLane lane: Int) -> Int { lane % hues.count }
+    public static func colorIndex(forLane lane: Int) -> Int { lane % hues.count }
 }

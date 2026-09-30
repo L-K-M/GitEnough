@@ -9,40 +9,41 @@ import Foundation
 /// Mutation and file I/O happen on one serial queue; the view observes the
 /// `@Published` snapshot on main. Persistence is best-effort diagnostics —
 /// write failures are swallowed, never surfaced to the user.
-final class GitActivityStore: ObservableObject {
+public final class GitActivityStore: ObservableObject {
 
     /// One recorded invocation plus the repo it belonged to.
     ///
     /// Persisted as one JSON object per line with an explicit schema version —
     /// every line is decoded with `try?`, so a shape change without a matching
     /// `loadFromDiskLocked` migration would silently discard the whole history.
-    struct Item: Identifiable, Equatable {
+    public struct Item: Identifiable, Equatable {
         /// Persisted schema version — bump when the on-disk shape changes.
-        static let schemaVersion = 1
+        public static let schemaVersion = 1
 
-        let entry: GitActivityLog.Entry
-        let repoName: String
-        let repoPath: String
+        public let entry: GitActivityLog.Entry
+        public let repoName: String
+        public let repoPath: String
 
-        var id: UUID { entry.id }
+        public var id: UUID { entry.id }
     }
 
     /// All known items, oldest first (running commands included).
-    @Published private(set) var items: [Item] = []
+    @Published public private(set) var items: [Item] = []
 
     private let fileURL: URL
     private let capacity: Int
     private let ioQueue = DispatchQueue(label: "gitenough.activitystore", qos: .utility)
     private var storage: [Item] = []
 
-    /// ~/Library/Application Support/GitEnough/git-activity.jsonl
-    static var defaultFileURL: URL {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+    /// `~/Library/Application Support/GitEnough/git-activity.jsonl` on macOS,
+    /// `~/.local/share/GitEnough/git-activity.jsonl` on Linux.
+    public static var defaultFileURL: URL {
+        Platform.applicationSupportDirectory
             .appendingPathComponent("GitEnough", isDirectory: true)
             .appendingPathComponent("git-activity.jsonl")
     }
 
-    init(fileURL: URL = GitActivityStore.defaultFileURL, capacity: Int = 1000) {
+    public init(fileURL: URL = GitActivityStore.defaultFileURL, capacity: Int = 1000) {
         self.fileURL = fileURL
         self.capacity = capacity
         ioQueue.async { [weak self] in self?.loadFromDiskLocked() }
@@ -50,7 +51,7 @@ final class GitActivityStore: ObservableObject {
 
     /// Records a lifecycle event from a repo's activity log. Called from repo
     /// queues; hops to the store's own serial queue.
-    func record(_ event: GitActivityLog.Event, repoName: String, repoPath: String) {
+    public func record(_ event: GitActivityLog.Event, repoName: String, repoPath: String) {
         ioQueue.async { [weak self] in
             guard let self else { return }
             switch event {
@@ -74,7 +75,7 @@ final class GitActivityStore: ObservableObject {
 
     /// Removes all in-memory and on-disk history (the privacy escape hatch —
     /// argv text and stderr tails persist in plaintext otherwise).
-    func clear() {
+    public func clear() {
         ioQueue.async { [weak self] in
             guard let self else { return }
             self.storage.removeAll()
@@ -88,7 +89,7 @@ final class GitActivityStore: ObservableObject {
 
     /// Synchronous from the caller's perspective but serialized on ioQueue, so
     /// tests (and any future caller) can't race the initializer's queued load.
-    func loadFromDisk() {
+    public func loadFromDisk() {
         ioQueue.sync { self.loadFromDiskLocked() }
     }
 
@@ -175,7 +176,7 @@ final class GitActivityStore: ObservableObject {
 
     /// Blocks until everything enqueued so far has been processed. Tests use
     /// it to make `record` calls deterministic.
-    func flushForTesting() {
+    public func flushForTesting() {
         ioQueue.sync { }
     }
 
@@ -183,7 +184,7 @@ final class GitActivityStore: ObservableObject {
 
     /// The window's search: free text over command, stderr, and repo name,
     /// optionally narrowed to one repo and/or to failed commands.
-    static func filtered(_ items: [Item],
+    public static func filtered(_ items: [Item],
                          query: String,
                          repoPath: String?,
                          failuresOnly: Bool) -> [Item] {
@@ -207,7 +208,7 @@ extension GitActivityStore.Item: Codable {
         case schemaVersion, entry, repoName, repoPath
     }
 
-    init(from decoder: Decoder) throws {
+    public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let version = try container.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 1
         guard version == Self.schemaVersion else {
@@ -220,7 +221,7 @@ extension GitActivityStore.Item: Codable {
         repoPath = try container.decode(String.self, forKey: .repoPath)
     }
 
-    func encode(to encoder: Encoder) throws {
+    public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(Self.schemaVersion, forKey: .schemaVersion)
         try container.encode(entry, forKey: .entry)

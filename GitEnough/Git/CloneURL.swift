@@ -5,18 +5,18 @@ import Foundation
 /// `repo`). Handles the scp-like SSH form (`git@github.com:owner/repo.git`),
 /// where a naive split on `/` yields the whole colon-joined string instead of
 /// the repository name. Pure — covered by unit tests.
-struct CloneURL {
+public struct CloneURL {
 
-    let rawValue: String
+    public let rawValue: String
 
-    init(_ rawValue: String) {
+    public init(_ rawValue: String) {
         self.rawValue = rawValue
     }
 
     /// The suggested clone destination folder name, or nil when no sensible
     /// name can be derived (empty/whitespace-only URL, or a `.`/`..` component
     /// that would escape the chosen destination folder).
-    var suggestedFolderName: String? {
+    public var suggestedFolderName: String? {
         var url = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
         while url.hasSuffix("/") { url.removeLast() }
 

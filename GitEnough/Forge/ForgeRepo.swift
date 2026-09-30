@@ -15,26 +15,26 @@ import Foundation
 /// built from them is valid by construction. A port is kept only for http(s)
 /// remotes — an ssh port addresses the shell, not the website. Local paths and
 /// URLs without an owner/repo path parse to nil.
-struct ForgeRepo: Equatable {
+public struct ForgeRepo: Equatable {
 
-    enum Kind: Equatable {
+    public enum Kind: Equatable {
         case github      // github.com — REST API at api.github.com, PRs at /pull/N
         case gitlab      // gitlab.com — merge requests at /-/merge_requests/N
         case forgejo     // a host that answered the Forgejo/Gitea API (PullRequestFinder)
         case generic     // any other host — GitHub-style paths as a best guess
     }
 
-    let kind: Kind
+    public let kind: Kind
     /// Website origin of the forge: scheme + host (+ port for http(s) remotes).
-    let origin: URL
+    public let origin: URL
     /// Percent-encoded path segments of the owner, "/"-joined ("group/sub").
-    let owner: String
+    public let owner: String
     /// Percent-encoded repository name, without a ".git" suffix.
-    let repo: String
+    public let repo: String
 
     // MARK: - Parsing
 
-    static func parse(remoteURL: String) -> ForgeRepo? {
+    public static func parse(remoteURL: String) -> ForgeRepo? {
         let raw = remoteURL.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !raw.isEmpty else { return nil }
 
@@ -126,10 +126,10 @@ struct ForgeRepo: Equatable {
     // MARK: - Website URLs
 
     /// The repository's home page on the forge.
-    var webURL: URL { page("/\(owner)/\(repo)") }
+    public var webURL: URL { page("/\(owner)/\(repo)") }
 
     /// The web page of one pull request (a "merge request" on GitLab).
-    func pullRequestURL(number: Int) -> URL {
+    public func pullRequestURL(number: Int) -> URL {
         switch kind {
         case .github, .generic:
             return page("/\(owner)/\(repo)/pull/\(number)")
@@ -144,7 +144,7 @@ struct ForgeRepo: Equatable {
     /// When a PR is already open, GitHub and Forgejo show an "already has a pull
     /// request" banner on this very page — the offline fallback for private
     /// repos where the API lookup can't see anything.
-    func newPullRequestURL(base: String, head: String) -> URL {
+    public func newPullRequestURL(base: String, head: String) -> URL {
         switch kind {
         case .github, .forgejo, .generic:
             // GitHub and Forgejo/Gitea share the /compare/base...head shape;
@@ -160,14 +160,14 @@ struct ForgeRepo: Equatable {
 
     /// A copy with the kind forced to Forgejo — used once a self-hosted host has
     /// answered the Forgejo/Gitea API, so PR URLs take the /pulls/ shape.
-    func assumingForgejo() -> ForgeRepo {
+    public func assumingForgejo() -> ForgeRepo {
         ForgeRepo(kind: .forgejo, origin: origin, owner: owner, repo: repo)
     }
 
     /// A copy with the kind forced to GitLab — used once a self-hosted host has
     /// answered the GitLab v4 API, so MR URLs take the /-/merge_requests shape
     /// (and the create fallback uses /-/merge_requests/new).
-    func assumingGitLab() -> ForgeRepo {
+    public func assumingGitLab() -> ForgeRepo {
         ForgeRepo(kind: .gitlab, origin: origin, owner: owner, repo: repo)
     }
 

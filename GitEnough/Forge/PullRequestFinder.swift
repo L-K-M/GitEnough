@@ -1,10 +1,21 @@
 import Foundation
+#if canImport(FoundationNetworking)
+// URLSession lives in a separate module in swift-corelibs-foundation.
+import FoundationNetworking
+#endif
 
 /// An open pull request on a forge, resolved for the current branch.
-struct PullRequest: Equatable {
-    let number: Int
-    let title: String
-    let url: URL
+public struct PullRequest: Equatable {
+    public let number: Int
+    public let title: String
+    public let url: URL
+}
+
+/// The result of probing a forge. `forge` retains a successfully detected
+/// self-hosted kind even when that forge returned a valid empty PR list.
+public struct PullRequestResolution: Equatable {
+    public let forge: ForgeRepo
+    public let pullRequest: PullRequest?
 }
 
 /// Resolves the open pull request for a branch on its forge with short,
@@ -19,10 +30,10 @@ struct PullRequest: Equatable {
 /// repos the caller falls back to opening the forge's "create PR" page, which —
 /// once the browser is signed in — shows an "already has a pull request"
 /// banner. That keeps forge tokens out of GitEnough entirely.
-final class PullRequestFinder {
+public final class PullRequestFinder {
 
     /// Shared instance: one ephemeral session instead of one per lookup.
-    static let shared = PullRequestFinder()
+    public static let shared = PullRequestFinder()
 
     private let session: URLSession
 
@@ -45,23 +56,62 @@ final class PullRequestFinder {
 
     /// The open PR whose head is `headBranch`, or nil when there is none / when
     /// it can't be determined (private repo, offline, unsupported forge).
-    func findOpenPullRequest(for forge: ForgeRepo, headBranch: String) async -> PullRequest? {
+    public func findOpenPullRequest(for forge: ForgeRepo, headBranch: String) async -> PullRequest? {
+        await resolvePullRequest(for: forge, headBranch: headBranch).pullRequest
+    }
+
+    /// Resolves both an existing PR and the actual forge kind. A successful
+    /// empty response is meaningful for a generic host: it selects the correct
+    /// create-PR URL even though there is no existing PR to return.
+    public func resolvePullRequest(for forge: ForgeRepo,
+                            headBranch: String) async -> PullRequestResolution {
         switch forge.kind {
         case .github:
-            return await findOnGitHub(forge, headBranch: headBranch)
+            return PullRequestResolution(
+                forge: forge,
+                pullRequest: await findOnGitHub(forge, headBranch: headBranch))
         case .gitlab:
-            return await findOnGitLab(forge, headBranch: headBranch)
+            return PullRequestResolution(
+                forge: forge,
+                pullRequest: await findOnGitLab(forge, headBranch: headBranch))
         case .forgejo:
-            return await findOnForgejo(forge, headBranch: headBranch)
+            return PullRequestResolution(
+                forge: forge,
+                pullRequest: await findOnForgejo(forge, headBranch: headBranch))
         case .generic:
-            // Self-hosted hosts are usually Forgejo/Gitea or GitLab; two cheap
-            // probes also pin the kind, so the fallback URL takes the right
-            // shape even when the branch has no PR yet.
-            if let found = await findOnForgejo(forge, headBranch: headBranch) {
-                return found
+            if let resolution = await probeForgejo(forge, headBranch: headBranch) {
+                return resolution
             }
-            return await findOnGitLab(forge, headBranch: headBranch)
+            if let resolution = await probeGitLab(forge, headBranch: headBranch) {
+                return resolution
+            }
+            return PullRequestResolution(forge: forge, pullRequest: nil)
         }
+    }
+
+    private func probeForgejo(_ forge: ForgeRepo,
+                              headBranch: String) async -> PullRequestResolution? {
+        guard let url = Self.forgejoLookupURL(forge),
+              let data = await get(url), Self.isJSONArray(data) else { return nil }
+        let detected = forge.assumingForgejo()
+        let pullRequest = Self.parseForgejoPullRequests(
+            data, forge: detected, headBranch: headBranch).first
+        return PullRequestResolution(forge: detected, pullRequest: pullRequest)
+    }
+
+    private func probeGitLab(_ forge: ForgeRepo,
+                             headBranch: String) async -> PullRequestResolution? {
+        guard let url = Self.gitLabLookupURL(forge, headBranch: headBranch),
+              let data = await get(url), Self.isJSONArray(data) else { return nil }
+        let detected = forge.assumingGitLab()
+        let pullRequest = Self.parseGitLabMergeRequests(
+            data, forge: detected, headBranch: headBranch).first
+        return PullRequestResolution(forge: detected, pullRequest: pullRequest)
+    }
+
+    private static func isJSONArray(_ data: Data) -> Bool {
+        guard let value = try? JSONSerialization.jsonObject(with: data) else { return false }
+        return value is [Any]
     }
 
     private func findOnGitHub(_ forge: ForgeRepo, headBranch: String) async -> PullRequest? {
@@ -100,7 +150,7 @@ final class PullRequestFinder {
     /// — the head filter restricts the answer to PRs from this repo's branch.
     /// (When the remote is a *fork*, PRs opened against the upstream parent are
     /// not listed here; the caller then opens the fork's own compare page.)
-    static func gitHubLookupURL(_ forge: ForgeRepo, headBranch: String) -> URL? {
+    public static func gitHubLookupURL(_ forge: ForgeRepo, headBranch: String) -> URL? {
         URL(string: "https://api.github.com/repos/\(forge.owner)/\(forge.repo)/pulls"
             + "?state=open&head=\(forge.owner):\(encodeQuery(headBranch))")
     }
@@ -110,7 +160,7 @@ final class PullRequestFinder {
     /// parsing (the API has no head filter parameter). Repos with more than 50
     /// open PRs fall back to the create page — acceptable for a best-effort
     /// lookup.
-    static func forgejoLookupURL(_ forge: ForgeRepo) -> URL? {
+    public static func forgejoLookupURL(_ forge: ForgeRepo) -> URL? {
         URL(string: forge.origin.absoluteString
             + "/api/v1/repos/\(forge.owner)/\(forge.repo)/pulls?state=open&limit=50")
     }
@@ -119,7 +169,7 @@ final class PullRequestFinder {
     /// — readable without credentials for public projects, like the rest of
     /// the lookups here. GitLab identifies a project by its full path with
     /// every "/" percent-encoded as %2F (nested groups included).
-    static func gitLabLookupURL(_ forge: ForgeRepo, headBranch: String) -> URL? {
+    public static func gitLabLookupURL(_ forge: ForgeRepo, headBranch: String) -> URL? {
         // owner/repo are already percent-encoded by ForgeRepo.parse — only the
         // "/" separators need %2F; re-encoding would turn %C3 into %25C3.
         let project = "\(forge.owner)/\(forge.repo)".replacingOccurrences(of: "/", with: "%2F")
@@ -143,7 +193,7 @@ final class PullRequestFinder {
     /// ignored `?head=` filter can never surface a fork's PR. The URL is built
     /// from the forge, not from `html_url`. Empty on any malformed shape
     /// (GitHub error bodies are JSON objects).
-    static func parseGitHubPullRequests(_ data: Data, forge: ForgeRepo,
+    public static func parseGitHubPullRequests(_ data: Data, forge: ForgeRepo,
                                         headBranch: String) -> [PullRequest] {
         struct Entry: Decodable {
             let number: Int
@@ -171,7 +221,7 @@ final class PullRequestFinder {
     /// ref is just the fork's branch name ("main", "patch-1", …), and silently
     /// opening a stranger's PR is worse than not finding one. Empty on any
     /// malformed shape.
-    static func parseForgejoPullRequests(_ data: Data, forge: ForgeRepo,
+    public static func parseForgejoPullRequests(_ data: Data, forge: ForgeRepo,
                                          headBranch: String) -> [PullRequest] {
         struct Entry: Decodable {
             let number: Int
@@ -200,7 +250,7 @@ final class PullRequestFinder {
     /// absent, so an unexpected shape degrades to a branch-name match instead
     /// of dropping valid hits. The web URL uses the project-scoped `iid`,
     /// **not** the global `id`. Empty on any malformed shape.
-    static func parseGitLabMergeRequests(_ data: Data, forge: ForgeRepo,
+    public static func parseGitLabMergeRequests(_ data: Data, forge: ForgeRepo,
                                          headBranch: String) -> [PullRequest] {
         struct Entry: Decodable {
             let iid: Int

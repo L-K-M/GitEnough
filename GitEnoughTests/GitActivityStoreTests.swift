@@ -77,6 +77,21 @@ final class GitActivityStoreTests: XCTestCase {
         XCTAssertEqual(reloaded.items.map(\.repoName), ["A", "B"])
     }
 
+    func testStructuredArgumentsSurviveARelaunch() throws {
+        let store = makeStore()
+        let recorded = GitActivityLog.Entry(
+            id: UUID(), command: "stash push -m \"wip: fix it\"",
+            startedAt: Date(), finishedAt: Date(), exitCode: 0, stderrTail: nil,
+            arguments: ["stash", "push", "-m", "wip: fix it"])
+        store.record(.finished(recorded), repoName: "A", repoPath: "/a")
+        drain(store)
+
+        let reloaded = makeStore()
+        reloaded.loadFromDisk()
+        XCTAssertEqual(reloaded.items.first?.entry.arguments,
+                       ["stash", "push", "-m", "wip: fix it"])
+    }
+
     func testRunningItemsAreNotPersisted() throws {
         let store = makeStore()
         store.record(.began(entry("stuck-command", exitCode: nil)),

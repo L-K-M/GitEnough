@@ -1,12 +1,15 @@
 import SwiftUI
+import AppKit
 
 /// The Branches tab: local branches, remote branches, and the stash — with
 /// checkout / merge / delete / apply / drop actions.
 struct BranchesView: View {
 
     @ObservedObject var viewModel: RepoViewModel
+    @EnvironmentObject var appState: AppState
 
     @State private var branchToDelete: Branch?
+    @State private var remoteBranchToDelete: Branch?
     @State private var branchToMerge: Branch?
     @State private var stashToDrop: StashEntry?
     @State private var branchToRename: Branch?
@@ -29,6 +32,7 @@ struct BranchesView: View {
                                 renameText = branch.name
                                 branchToRename = branch
                             }
+                            Button("Copy Name") { NSPasteboard.general.copyString(branch.name) }
                             if !branch.isHead {
                                 Divider()
                                 Button("Delete…", role: .destructive) { branchToDelete = branch }
@@ -39,26 +43,51 @@ struct BranchesView: View {
                         }
                 }
             } header: {
-                Text("Local Branches (\(localBranches.count))")
+                HStack {
+                    Text("Local Branches (\(localBranches.count))")
+                    Spacer()
+                    // Branch creation lives here too, not only in the toolbar
+                    // and ⇧⌘B — the tab where branch operations actually happen
+                    // should offer the most common one.
+                    Button("New Branch…") { appState.showingNewBranch = true }
+                        .buttonStyle(.borderless)
+                        .font(.caption)
+                }
             }
 
             Section {
-                ForEach(remoteBranches) { branch in
-                    HStack(spacing: 6) {
-                        Image(systemName: "network")
-                            .foregroundStyle(.secondary)
-                            .frame(width: 16)
-                        Text(branch.name)
-                            .font(.callout)
-                        Spacer()
-                    }
-                    .padding(.vertical, 2)
-                    .contextMenu {
-                        if let local = branch.localNameForRemote,
-                           !localBranches.contains(where: { $0.name == local }) {
-                            Button("Check Out as \(local)") { viewModel.checkout(branch: branch) }
+                if remoteBranches.isEmpty {
+                    // Say why the section is empty instead of just being empty:
+                    // the two causes have different remedies.
+                    Text(viewModel.remotes.isEmpty
+                         ? "This repository has no remotes — add one in the terminal (git remote add), then Fetch."
+                         : "No remote branches yet — Fetch to load them, or Publish the current branch to create one.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(remoteBranches) { branch in
+                        HStack(spacing: 6) {
+                            Image(systemName: "network")
+                                .foregroundStyle(.secondary)
+                                .frame(width: 16)
+                            Text(branch.name)
+                                .font(.callout)
+                            Spacer()
+                            BranchRecencyText(date: branch.lastCommitDate)
                         }
-                        Button("Merge into Current Branch…") { branchToMerge = branch }
+                        .padding(.vertical, 2)
+                        .contextMenu {
+                            if let local = branch.localNameForRemote,
+                               !localBranches.contains(where: { $0.name == local }) {
+                                Button("Check Out as \(local)") { viewModel.checkout(branch: branch) }
+                            }
+                            Button("Merge into Current Branch…") { branchToMerge = branch }
+                            Button("Copy Name") { NSPasteboard.general.copyString(branch.name) }
+                            Divider()
+                            Button("Delete Remote Branch…", role: .destructive) {
+                                remoteBranchToDelete = branch
+                            }
+                        }
                     }
                 }
             } header: {
@@ -96,6 +125,7 @@ struct BranchesView: View {
             }
         }
         .listStyle(.inset)
+        .disabled(viewModel.isBusy)
         .confirmationDialog("Delete branch “\(branchToDelete?.name ?? "")”?",
                             isPresented: deleteConfirmationPresented,
                             titleVisibility: .visible) {
@@ -119,7 +149,31 @@ struct BranchesView: View {
                     viewModel.merge(branch: branch)
                 }
             }
+            Button("Merge (No Fast-Forward)") {
+                if let branch = branchToMerge {
+                    viewModel.merge(branch: branch, noFastForward: true)
+                }
+            }
+            Button("Squash Merge (Stage Only)") {
+                if let branch = branchToMerge {
+                    viewModel.merge(branch: branch, squash: true)
+                }
+            }
             Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("“No fast-forward” always records a merge commit. “Squash” stages the combined changes without committing — you write the commit yourself in the Changes tab.")
+        }
+        .confirmationDialog("Delete remote branch “\(remoteBranchToDelete?.name ?? "")”?",
+                            isPresented: deleteRemoteConfirmationPresented,
+                            titleVisibility: .visible) {
+            Button("Delete on Remote", role: .destructive) {
+                if let branch = remoteBranchToDelete {
+                    viewModel.deleteRemoteBranch(branch)
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This deletes the branch on the remote for everyone. Local branches tracking it keep their commits.")
         }
         .confirmationDialog("Drop this stash entry?",
                             isPresented: dropConfirmationPresented,
@@ -164,6 +218,10 @@ struct BranchesView: View {
         Binding(get: { branchToDelete != nil }, set: { if !$0 { branchToDelete = nil } })
     }
 
+    private var deleteRemoteConfirmationPresented: Binding<Bool> {
+        Binding(get: { remoteBranchToDelete != nil }, set: { if !$0 { remoteBranchToDelete = nil } })
+    }
+
     private var mergeConfirmationPresented: Binding<Bool> {
         Binding(get: { branchToMerge != nil }, set: { if !$0 { branchToMerge = nil } })
     }
@@ -192,6 +250,12 @@ private struct LocalBranchRow: View {
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
             }
+            if branch.upstreamGone {
+                Label("upstream gone", systemImage: "exclamationmark.triangle")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+                    .help("“\(branch.upstream ?? "")” no longer exists on the remote — pull will fail until the branch is pushed again (re-creating it) or its upstream is unset.")
+            }
             Spacer()
             if branch.ahead > 0 {
                 Label("\(branch.ahead)", systemImage: "arrow.up")
@@ -203,7 +267,26 @@ private struct LocalBranchRow: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
+            BranchRecencyText(date: branch.lastCommitDate)
         }
         .padding(.vertical, 2)
+    }
+}
+
+/// When a branch was last committed to, right-aligned in branch rows: the
+/// "which branches are alive?" signal next to ahead/behind. Hidden (not a
+/// placeholder dash) when the caller's for-each-ref format omitted the date.
+private struct BranchRecencyText: View {
+
+    let date: Date?
+
+    var body: some View {
+        if let date {
+            RelativeDateText(date: date)
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .frame(minWidth: 90, alignment: .trailing)
+                .lineLimit(1)
+        }
     }
 }

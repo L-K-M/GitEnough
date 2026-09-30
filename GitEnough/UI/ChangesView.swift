@@ -8,8 +8,7 @@ struct ChangesView: View {
 
     @ObservedObject var viewModel: RepoViewModel
 
-    @State private var selectedFile: FileChange?
-    @State private var selectionIsStaged = false
+    @State private var selection: ChangeSelection?
     @State private var fileToDiscard: FileChange?
     @State private var showingStashSheet = false
     @State private var showingAmendPushedConfirmation = false
@@ -50,11 +49,11 @@ struct ChangesView: View {
                 commitBox
             }
             .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
-            DiffView(diff: viewModel.selectedFileDiff)
+            diffPane
                 .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
         }
-        .onChange(of: selectedFile) { _, file in
-            viewModel.selectFile(file, staged: selectionIsStaged)
+        .onChange(of: selection) { _, selection in
+            viewModel.selectFile(selection?.file, staged: selection?.isStaged ?? false)
         }
         .onChange(of: viewModel.status) { _, status in
             // Keep the selection pointed at the file as it moves between the
@@ -62,26 +61,8 @@ struct ChangesView: View {
             // columns, so comparing whole values would drop the selection on
             // every stage/unstage); clear it only when the file is gone from
             // both lists (committed, discarded, resolved).
-            guard let selected = selectedFile else { return }
-            let stagedMatch = status.staged.first { $0.path == selected.path }
-            let unstagedMatch = status.unstaged.first { $0.path == selected.path }
-            switch (stagedMatch, unstagedMatch) {
-            case (nil, nil):
-                selectedFile = nil
-            case (nil, let unstaged?):
-                // Unstaged it: follow the file into the Changes list.
-                selectionIsStaged = false
-                selectedFile = unstaged
-            case (let staged?, nil):
-                // Staged it: follow the file into the Staged list.
-                selectionIsStaged = true
-                selectedFile = staged
-            case (let staged?, let unstaged?):
-                // In both lists (partially staged file): keep the current side,
-                // refreshing the cached value so status-column changes don't
-                // leave it stale (assigning an equal value is a no-op).
-                selectedFile = selectionIsStaged ? staged : unstaged
-            }
+            guard let selection else { return }
+            self.selection = selection.updated(for: status)
         }
         .confirmationDialog("Discard changes?",
                             isPresented: discardConfirmationPresented,
@@ -95,6 +76,10 @@ struct ChangesView: View {
         } message: {
             if fileToDiscard?.isUntracked == true {
                 Text("“\(fileToDiscard?.lastPathComponent ?? "")” is untracked and will be moved to the Trash.")
+            } else if fileToDiscard?.isRename == true {
+                Text("The original path will be restored. The destination is kept as an untracked file so its contents are not destroyed; discard it again to move it to the Trash.")
+            } else if fileToDiscard?.isCopy == true {
+                Text("The source file will not be changed. The copied destination is kept as an untracked file; discard it again to move it to the Trash.")
             } else {
                 Text("All uncommitted changes to “\(fileToDiscard?.lastPathComponent ?? "")” will be lost.")
             }
@@ -118,11 +103,26 @@ struct ChangesView: View {
         Binding(get: { fileToDiscard != nil }, set: { if !$0 { fileToDiscard = nil } })
     }
 
+    /// The right pane never associates a previous patch with a newly selected
+    /// row. A spinner covers the content until that exact side finishes loading.
+    @ViewBuilder
+    private var diffPane: some View {
+        if viewModel.isLoadingDiff {
+            ProgressView()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            DiffView(diff: viewModel.selectedFileDiff)
+        }
+    }
+
     // MARK: - File lists
 
     private var fileList: some View {
         List {
-            if conflictUIActive {
+            // No "Conflicted Files (0)" header over zero rows: once the last
+            // conflict is resolved the section has nothing left to show, and
+            // the operation banner already offers Continue.
+            if conflictUIActive && !conflicts.isEmpty {
                 Section {
                     ForEach(conflicts) { file in
                         ConflictRow(path: file.path, viewModel: viewModel)
@@ -137,11 +137,11 @@ struct ChangesView: View {
                 ForEach(viewModel.status.staged) { file in
                     FileRow(file: file,
                             repoURL: viewModel.repo.url,
-                            isSelected: selectedFile?.path == file.path && selectionIsStaged,
+                            isSelected: selection?.file.path == file.path
+                                && selection?.isStaged == true,
                             actionIcon: "minus.circle",
                             actionHelp: "Unstage") {
-                        selectedFile = file
-                        selectionIsStaged = true
+                        selection = ChangeSelection(file: file, isStaged: true)
                     } onAction: {
                         viewModel.unstage([file])
                     } onIgnore: {
@@ -158,6 +158,7 @@ struct ChangesView: View {
                         Button("Unstage All") { viewModel.unstage(viewModel.status.staged) }
                             .buttonStyle(.borderless)
                             .font(.caption)
+                            .disabled(viewModel.isBusy)
                     }
                 }
             }
@@ -166,11 +167,11 @@ struct ChangesView: View {
                 ForEach(viewModel.status.unstaged) { file in
                     FileRow(file: file,
                             repoURL: viewModel.repo.url,
-                            isSelected: selectedFile?.path == file.path && !selectionIsStaged,
+                            isSelected: selection?.file.path == file.path
+                                && selection?.isStaged == false,
                             actionIcon: "plus.circle",
                             actionHelp: "Stage") {
-                        selectedFile = file
-                        selectionIsStaged = false
+                        selection = ChangeSelection(file: file, isStaged: false)
                     } onAction: {
                         viewModel.stage([file])
                     } onIgnore: {
@@ -184,17 +185,44 @@ struct ChangesView: View {
                     Text("Changes (\(viewModel.status.unstaged.count))")
                     Spacer()
                     if !viewModel.status.unstaged.isEmpty {
+                        // Never offered while anything is unmerged: `git add -A`
+                        // would stage the conflict markers as the resolution,
+                        // which also empties the conflict section and enables
+                        // Commit — every signal saying "resolved" at the moment
+                        // the conflict is buried. GitClient refuses too; this is
+                        // so the user is told before clicking rather than after.
                         Button("Stage All") { viewModel.stageAll() }
                             .buttonStyle(.borderless)
                             .font(.caption)
+                            .disabled(viewModel.isBusy || !conflicts.isEmpty)
+                            .help(conflicts.isEmpty
+                                  ? "Stage every change"
+                                  : Self.stageAllBlockedHelp(conflicts))
+                    }
+                }
+            } footer: {
+                // The stash entry point lives in the section footer so it stays
+                // reachable even when everything is staged (the usual
+                // "stage, then stash to switch branches" flow). It is hidden
+                // only when there is nothing to stash.
+                if !viewModel.status.staged.isEmpty || !viewModel.status.unstaged.isEmpty {
+                    HStack {
+                        Spacer()
                         Button("Stash…") { showingStashSheet = true }
                             .buttonStyle(.borderless)
                             .font(.caption)
+                            .disabled(viewModel.isBusy || conflictUIActive)
+                            .help(viewModel.isBusy
+                                  ? "Stash is unavailable while an operation is running"
+                                  : conflictUIActive
+                                  ? "Stash is unavailable while a merge/rebase is in progress"
+                                  : "Stash your changes and restore them later")
                     }
                 }
             }
         }
         .listStyle(.inset)
+        .disabled(viewModel.isBusy)
         .frame(maxHeight: .infinity)
     }
 
@@ -245,7 +273,8 @@ struct ChangesView: View {
                         Label("Generate", systemImage: "sparkles")
                     }
                 }
-                .disabled(viewModel.isGeneratingMessage || viewModel.status.staged.isEmpty)
+                .disabled(viewModel.isGeneratingMessage || viewModel.isBusy
+                    || viewModel.status.staged.isEmpty)
                 .help("Write the commit message with the configured LLM (Settings → AI)")
 
                 if !viewModel.draftCommitMessage.isEmpty {
@@ -261,6 +290,13 @@ struct ChangesView: View {
 
                 Toggle("Amend", isOn: $viewModel.amendLastCommit)
                     .toggleStyle(.checkbox)
+                    // Nothing to amend before the first commit; without the
+                    // guard the commit dies on git's raw "You have nothing to
+                    // amend" error. A stale true (e.g. after checking out an
+                    // orphan branch) is actually CLEARED by the view model on
+                    // every applied snapshot — masking it here would let it
+                    // silently pop back on after the orphan's first commit.
+                    .disabled(viewModel.status.isUnborn)
                     .help("Amend the last commit instead of creating a new one")
 
                 Button("Commit") {
@@ -309,9 +345,31 @@ struct ChangesView: View {
                 }
                 .keyboardShortcut(.defaultAction)
                 .buttonStyle(.borderedProminent)
+                .disabled(viewModel.isBusy)
             }
         }
         .padding(20)
+    }
+}
+
+// Internal rather than private: `stageAllBlockedHelp` is the copy a macOS user
+// actually reads — the button is disabled whenever anything is unmerged, so
+// `GitClient.stageAll`'s refusal almost never reaches this front end — and it
+// was the one string in this change with no test behind it.
+extension ChangesView {
+    /// The disabled Stage All tooltip. Says what the refusal says, in the same
+    /// words for the part that matters: `conflictStagingConsequence` is shared,
+    /// so the two cannot make different claims about what staging a conflict
+    /// does, and `namingFiles` is shared so they cannot name the files
+    /// differently either.
+    static func stageAllBlockedHelp(_ conflicts: [FileChange]) -> String {
+        let names = GitClient.namingFiles(conflicts.map(\.path))
+        // One binding for both agreements. The noun was already pluralised and
+        // the pronoun was not, so a single conflict read "Resolve 1 conflicted
+        // file first (a.txt) — staging them…" — and one file is the common case.
+        let singular = conflicts.count == 1
+        return "Resolve \(conflicts.count) conflicted file\(singular ? "" : "s") first (\(names)). "
+            + "Staging \(singular ? "it" : "them") \(GitClient.conflictStagingConsequence)."
     }
 }
 
@@ -332,10 +390,8 @@ private struct FileRow: View {
     var body: some View {
         HStack(spacing: 6) {
             FileStatusBadge(status: file.displayStatus)
-            Text(file.path)
+            FilePathText(path: file.path, originalPath: file.originalPath)
                 .font(.callout)
-                .lineLimit(1)
-                .truncationMode(.middle)
             Spacer()
             Button(action: onAction) {
                 Image(systemName: actionIcon)
@@ -367,8 +423,7 @@ private struct FileRow: View {
                 }
             }
             Button {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(file.path, forType: .string)
+                NSPasteboard.general.copyString(file.path)
             } label: {
                 Label("Copy Path", systemImage: "doc.on.doc")
             }
@@ -438,6 +493,7 @@ private struct ConflictRow: View {
                     .font(.caption)
                     .help("Stage the file as-is (after resolving it yourself)")
             }
+            .disabled(viewModel.isBusy)
         }
         .padding(.vertical, 3)
         .onReceive(NotificationCenter.default.publisher(for: MergeTool.didChangeNotification)) { _ in

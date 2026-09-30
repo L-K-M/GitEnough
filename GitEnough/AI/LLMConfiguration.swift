@@ -7,16 +7,16 @@ import Foundation
 /// Z.AI's GLM coding endpoint — the same service that powers this repository's
 /// automated PR reviews — but OpenAI and any custom-compatible server (local
 /// llama.cpp, LiteLLM, …) can be selected in Settings.
-struct LLMConfiguration: Equatable {
+public struct LLMConfiguration: Equatable {
 
-    enum Provider: String, CaseIterable, Identifiable {
+    public enum Provider: String, CaseIterable, Identifiable {
         case zai = "Z.AI (GLM)"
         case openai = "OpenAI"
         case custom = "Custom (OpenAI-compatible)"
 
-        var id: String { rawValue }
+        public var id: String { rawValue }
 
-        var defaultBaseURL: String {
+        public var defaultBaseURL: String {
             switch self {
             case .zai: return "https://api.z.ai/api/coding/paas/v4"
             case .openai: return "https://api.openai.com/v1"
@@ -24,7 +24,7 @@ struct LLMConfiguration: Equatable {
             }
         }
 
-        var defaultModel: String {
+        public var defaultModel: String {
             switch self {
             case .zai: return "glm-4.6"
             case .openai: return "gpt-4o-mini"
@@ -33,19 +33,19 @@ struct LLMConfiguration: Equatable {
         }
     }
 
-    var provider: Provider
-    var baseURL: String
-    var model: String
+    public var provider: Provider
+    public var baseURL: String
+    public var model: String
 
-    static let `default` = LLMConfiguration(provider: .zai,
+    public static let `default` = LLMConfiguration(provider: .zai,
                                             baseURL: Provider.zai.defaultBaseURL,
                                             model: Provider.zai.defaultModel)
 
-    var chatCompletionsURL: URL? {
+    public var chatCompletionsURL: URL? {
         endpoint("chat/completions")
     }
 
-    var modelsURL: URL? {
+    public var modelsURL: URL? {
         endpoint("models")
     }
 
@@ -59,13 +59,13 @@ struct LLMConfiguration: Equatable {
     // MARK: - Persistence
 
     private enum Keys {
-        static let provider = "llm.provider"
-        static let baseURL = "llm.baseURL"
-        static let model = "llm.model"
-        static let keychainAccount = "llm.apiKey"
+        public static let provider = "llm.provider"
+        public static let baseURL = "llm.baseURL"
+        public static let model = "llm.model"
+        public static let keychainAccount = "llm.apiKey"
     }
 
-    static func load(defaults: UserDefaults = .standard) -> LLMConfiguration {
+    public static func load(defaults: UserDefaults = .standard) -> LLMConfiguration {
         let providerRaw = defaults.string(forKey: Keys.provider)
         let provider = providerRaw.flatMap(Provider.init(rawValue:)) ?? .zai
         return LLMConfiguration(
@@ -75,7 +75,7 @@ struct LLMConfiguration: Equatable {
         )
     }
 
-    func save(defaults: UserDefaults = .standard) {
+    public func save(defaults: UserDefaults = .standard) {
         defaults.set(provider.rawValue, forKey: Keys.provider)
         defaults.set(baseURL, forKey: Keys.baseURL)
         defaults.set(model, forKey: Keys.model)
@@ -83,11 +83,11 @@ struct LLMConfiguration: Equatable {
 
     // MARK: - API key (Keychain)
 
-    static var apiKey: String? {
+    public static var apiKey: String? {
         get { KeychainStore.read(account: Keys.keychainAccount) }
     }
 
-    static func saveAPIKey(_ key: String) throws {
+    public static func saveAPIKey(_ key: String) throws {
         let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty {
             KeychainStore.delete(account: Keys.keychainAccount)

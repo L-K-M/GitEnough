@@ -14,7 +14,13 @@ struct SettingsView: View {
             ToolsSettingsView()
                 .tabItem { Label("Merge Tools", systemImage: "wrench.and.screwdriver") }
         }
-        .frame(width: 480, height: 360)
+        // Width pinned for a comfortable form; height left to the content. The
+        // old fixed height (480×360) clipped the AI tab's bottom — a grouped
+        // macOS Form doesn't scroll, so with the API-key/buttons/status rows it
+        // overflowed the 360 pt window and the Save/Load Models/Test buttons
+        // (and the status text) were unreachable on default font sizes.
+        .frame(width: 480)
+        .frame(minHeight: 360)
     }
 }
 
@@ -202,14 +208,12 @@ private struct AISettingsView: View {
             Text("Used by the ✨ Generate button in the commit box to write commit messages from your staged diff.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            Text("Opening Settings never contacts the provider. Only Generate, Load Models, and Test Connection make requests.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
         }
         .formStyle(.grouped)
         .padding()
-        .onAppear {
-            if models.isEmpty && !apiKey.isEmpty && !baseURL.isEmpty {
-                loadModels()
-            }
-        }
     }
 
     private func save() {

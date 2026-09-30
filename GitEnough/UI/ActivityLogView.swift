@@ -90,22 +90,10 @@ struct ActivityLogView: View {
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
         } else if let finished = entry.finishedAt {
-            Text(Self.formatDuration(finished.timeIntervalSince(entry.startedAt)))
+            Text(GitActivityLog.formatDuration(finished.timeIntervalSince(entry.startedAt)))
                 .font(.caption)
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
         }
-    }
-
-    static func formatDuration(_ seconds: TimeInterval) -> String {
-        if seconds < 60 {
-            return String(format: "%.1fs", seconds)
-        }
-        let minutes = Int(seconds) / 60
-        let rest = Int(seconds) % 60
-        if minutes >= 60 {
-            return "\(minutes / 60)h \(minutes % 60)m"
-        }
-        return "\(minutes)m \(rest)s"
     }
 }

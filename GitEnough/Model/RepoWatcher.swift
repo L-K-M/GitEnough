@@ -4,19 +4,23 @@ import Foundation
 /// `.git` files that change whenever HEAD, the index, refs, or the merge state
 /// move. When the signature changes, it fires `onChange` so the view model can
 /// refresh — no FSEvents, no full `git status` on every tick.
-final class RepoWatcher {
+public final class RepoWatcher {
 
     private let gitDir: URL
     private let worktree: URL
     private let onEvent: () -> Void
     private var timer: DispatchSourceTimer?
+    /// The queue the timer ticks on (the repo's serial queue); `restamp()`
+    /// must run here so it serializes with ticks.
+    private let queue: DispatchQueue
     private var lastSignature: String = ""
 
     /// - Parameter interval: poll interval in seconds.
-    init(gitDir: URL, worktree: URL, queue: DispatchQueue, interval: TimeInterval = 2.5,
+    public init(gitDir: URL, worktree: URL, queue: DispatchQueue, interval: TimeInterval = 2.5,
          onEvent: @escaping () -> Void) {
         self.gitDir = gitDir
         self.worktree = worktree
+        self.queue = queue
         self.onEvent = onEvent
         lastSignature = Self.signature(gitDir: gitDir, worktree: worktree)
         let timer = DispatchSource.makeTimerSource(queue: queue)
@@ -36,6 +40,17 @@ final class RepoWatcher {
             lastSignature = signature
             onEvent()
         }
+    }
+
+    /// Re-baselines the signature so a change the app itself just made (and
+    /// already snapshotted) doesn't trip the watcher into a redundant second
+    /// full refresh one poll later: `RepoViewModel.perform` ends with a fresh
+    /// snapshot, and its git commands dirty exactly the files this watcher
+    /// polls. Must be called on the timer's queue (the repo's serial queue),
+    /// so it serializes with ticks — enforced in debug builds.
+    public func restamp() {
+        dispatchPrecondition(condition: .onQueue(queue))
+        lastSignature = Self.signature(gitDir: gitDir, worktree: worktree)
     }
 
     /// Modification times of the git-dir files that signal "something changed".
