@@ -5,7 +5,7 @@ import Security
 /// password scoped to this app; UserDefaults only ever holds non-secret settings.
 enum KeychainStore {
 
-    private static let service = "ch.lkmc.GitEnough"
+    private static let service = Bundle.main.bundleIdentifier ?? "ch.lkmc.GitEnough"
 
     static func save(secret: String, account: String) throws {
         let data = Data(secret.utf8)
