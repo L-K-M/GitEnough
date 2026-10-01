@@ -13,7 +13,7 @@ import Security
 /// GitEnough never falls back to writing a secret to disk in the clear.
 public enum KeychainStore {
 
-    public static let service = "com.gitenough.GitEnough"
+    public static let service = Bundle.main.bundleIdentifier ?? "ch.lkmc.GitEnough"
 
     public static func save(secret: String, account: String) throws {
         #if canImport(Security)
