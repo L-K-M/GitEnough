@@ -10,24 +10,6 @@ struct Repository: Identifiable, Hashable, Codable {
     var id: String { path }
     var url: URL { URL(fileURLWithPath: path) }
 
-    /// The path with `~` and `.`/`..` resolved and symlinks chased, for
-    /// identity comparisons. The same working copy can arrive spelled
-    /// differently — NSOpenPanel returns the path as browsed, watch-folder
-    /// discovery resolves symlinks, git's --show-toplevel returns the physical
-    /// path — and storing one folder under two spellings breaks sidebar
-    /// identity (duplicate rows whose selection/equality behaves erratically).
-    var normalizedPath: String {
-        Self.normalizedPath(path)
-    }
-
-    /// Path normalization for identity comparisons. `standardizingPath` alone
-    /// keeps symlinks on modern macOS, so chase them explicitly — discovery
-    /// already does (its URLs go through `resolvingSymlinksInPath`).
-    static func normalizedPath(_ path: String) -> String {
-        let standardized = (path as NSString).standardizingPath
-        return URL(fileURLWithPath: standardized).resolvingSymlinksInPath().path
-    }
-
     init(path: String, name: String) {
         self.path = path
         self.name = name
@@ -113,14 +95,9 @@ final class RepoStore: ObservableObject {
     /// path → last-opened timestamp, for the "Recently Opened" sort order.
     @Published private(set) var lastOpenedAt: [String: TimeInterval] = [:]
 
-    /// Paths of starred repositories — pinned above the unstarred ones in every
-    /// sidebar sort order.
-    @Published private(set) var starredPaths: Set<String> = []
-
     private let defaultsKey = "repositories.v1"
     private let excludedKey = "excludedRepositories.v1"
     private let lastOpenedKey = "repoLastOpened.v1"
-    private let starredKey = "starredRepositories.v1"
 
     /// Paths the user removed — excluded from discovery until manually re-added.
     private var excludedPaths: Set<String> = []
@@ -128,7 +105,6 @@ final class RepoStore: ObservableObject {
     init() {
         load()
         excludedPaths = Set(UserDefaults.standard.stringArray(forKey: excludedKey) ?? [])
-        starredPaths = Set(UserDefaults.standard.stringArray(forKey: starredKey) ?? [])
         if let data = UserDefaults.standard.data(forKey: lastOpenedKey),
            let decoded = try? JSONDecoder().decode([String: TimeInterval].self, from: data) {
             lastOpenedAt = decoded
@@ -140,10 +116,7 @@ final class RepoStore: ObservableObject {
               let decoded = try? JSONDecoder().decode([Repository].self, from: data) else {
             return
         }
-        // Repair any duplicate spellings of the same folder left behind by
-        // older builds (see normalizedPath): keep the first spelling stored.
-        var seen: Set<String> = []
-        repositories = decoded.filter { seen.insert($0.normalizedPath).inserted }
+        repositories = decoded
     }
 
     private func persist() {
@@ -156,43 +129,19 @@ final class RepoStore: ObservableObject {
         UserDefaults.standard.set(Array(excludedPaths), forKey: excludedKey)
     }
 
-    private func persistStars() {
-        UserDefaults.standard.set(Array(starredPaths), forKey: starredKey)
-    }
-
-    /// Removes any exclusion for `repo` (any spelling — an exclusion stored
-    /// under one path spelling must not block a re-add under another).
-    private func clearExclusion(for repo: Repository) {
-        let before = excludedPaths.count
-        excludedPaths = excludedPaths.filter {
-            Repository.normalizedPath($0) != repo.normalizedPath
-        }
-        if excludedPaths.count != before { persistExclusions() }
-    }
-
     /// Registers an already-validated repository (validation — the git calls —
     /// is the caller's job and must happen off the main thread; see
     /// AppState.addRepository). A manual add also cancels a previous removal
     /// (discovery may re-offer it).
-    ///
-    /// Manual adds insert at the top of the unstarred block rather than
-    /// appending: the repository the user just added is the one they're looking
-    /// for, and at the bottom of a long manually-sorted list an append reads as
-    /// "it didn't show up". (Discovery keeps appending — its finds are
-    /// background additions, not user actions.)
     @discardableResult
     func register(_ repo: Repository) -> Repository {
-        if let existing = repositories.first(where: {
-            $0.normalizedPath == repo.normalizedPath
-        }) {
-            clearExclusion(for: existing)
+        if let existing = repositories.first(where: { $0 == repo }) {
+            if excludedPaths.remove(repo.path) != nil { persistExclusions() }
             return existing
         }
-        let insertAt = repositories.firstIndex(where: { !starredPaths.contains($0.path) })
-            ?? repositories.count
-        repositories.insert(repo, at: insertAt)
+        repositories.append(repo)
         persist()
-        clearExclusion(for: repo)
+        if excludedPaths.remove(repo.path) != nil { persistExclusions() }
         return repo
     }
     /// Adds already-validated repository URLs found by folder discovery. Skips
@@ -203,14 +152,8 @@ final class RepoStore: ObservableObject {
         var added = 0
         for url in urls {
             let path = url.path
-            let normalized = Repository.normalizedPath(path)
-            let excluded = excludedPaths.contains {
-                Repository.normalizedPath($0) == normalized
-            }
-            let existing = repositories.contains {
-                $0.normalizedPath == normalized
-            }
-            guard !excluded, !existing else { continue }
+            guard !excludedPaths.contains(path),
+                  !repositories.contains(where: { $0.path == path }) else { continue }
             repositories.append(Repository(path: path, name: url.lastPathComponent))
             added += 1
         }
@@ -219,67 +162,16 @@ final class RepoStore: ObservableObject {
     }
 
     func remove(_ repo: Repository) {
-        // All spellings of the folder go, not just the exact object passed.
-        repositories.removeAll { $0.normalizedPath == repo.normalizedPath }
+        repositories.removeAll { $0 == repo }
         summaries.removeValue(forKey: repo.path)
         excludedPaths.insert(repo.path)
-        // The star goes with the repo: starredPaths must only ever contain
-        // registered paths, or its count could never again be used as an index
-        // basis — and a removed repo re-added later shouldn't silently re-pin.
-        starredPaths.remove(repo.path)
-        persistStars()
         persistExclusions()
         persist()
     }
 
-    /// Applies a sidebar drag expressed in *visible* row coordinates. The
-    /// visible list (starred pinned first, then the rest) is a permutation of
-    /// `repositories`, so the move is applied there; starred-first is
-    /// re-imposed afterwards, which keeps the persisted manual order aligned
-    /// with what the user sees (the sidebar re-derives the grouping on every
-    /// render regardless).
-    func moveVisible(_ visible: [Repository], fromOffsets: IndexSet, toOffset: Int) {
-        guard visible.count == repositories.count,
-              Set(visible.map(\.path)) == Set(repositories.map(\.path)) else { return }
-        var moved = visible
-        moved.move(fromOffsets: fromOffsets, toOffset: toOffset)
-        repositories = Self.starredFirst(moved, starred: starredPaths)
+    func move(fromOffsets: IndexSet, toOffset: Int) {
+        repositories.move(fromOffsets: fromOffsets, toOffset: toOffset)
         persist()
-    }
-
-    // MARK: - Starring
-
-    func isStarred(_ repo: Repository) -> Bool {
-        starredPaths.contains(repo.path)
-    }
-
-    /// Stars or unstars `repo`. The stored order is left untouched — the sidebar
-    /// displays starred repositories first in every sort order (see
-    /// `starredFirst(_:starred:)`). Unstarring drops the pin without moving
-    /// anything; the stored order shown then is whatever manual dragging (via
-    /// `moveVisible`) last persisted, which may already be aligned with a
-    /// previously starred view.
-    func toggleStar(_ repo: Repository) {
-        // Guarded like RepoViewModel.publishBranch: no current call path can
-        // reach this with an unlisted repo (the sidebar stars listed rows only),
-        // but the guard keeps starredPaths honest — registered paths only —
-        // which remove() already maintains.
-        guard let registered = repositories.first(where: {
-            $0.normalizedPath == repo.normalizedPath
-        }) else { return }
-        // The registered spelling, not the caller's: starredPaths is matched
-        // against stored rows by exact path.
-        if !starredPaths.insert(registered.path).inserted {
-            starredPaths.remove(registered.path)
-        }
-        persistStars()
-    }
-
-    /// Repositories in sidebar display order: starred ones pinned above the
-    /// unstarred ones, each block keeping its incoming order. Pure, so the
-    /// sidebar's grouping (the user-facing contract of starring) is testable.
-    static func starredFirst(_ repos: [Repository], starred: Set<String>) -> [Repository] {
-        repos.filter { starred.contains($0.path) } + repos.filter { !starred.contains($0.path) }
     }
 
     /// Records that `repo` was selected (feeds the "Recently Opened" sort).
