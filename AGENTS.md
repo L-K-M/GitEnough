@@ -27,6 +27,22 @@ builds, one source tree** below). The SwiftUI front end stays macOS-only.
   it is on. Everything else in the core is plain Foundation.
 - **Dependencies:** none. Zero third-party packages; keep it that way.
 
+## Licensing
+
+- GitEnough's own code is Unlicense (`LICENSE`). Keep license statements in
+  the README and Info.plist (`NSHumanReadableCopyright`) consistent with it.
+- The app bundles no third-party code or assets, so it ships no notices file.
+  If a third-party package, framework, vendored file or asset (fonts, images,
+  data) is ever added, first confirm its license allows redistribution in the
+  app. The same change must generate its license notices into
+  `GitEnough.app/Contents/Resources/Third-Party-Notices.txt` (for example from
+  `Package.resolved`), fail the build when a component has no license text,
+  assert the file with `test -s` in `ci.yml` after the build and in
+  `release.yml` (`"$APP_PATH/Contents/Resources/Third-Party-Notices.txt"`,
+  before "Package zip + DMG"), and update the README License section.
+- Linux builds are source-only. A Linux binary release would bundle the Swift
+  runtime and needs the same notices treatment.
+
 ## Build & Run
 
 ### Two builds, one source tree
