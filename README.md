@@ -147,3 +147,12 @@ Simply opening Settings makes no request. API keys are stored in the macOS
 Keychain — or, on Linux, the system keyring via the Secret Service; GitEnough
 never writes a key to a file. There is no telemetry, no analytics, no crash
 reporting.
+
+## License
+
+GitEnough's own code is released under the [Unlicense](LICENSE). The macOS
+app bundles no third-party code or assets: it links only system frameworks
+and runs your installed `git` rather than linking libgit2. The Linux GTK
+front end, which you build from source, links your system's GTK 4
+(LGPL-2.1-or-later) dynamically; GTK keeps its own license. The app icon was
+generated for this project (`media-sources/icon.png`).
