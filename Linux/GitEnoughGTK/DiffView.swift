@@ -51,30 +51,50 @@ final class DiffView {
         Self.applyColours(tags, isDark: colouredForDark)
 
         widget = UI.scroller(textView, horizontal: GTK_POLICY_AUTOMATIC)
+
+        Theme.onChange { [weak self] in self?.refreshColoursIfThemeChanged() }
     }
 
     /// Replaces the shown diff. An empty string clears the view.
+    ///
+    /// Tags are placed by **character offset**, not by line index, and that is
+    /// a correctness requirement rather than a style choice. A `GtkTextBuffer`
+    /// breaks lines on more than the `\n` this join inserts, so its line count
+    /// and the parser's can disagree — after which every tag below the
+    /// disagreement lands on the wrong line and the rest of the diff is
+    /// coloured wrong, which is worse than not colouring it. Measured against
+    /// gtk 4.14 on a three-line diff:
+    ///
+    ///     interior bare CR (classic Mac endings)  → 4 buffer lines, 25 chars
+    ///     the same text without it                → 3 buffer lines, 24 chars
+    ///     U+2029 paragraph separator              → 4 buffer lines, 25 chars
+    ///     U+2028 line separator                   → 3 buffer lines, 25 chars
+    ///
+    /// The *character* count tracks the text exactly in every row, including
+    /// the ones where the line count does not — so offsets are right whatever
+    /// the buffer decides a line is, and nothing has to be stripped to make
+    /// them right.
     func show(_ diff: String) {
         let lines = DiffParser.parse(diff)
-        // Trailing carriage returns are stripped. A `GtkTextBuffer` counts a
-        // bare `\r` as a line separator of its own, so a CRLF file's last diff
-        // line — the one `\r` this join does not follow with a `\n` — adds a
-        // phantom empty line at the end of the pane. Measured against gtk 4.14:
-        // "@@…\r\n-old\r\n+new\r" is 4 buffer lines, the same text without the
-        // CRs is 3. Stripping them also makes the indices below agree with the
-        // parser's by construction rather than because `\r\n` happens to count
-        // as a single separator.
-        let text = lines.map { stripTrailingCR($0.text) }.joined(separator: "\n")
-        gtk_text_buffer_set_text(buffer, text, -1)
+        // The one thing still stripped, and only for appearance: a CRLF file's
+        // final `\r` is the one this join does not follow with a `\n`, so the
+        // buffer ends on a phantom empty line.
+        let texts = lines.map { stripTrailingCR($0.text) }
+        gtk_text_buffer_set_text(buffer, texts.joined(separator: "\n"), -1)
         guard !lines.isEmpty else { return }
 
-        for (index, line) in lines.enumerated() {
+        // Unicode scalars, not `Character`s: GTK counts code points, while
+        // Swift's `count` counts grapheme clusters, and one emoji or combining
+        // sequence would be the start of the same drift this avoids.
+        var offset = 0
+        for (line, text) in zip(lines, texts) {
+            let length = text.unicodeScalars.count
+            defer { offset += length + 1 }   // + the "\n" separator
             guard let tag = tags[line.kind] else { continue }
             var start = GtkTextIter()
             var end = GtkTextIter()
-            gtk_text_buffer_get_iter_at_line(buffer, &start, Int32(index))
-            gtk_text_buffer_get_iter_at_line(buffer, &end, Int32(index))
-            gtk_text_iter_forward_to_line_end(&end)
+            gtk_text_buffer_get_iter_at_offset(buffer, &start, Int32(offset))
+            gtk_text_buffer_get_iter_at_offset(buffer, &end, Int32(offset + length))
             gtk_text_buffer_apply_tag(buffer, tag, &start, &end)
         }
         refreshColoursIfThemeChanged()
@@ -84,9 +104,15 @@ final class DiffView {
         line.hasSuffix("\r") ? String(line.dropLast()) : line
     }
 
-    /// Re-resolved on each diff rather than from a `GtkSettings` handler: this
-    /// pane is rebuilt on every model publish anyway, and a per-instance global
-    /// settings handler is one more thing nothing ever disconnects.
+    /// Re-applies the tag colours when the desktop has switched between light
+    /// and dark. Called on every `show(_:)` — both panes that own a diff view
+    /// render one on each model publish — and from the settings signal, which
+    /// is what covers a pane sitting idle on an already-rendered diff.
+    ///
+    /// Re-applying is enough: the tags are live, so the text repaints without
+    /// rebuilding anything. (The handler is never disconnected, like the one
+    /// `HistoryPane` already installs; that lifetime is `o-X19`'s to fix, for
+    /// both of them at once.)
     private func refreshColoursIfThemeChanged() {
         let isDark = Theme.isDark
         guard isDark != colouredForDark else { return }
