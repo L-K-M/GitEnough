@@ -1309,29 +1309,41 @@ final class GitIntegrationTests: XCTestCase {
                                       historyLimit: 2,
                                       defaults: isolatedDefaults())
 
-        awaitSnapshot(from: viewModel) { viewModel.refresh(includeHistory: true) }
-        XCTAssertEqual(viewModel.commits.count, 2, "the first page")
-        XCTAssertTrue(viewModel.canLoadMoreHistory)
+        awaitSnapshot(from: viewModel,
+                      satisfying: { viewModel.commits.count == 2 }) {
+            viewModel.refresh(includeHistory: true)
+        }
+        XCTAssertTrue(viewModel.canLoadMoreHistory, "the first page, with more behind it")
 
         awaitSnapshot(from: viewModel) { viewModel.refresh(includeHistory: false) }
         XCTAssertTrue(viewModel.canLoadMoreHistory,
                       "a status-only refresh must carry the last answer forward")
         XCTAssertEqual(viewModel.commits.count, 2, "and must not disturb the page")
 
-        awaitSnapshot(from: viewModel) { viewModel.loadMoreHistory() }
-        XCTAssertEqual(viewModel.commits.count, 4, "the grown page")
+        awaitSnapshot(from: viewModel,
+                      satisfying: { viewModel.commits.count == 4 }) {
+            viewModel.loadMoreHistory()
+        }
         XCTAssertFalse(viewModel.canLoadMoreHistory, "nothing left to load")
     }
 
-    /// Runs `trigger` and returns once the resulting snapshot has been applied
-    /// on the main thread. `onStatusChange` is the view model's own
-    /// "a snapshot landed" callback, so this waits on the real signal rather
-    /// than on a sleep.
+    /// Runs `trigger` and returns once an applied snapshot satisfies
+    /// `isSatisfied`.
+    ///
+    /// Waiting on the *outcome* rather than on the next event is deliberate.
+    /// `onStatusChange` fires for every applied snapshot, so a snapshot already
+    /// in flight — or a watcher tick, in a test that starts one — could satisfy
+    /// a wait meant for the one `trigger` causes, and the assertions after it
+    /// would run against the state before the change. The default condition is
+    /// for the steps that have no state change to wait for.
     private func awaitSnapshot(from viewModel: RepoViewModel,
+                               satisfying isSatisfied: @escaping () -> Bool = { true },
                                _ trigger: () -> Void) {
         let applied = expectation(description: "snapshot applied")
         applied.assertForOverFulfill = false
-        viewModel.onStatusChange = { _ in applied.fulfill() }
+        viewModel.onStatusChange = { _ in
+            if isSatisfied() { applied.fulfill() }
+        }
         trigger()
         wait(for: [applied], timeout: 10)
         viewModel.onStatusChange = nil

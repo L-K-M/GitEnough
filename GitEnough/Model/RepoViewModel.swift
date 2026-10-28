@@ -25,10 +25,13 @@ public final class RepoViewModel: ObservableObject, Identifiable {
     /// was an unsynchronized race against every poll tick. Seeded in `init`,
     /// before any queue work exists to read it.
     private var historyLimit: Int
-    /// `canLoadMoreHistory`'s queue-side copy, for the same reason. A
+    /// `canLoadMoreHistory`'s queue-side copy, for the same reason: a
     /// history-less refresh must carry the last answer forward, and the only
-    /// value it may read to do that is one this queue owns; `apply` mirrors it
-    /// onto the published property for the UI.
+    /// value it may read to do that is one this queue owns.
+    ///
+    /// It never leaves the queue. The answer reaches the UI inside the
+    /// `Snapshot`, which `apply` publishes on main — reading this property
+    /// from there would be the same race in the other direction.
     private var queueCanLoadMore = false
     private var operationGate = RepoOperationGate()
 
@@ -292,13 +295,22 @@ public final class RepoViewModel: ObservableObject, Identifiable {
     }
 
     /// Runs a snapshot load on the queue and applies it on main.
-    private func collectAndApply(includeHistory: Bool) {
+    /// `beforeCollect` runs on the queue immediately before the snapshot, for
+    /// a caller that has to change queue-owned state and have *this* snapshot
+    /// see it — `loadMoreHistory` growing the page. It is a parameter rather
+    /// than something the caller does itself so there stays one collect-then-
+    /// apply pipeline: a second copy would silently miss whatever guard this
+    /// one grows next.
+    private func collectAndApply(includeHistory: Bool,
+                                 beforeCollect: (() -> Void)? = nil) {
         // Already on the queue when invoked from the watcher; hop if needed.
         if DispatchQueue.getSpecific(key: queueKey) != nil {
+            beforeCollect?()
             let snapshot = collectSnapshot(includeHistory: includeHistory)
             DispatchQueue.main.async { self.apply(snapshot) }
         } else {
             queue.async {
+                beforeCollect?()
                 let snapshot = self.collectSnapshot(includeHistory: includeHistory)
                 DispatchQueue.main.async { self.apply(snapshot) }
             }
@@ -318,10 +330,8 @@ public final class RepoViewModel: ObservableObject, Identifiable {
     /// it would also let a snapshot already in flight finish against the old
     /// limit and re-trim the list the click was meant to grow.
     public func loadMoreHistory() {
-        queue.async {
+        collectAndApply(includeHistory: true) {
             self.historyLimit += Self.historyPageSize
-            let snapshot = self.collectSnapshot(includeHistory: true)
-            DispatchQueue.main.async { self.apply(snapshot) }
         }
     }
 
