@@ -1669,12 +1669,17 @@ final class GitIntegrationTests: XCTestCase {
         try write("Title\n=======\nnot an angle marker\n", to: "setext.md")
         XCTAssertFalse(try client.fileHasConflictMarkers("setext.md", chunkSize: 2))
 
-        // A path that exists but cannot be read as a file still throws: the
-        // point of the scan is that a failure is never mistaken for "resolved".
-        try FileManager.default.createDirectory(
-            at: repoURL.appendingPathComponent("a-directory"),
-            withIntermediateDirectories: true)
-        XCTAssertThrowsError(try client.fileHasConflictMarkers("a-directory"))
+        // An open failure that is not absence still throws: the point of the
+        // scan is that a failure is never mistaken for "resolved". `a.txt` is a
+        // regular file from `setUp`, so a path *below* it is `ENOTDIR` — which
+        // both platforms report as a read error rather than as a missing file.
+        //
+        // Deliberately not a directory, which is the obvious choice and is not
+        // portable: measured, Linux's Foundation throws `NSCocoaErrorDomain`
+        // 256 opening one, while Darwin's opens it and reads happily, so the
+        // scan simply finds no markers there. That divergence predates the
+        // absence check this test guards, and is not what it is about.
+        XCTAssertThrowsError(try client.fileHasConflictMarkers("a.txt/nested.txt"))
     }
 
     /// A file that is not there has no markers — it is how a modify/delete
