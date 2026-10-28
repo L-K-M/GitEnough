@@ -1314,9 +1314,12 @@ final class GitIntegrationTests: XCTestCase {
 
         // Detached HEAD is the other shape the list renders, and it still
         // decorates one commit (as a bare "HEAD", with no arrow target).
+        // Pinned by hash as well as by count: a parser that marked *some*
+        // other single commit would otherwise pass.
         try run(["checkout", "--detach", "main~1"])
         let detached = try client.log(limit: 50).filter(\.isHead)
         XCTAssertEqual(detached.count, 1)
+        XCTAssertEqual(detached.first?.hash, try client.status().headHash)
     }
 
     /// A throwaway repository with an unborn HEAD, removed when the test ends.
