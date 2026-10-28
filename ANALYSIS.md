@@ -2625,7 +2625,15 @@ No error, no message, no row. The macOS front end reports it.
 ### o-X19 · Per-repository global CSS and settings handlers, never removed — S
 
 Leaks one `GtkCssProvider` and one handler per repository selected, for the life
-of the process.
+of the process. Three call sites, all needing the same fix: `HistoryPane.init`
+installs the `.commit-list` stylesheet on the **display** and a `Theme.onChange`
+handler, and each `DiffView.init` installs a second `Theme.onChange` handler, so
+a session that opens ten repositories carries ten of each. Bounded rather than
+unbounded — panes are cached per repository, not rebuilt per publish — but every
+theme change then iterates the whole list. **Fix:** give `Theme.onChange` and
+`UI.applyStyle` a cancellable handle and have the owners release it in `deinit`;
+the stylesheet itself should be installed once, statically, since it is not
+per-repository at all.
 
 ### o-X20 · The graph dot paints an opaque disc over the selection highlight — S
 
