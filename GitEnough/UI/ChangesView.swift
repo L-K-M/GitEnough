@@ -273,8 +273,7 @@ struct ChangesView: View {
                         Label("Generate", systemImage: "sparkles")
                     }
                 }
-                .disabled(viewModel.isGeneratingMessage || viewModel.isBusy
-                    || viewModel.status.staged.isEmpty)
+                .disabled(!viewModel.canGenerateCommitMessage)
                 .help("Write the commit message with the configured LLM (Settings → AI)")
 
                 if !viewModel.draftCommitMessage.isEmpty {
@@ -311,10 +310,10 @@ struct ChangesView: View {
                 }
                 .keyboardShortcut(.return, modifiers: .command)
                 .buttonStyle(.borderedProminent)
-                .disabled(viewModel.draftCommitMessage
-                    .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    || (!viewModel.amendLastCommit && viewModel.status.staged.isEmpty)
-                    || viewModel.isBusy)
+                // The predicate itself lives on the view model, so the GTK
+                // commit box cannot describe this button differently — which
+                // it did, and in both directions.
+                .disabled(!viewModel.canCommit)
             }
         }
         .padding(10)

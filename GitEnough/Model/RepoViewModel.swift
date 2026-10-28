@@ -930,6 +930,28 @@ public final class RepoViewModel: ObservableObject, Identifiable {
         }
     }
 
+    /// Whether Commit would do anything.
+    ///
+    /// A view-model property for the same reason `canPull` and
+    /// `canPushOrPublish` are: the decision is made once, so two front ends
+    /// cannot describe one button differently. They already had — the GTK box
+    /// gated Commit on the staged list alone, which offered the button with an
+    /// empty message (where `commit()` returns silently), offered it mid-fetch
+    /// (where the operation gate turns the click away just as silently), and
+    /// withheld it for the one commit that legitimately stages nothing: an
+    /// amend that only rewords the last message.
+    public var canCommit: Bool {
+        !draftCommitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && (amendLastCommit || !status.staged.isEmpty)
+            && !isBusy
+    }
+
+    /// Whether ✨ Generate has anything to send. An empty staged diff costs a
+    /// request and describes nothing, so it is not a message worth asking for.
+    public var canGenerateCommitMessage: Bool {
+        !isGeneratingMessage && !isBusy && !status.staged.isEmpty
+    }
+
     public func commit() {
         let message = draftCommitMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !message.isEmpty else { return }
