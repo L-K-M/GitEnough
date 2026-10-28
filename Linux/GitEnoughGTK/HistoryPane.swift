@@ -21,8 +21,9 @@ final class HistoryPane {
     private var isRebuilding = false
     /// Signature of the state the list was last built from, so a publish that
     /// didn't touch the history (a status poll, say) doesn't rebuild it and
-    /// throw away the user's selection and scroll position.
-    private var builtSignature: String = ""
+    /// throw away the user's selection and scroll position. `nil` until the
+    /// first build, which no real signature can equal.
+    private var builtSignature: Int?
 
     init(viewModel: RepoViewModel) {
         self.viewModel = viewModel
@@ -71,14 +72,35 @@ final class HistoryPane {
         updateDetail()
     }
 
-    /// Cheap identity for "the history as displayed": the loaded commits, the
-    /// lane layout they were laid out into, and which one is selected.
-    private func historySignature() -> String {
-        let head = viewModel.commits.first?.hash ?? "-"
-        let tail = viewModel.commits.last?.hash ?? "-"
-        return [head, tail, "\(viewModel.commits.count)",
-                "\(viewModel.layout.columnCount)",
-                "\(viewModel.canLoadMoreHistory)"].joined(separator: "/")
+    /// Identity for "the history as displayed" — everything a row draws.
+    ///
+    /// It used to be `[firstHash, lastHash, count, columnCount,
+    /// canLoadMoreHistory]`, which named none of the three things that move
+    /// *without* the commit set moving: `commit.decorations` (the ref chips),
+    /// `Commit.isHead` (derived from them — the HEAD double ring), and
+    /// `unpushedHashes` (whether a dot is hollow). So `git checkout
+    /// other-branch` left every loaded hash, the count and the lane count
+    /// identical, the list was not rebuilt, and the ring and chips stayed on
+    /// the branch you had just left — while the header bar beside them updated
+    /// correctly. Push and branch creation had the same shape.
+    ///
+    /// Hashing `Commit` whole is what keeps that from recurring: its synthesized
+    /// `Hashable` covers every stored property, decorations included, so a field
+    /// added to the row cannot be forgotten here. The lane layout needs no entry
+    /// of its own — `GraphLayout.layout(commits:)` is a pure function of exactly
+    /// this list, so identical commits mean an identical graph.
+    ///
+    /// Cheap enough for every publish: a few thousand hash combines against
+    /// rebuilding as many widget trees.
+    private func historySignature() -> Int {
+        var hasher = Hasher()
+        hasher.combine(viewModel.canLoadMoreHistory)
+        let unpushed = viewModel.unpushedHashes
+        for commit in viewModel.commits {
+            hasher.combine(commit)
+            hasher.combine(unpushed.contains(commit.hash))
+        }
+        return hasher.finalize()
     }
 
     private func rebuildCommitRows() {
