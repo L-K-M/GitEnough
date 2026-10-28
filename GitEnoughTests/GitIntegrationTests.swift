@@ -1668,7 +1668,20 @@ final class GitIntegrationTests: XCTestCase {
 
         try write("Title\n=======\nnot an angle marker\n", to: "setext.md")
         XCTAssertFalse(try client.fileHasConflictMarkers("setext.md", chunkSize: 2))
-        XCTAssertThrowsError(try client.fileHasConflictMarkers("missing.txt"))
+
+        // A path that exists but cannot be read as a file still throws: the
+        // point of the scan is that a failure is never mistaken for "resolved".
+        try FileManager.default.createDirectory(
+            at: repoURL.appendingPathComponent("a-directory"),
+            withIntermediateDirectories: true)
+        XCTAssertThrowsError(try client.fileHasConflictMarkers("a-directory"))
+    }
+
+    /// A file that is not there has no markers — it is how a modify/delete
+    /// conflict is resolved in favour of the deletion. Absence is the one case
+    /// the scan must *not* report as a failure.
+    func testConflictMarkerScanTreatsAMissingFileAsUnmarked() throws {
+        XCTAssertFalse(try client.fileHasConflictMarkers("missing.txt"))
     }
 
     func testMarkResolvedRefusesAFileThatStillHasMarkers() throws {
@@ -1679,6 +1692,35 @@ final class GitIntegrationTests: XCTestCase {
             XCTAssertTrue(error.localizedDescription.contains("still contains conflict markers"))
         }
         XCTAssertEqual(try client.conflictedPaths(), ["a.txt"])
+    }
+
+    /// Accepting the deletion is one of the two ways a modify/delete conflict
+    /// ends, and it leaves no file for the marker scan to open. "Mark Resolved"
+    /// used to report "no such file" there, so the conflict could not be
+    /// cleared from either front end — the same dead end an external merge tool
+    /// that resolves by deleting reached automatically, since `openMergeTool`
+    /// finishes through `markResolved`.
+    func testMarkResolvedAcceptsADeletionAsTheResolution() throws {
+        try run(["checkout", "-b", "deleting", "main"])
+        try run(["rm", "-q", "a.txt"])
+        try run(["commit", "-m", "Delete a.txt"])
+        try run(["checkout", "main"])
+        try write("one\nedited\n", to: "a.txt")
+        try run(["commit", "-am", "Edit a.txt"])
+        _ = try GitShell.shared.run(["-C", repoURL.path, "merge", "deleting"], in: nil)
+        XCTAssertEqual(try client.conflictedPaths(), ["a.txt"],
+                       "precondition: a modify/delete conflict")
+
+        // The user (or a merge tool) resolves it by accepting the deletion.
+        try FileManager.default.removeItem(at: repoURL.appendingPathComponent("a.txt"))
+
+        try client.markResolved(path: "a.txt")
+
+        XCTAssertTrue(try client.conflictedPaths().isEmpty,
+                      "the unmerged entry is cleared")
+        let status = try client.status()
+        XCTAssertEqual(status.staged.first { $0.path == "a.txt" }?.stagedStatus, .deleted,
+                       "and the deletion is staged, which is what git does here")
     }
 
     func testRebaseConflictDetectionResolutionAndContinue() throws {

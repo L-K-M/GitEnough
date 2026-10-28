@@ -1264,6 +1264,17 @@ public final class GitClient {
 
     /// Marks a conflicted path resolved (for when the user fixed it by hand or in
     /// a tool that didn't stage it).
+    ///
+    /// **Deleting the file is a resolution**, not a reason to refuse. A
+    /// modify/delete conflict (`u UD`/`u DU`) is resolved either by keeping the
+    /// surviving side or by accepting the deletion, and accepting it means the
+    /// file is gone — at which point the marker scan below used to throw
+    /// "no such file" and the conflict could not be cleared from the GUI at all.
+    /// git has no such objection: measured on 2.43, `git add -- <path>` on a
+    /// `u UD` entry whose file was removed exits 0 and stages the deletion
+    /// (`1 D. … <path>`). The same dead end was reached automatically whenever
+    /// an external merge tool resolved by deleting, since `openMergeTool`
+    /// finishes through here.
     public func markResolved(path: String) throws {
         if try fileHasConflictMarkers(path) {
             throw GitError(
@@ -1280,9 +1291,25 @@ public final class GitClient {
     /// git's "was it resolved?" prompt (which hits a headless EOF), so GitEnough
     /// verifies the file itself. Throws when the file can't be inspected so a
     /// read/permission failure can never be mistaken for a resolved conflict.
+    ///
+    /// **A file that is not there has no markers.** That is the one absence this
+    /// distinguishes from a failure: it is how a modify/delete conflict is
+    /// resolved in favour of the deletion, and how a merge tool that resolves by
+    /// deleting leaves the worktree. Every other open failure — a permissions
+    /// problem, an I/O error, a path that turned into a directory — still
+    /// throws, which is the property the doc above claims and this keeps.
     public func fileHasConflictMarkers(_ path: String, chunkSize: Int = 64 * 1024) throws -> Bool {
         let url = worktree.appendingPathComponent(path)
-        let handle = try FileHandle(forReadingFrom: url)
+        let handle: FileHandle
+        do {
+            handle = try FileHandle(forReadingFrom: url)
+        } catch {
+            // Checked after the failed open rather than before it: a pre-check
+            // would be a second filesystem call deciding what the first one
+            // already knows, and it would answer for a *different* moment.
+            guard !FileManager.default.fileExists(atPath: url.path) else { throw error }
+            return false
+        }
         defer { try? handle.close() }
         let opening = Array("<<<<<<<".utf8)
         let closing = Array(">>>>>>>".utf8)
