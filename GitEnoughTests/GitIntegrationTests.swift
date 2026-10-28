@@ -1294,6 +1294,31 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertTrue(try client.status().staged.contains { $0.path == "new.txt" })
     }
 
+    /// At most one loaded commit is HEAD, whatever else decorates the history.
+    ///
+    /// The history list leans on this: a row asks its own commit whether it is
+    /// the HEAD row rather than comparing its index against a scan of the whole
+    /// array, which is the same answer only because `.head` cannot decorate two
+    /// commits. Pinned against real `git log --decorate=full` output, with
+    /// branches and a tag spread across different commits so the assertion is
+    /// about HEAD rather than about a one-commit repository.
+    func testExactlyOneLoadedCommitCarriesTheHeadDecoration() throws {
+        try run(["tag", "v1", "main~1"])
+        try run(["branch", "spare", "main~2"])
+
+        let commits = try client.log(limit: 50)
+        let headCommits = commits.filter(\.isHead)
+        XCTAssertEqual(headCommits.count, 1,
+                       "HEAD decorates exactly one commit: \(commits.map(\.decorations))")
+        XCTAssertEqual(headCommits.first?.hash, try client.status().headHash)
+
+        // Detached HEAD is the other shape the list renders, and it still
+        // decorates one commit (as a bare "HEAD", with no arrow target).
+        try run(["checkout", "--detach", "main~1"])
+        let detached = try client.log(limit: 50).filter(\.isHead)
+        XCTAssertEqual(detached.count, 1)
+    }
+
     /// A throwaway repository with an unborn HEAD, removed when the test ends.
     ///
     /// `git init` runs before the client is built: nothing in `GitClient.init`
