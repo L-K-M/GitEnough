@@ -280,8 +280,23 @@ public struct FileChange: Identifiable, Hashable {
         return [path]
     }
 
-    /// The most relevant status for display.
-    public var displayStatus: Status { stagedStatus ?? unstagedStatus ?? .modified }
+    /// The status letter for the side being rendered.
+    ///
+    /// Porcelain v2 reports the index and the worktree as two separate columns,
+    /// and a partially staged path is present in *both* lists — so a row has to
+    /// show the column belonging to the list it is in. Collapsing them to
+    /// "staged first" made the unstaged row describe the staged change: `AM`
+    /// read *Added* while the unstaged change was a modification, and `MD` and
+    /// `AD` read *Modified*/*Added* for a file that is gone from disk. The badge
+    /// is the row's only status signal and it is coloured by this value, so a
+    /// deletion rendered green.
+    ///
+    /// `.modified` is the fallback for a column holding `.`, which only happens
+    /// when the caller asks for a side this change is not on — the lists never
+    /// do, since a path reaches a list precisely because its column is set.
+    public func displayStatus(staged: Bool) -> Status {
+        (staged ? stagedStatus : unstagedStatus) ?? .modified
+    }
 }
 
 /// Parsed `git status --porcelain=v2 --branch`.
