@@ -948,6 +948,12 @@ public final class RepoViewModel: ObservableObject, Identifiable {
 
     /// Whether ✨ Generate has anything to send. An empty staged diff costs a
     /// request and describes nothing, so it is not a message worth asking for.
+    ///
+    /// That deliberately excludes an amend-only reword, where `canCommit` is
+    /// true and this is not: the patch `generateCommitMessage` sends *is* the
+    /// staged diff, so there would be nothing in the request to write a message
+    /// about. Offering it there would need the last commit's own diff as the
+    /// input instead, which is a different feature rather than a relaxed guard.
     public var canGenerateCommitMessage: Bool {
         !isGeneratingMessage && !isBusy && !status.staged.isEmpty
     }

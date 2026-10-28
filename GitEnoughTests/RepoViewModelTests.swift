@@ -8,7 +8,10 @@ final class RepoViewModelTests: XCTestCase {
         // An isolated suite: the commit-box draft persists through
         // `UserDefaults`, and a test must not write into the developer's own.
         let name = "RepoViewModelTests-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: name) ?? .standard
+        // Force-unwrapped on purpose: falling back to `.standard` would read
+        // and write the developer's real defaults, which is the one thing this
+        // helper exists to prevent. Failing loudly is the safer direction.
+        let defaults = UserDefaults(suiteName: name)!
         addTeardownBlock { defaults.removePersistentDomain(forName: name) }
         return RepoViewModel(repo: Repository(path: "/nonexistent/gitenough-test",
                                               name: "test"),
