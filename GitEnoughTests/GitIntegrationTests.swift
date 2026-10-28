@@ -1294,6 +1294,58 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertTrue(try client.status().staged.contains { $0.path == "new.txt" })
     }
 
+    // MARK: - History pagination across the queue boundary
+
+    /// `historyLimit` and the "is there more?" answer are read by
+    /// `collectSnapshot`, which runs on the repo's serial queue — and the
+    /// watcher calls it there directly. Growing the page from the main thread
+    /// was therefore an unsynchronized write against every poll tick, and a
+    /// history-less refresh read the published flag off-thread to carry it
+    /// forward. Both now belong to the queue; this drives the user-visible
+    /// contract they exist for.
+    func testLoadMoreHistoryGrowsThePageAndKeepsTheFlagAcrossAHistorylessRefresh() throws {
+        // setUp builds four commits: c1, c2 on feature, c3, and the merge.
+        let viewModel = RepoViewModel(repo: Repository(url: repoURL),
+                                      historyLimit: 2,
+                                      defaults: isolatedDefaults())
+
+        awaitSnapshot(from: viewModel) { viewModel.refresh(includeHistory: true) }
+        XCTAssertEqual(viewModel.commits.count, 2, "the first page")
+        XCTAssertTrue(viewModel.canLoadMoreHistory)
+
+        awaitSnapshot(from: viewModel) { viewModel.refresh(includeHistory: false) }
+        XCTAssertTrue(viewModel.canLoadMoreHistory,
+                      "a status-only refresh must carry the last answer forward")
+        XCTAssertEqual(viewModel.commits.count, 2, "and must not disturb the page")
+
+        awaitSnapshot(from: viewModel) { viewModel.loadMoreHistory() }
+        XCTAssertEqual(viewModel.commits.count, 4, "the grown page")
+        XCTAssertFalse(viewModel.canLoadMoreHistory, "nothing left to load")
+    }
+
+    /// Runs `trigger` and returns once the resulting snapshot has been applied
+    /// on the main thread. `onStatusChange` is the view model's own
+    /// "a snapshot landed" callback, so this waits on the real signal rather
+    /// than on a sleep.
+    private func awaitSnapshot(from viewModel: RepoViewModel,
+                               _ trigger: () -> Void) {
+        let applied = expectation(description: "snapshot applied")
+        applied.assertForOverFulfill = false
+        viewModel.onStatusChange = { _ in applied.fulfill() }
+        trigger()
+        wait(for: [applied], timeout: 10)
+        viewModel.onStatusChange = nil
+    }
+
+    /// A per-test suite, so a view model's draft persistence never touches the
+    /// developer's real `UserDefaults`.
+    private func isolatedDefaults() -> UserDefaults {
+        let name = "GitEnoughTests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name) ?? .standard
+        addTeardownBlock { defaults.removePersistentDomain(forName: name) }
+        return defaults
+    }
+
     /// A throwaway repository with an unborn HEAD, removed when the test ends.
     ///
     /// `git init` runs before the client is built: nothing in `GitClient.init`
