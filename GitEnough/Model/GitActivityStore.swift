@@ -114,17 +114,44 @@ public final class GitActivityStore: ObservableObject {
         encoder.outputFormatting = .sortedKeys
         guard var line = try? encoder.encode(item) else { return }
         line.append(0x0A) // \n
-        let directory = fileURL.deletingLastPathComponent()
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        prepareDirectory()
         // Create-only when missing; never truncate an existing file — if it
         // exists but can't be opened, skip (persistence is best-effort).
         if !FileManager.default.fileExists(atPath: fileURL.path) {
-            try? line.write(to: fileURL, options: .atomic)
+            // `createFile` rather than `Data.write(to:options:.atomic)`, so the
+            // mode is the one `open(2)` uses at creation and the file is never
+            // momentarily group- and world-readable. An atomic write cannot do
+            // that: it creates a temp file at the default mode, fills it, and
+            // renames — so the content exists at `0644 & ~umask` first.
+            FileManager.default.createFile(atPath: fileURL.path, contents: line,
+                                           attributes: Self.ownerOnly)
         } else if let handle = try? FileHandle(forWritingTo: fileURL) {
             defer { try? handle.close() }
             _ = try? handle.seekToEnd()
             try? handle.write(contentsOf: line)
         }
+    }
+
+    /// Owner-only, for both the history file and the directory holding it.
+    ///
+    /// The file records every git argv this app has run and the stderr tail of
+    /// every failure: branch and stash names, remote URLs, hook output. It was
+    /// written at `0644 & ~umask`, which on macOS sits inside a `0700`
+    /// Application Support directory but on Linux sits inside `~/.local/share`,
+    /// mode `0755` — genuinely readable by every account on the machine.
+    ///
+    /// The directory matters as much as the file: `compactDisk` rewrites
+    /// atomically, and the temp file an atomic write leaves behind for the
+    /// length of the rename is not covered by the file's own mode.
+    private static let ownerOnly: [FileAttributeKey: Any] = [.posixPermissions: 0o600]
+    private static let ownerOnlyDirectory: [FileAttributeKey: Any] = [.posixPermissions: 0o700]
+
+    private func prepareDirectory() {
+        dispatchPrecondition(condition: .onQueue(ioQueue))
+        let directory = fileURL.deletingLastPathComponent()
+        try? FileManager.default.createDirectory(
+            at: directory, withIntermediateDirectories: true,
+            attributes: Self.ownerOnlyDirectory)
     }
 
     /// Keeps the newest `capacity` finished items on disk (running items are
@@ -137,10 +164,15 @@ public final class GitActivityStore: ObservableObject {
         let finished = storage.filter { !$0.entry.isRunning }.suffix(capacity)
         let data = finished.compactMap { try? encoder.encode($0) }
             .reduce(Data()) { $0 + $1 + Data([0x0A]) }
-        let directory = fileURL.deletingLastPathComponent()
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        prepareDirectory()
         // Atomic: a crash mid-rewrite must not leave a truncated history.
         try? data.write(to: fileURL, options: .atomic)
+        // The rename is what loses the mode — the replacement is a *new* inode
+        // created at the default mode, so a file that was `0600` before
+        // compaction is `0644 & ~umask` after it, and so is a mode the user set
+        // by hand. Re-applying is the whole reason this line exists; the
+        // owner-only directory above covers the temp file in between.
+        try? FileManager.default.setAttributes(Self.ownerOnly, ofItemAtPath: fileURL.path)
     }
 
     /// Appended-since-last-compaction count. Compaction rewrites the whole
