@@ -4,7 +4,9 @@ import Foundation
 /// deletion/addition lines, `emphasizedRanges` marks the changed words within the
 /// line (GitHub-style intraline highlighting); empty when nothing is emphasized.
 public struct DiffLine: Equatable {
-    public enum Kind: Equatable {
+    /// `Hashable` so a renderer can key its per-kind resources (GTK text tags,
+    /// a colour table) off the kind directly instead of re-switching per line.
+    public enum Kind: Hashable {
         case fileHeader   // diff --git, index, ---/+++ paths
         case hunk         // @@ … @@
         case addition
