@@ -52,6 +52,23 @@ final class GitModelsTests: XCTestCase {
         XCTAssertEqual(addedThenDeleted.displayStatus(staged: false), .deleted)
     }
 
+    /// The `.modified` fallback is a documented contract, so it is pinned
+    /// rather than left to the doc comment. The lists never ask for a side a
+    /// change is not on — a path reaches a list precisely because that column
+    /// is set — but the method is public, and a caller that does ask gets a
+    /// plausible letter rather than a crash.
+    func testAskingForASideTheChangeIsNotOnFallsBackToModified() {
+        let untrackedOnly = FileChange(
+            path: "c.txt", originalPath: nil,
+            stagedStatus: nil, unstagedStatus: .untracked)
+        XCTAssertEqual(untrackedOnly.displayStatus(staged: true), .modified)
+
+        let stagedOnly = FileChange(
+            path: "d.txt", originalPath: nil,
+            stagedStatus: .added, unstagedStatus: nil)
+        XCTAssertEqual(stagedOnly.displayStatus(staged: false), .modified)
+    }
+
     func testSingleSidedChangesShowThatSidesLetter() {
         let stagedOnly = FileChange(
             path: "a.txt", originalPath: nil,
