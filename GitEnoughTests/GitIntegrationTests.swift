@@ -1679,9 +1679,20 @@ final class GitIntegrationTests: XCTestCase {
 
     /// A file that is not there has no markers — it is how a modify/delete
     /// conflict is resolved in favour of the deletion. Absence is the one case
-    /// the scan must *not* report as a failure.
+    /// the scan must *not* report as a failure, and it is recognised by the
+    /// open error's own code rather than by a second look at the filesystem:
+    /// `fileExists` answers false for more than absence, so keying off it would
+    /// forgive the very failures the scan exists to surface.
     func testConflictMarkerScanTreatsAMissingFileAsUnmarked() throws {
         XCTAssertFalse(try client.fileHasConflictMarkers("missing.txt"))
+
+        // A dangling symlink reports the same ENOENT, which is the right
+        // answer: `open` follows the link and finds nothing, and a symlink
+        // holds no markers either way.
+        try FileManager.default.createSymbolicLink(
+            atPath: repoURL.appendingPathComponent("dangling.txt").path,
+            withDestinationPath: "nowhere.txt")
+        XCTAssertFalse(try client.fileHasConflictMarkers("dangling.txt"))
     }
 
     func testMarkResolvedRefusesAFileThatStillHasMarkers() throws {
