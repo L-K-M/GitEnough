@@ -159,9 +159,12 @@ final class GitActivityStoreTests: XCTestCase {
         XCTAssertEqual(try mode(of: fileURL), 0o600, "mode after compaction")
     }
 
-    /// A mode the user set by hand must survive compaction too — the rename
-    /// replaces the inode, so without re-applying it silently reverts.
-    func testCompactionDoesNotWidenAManuallyTightenedMode() throws {
+    /// A mode the user set by hand must *survive* compaction, not merely stay
+    /// below the floor — the rename replaces the inode, so the mode has to be
+    /// read before the rewrite and restored after it. Asserted as equality on
+    /// purpose: `<= 0o600` would pass for an implementation that silently
+    /// re-opened a frozen file for writing.
+    func testCompactionPreservesAManuallyTightenedMode() throws {
         let store = makeStore(capacity: 1)
         store.record(.finished(entry("status")), repoName: "Repo", repoPath: "/tmp/repo")
         drain(store)
@@ -173,8 +176,35 @@ final class GitActivityStoreTests: XCTestCase {
                          repoName: "Repo", repoPath: "/tmp/repo")
         }
         drain(store)
-        XCTAssertLessThanOrEqual(try mode(of: fileURL), 0o600,
-                                 "compaction must not re-open the file to other users")
+        XCTAssertEqual(try mode(of: fileURL), 0o400,
+                       "compaction must neither widen nor round up a frozen file")
+    }
+
+    /// An upgrade has to heal what an older build left behind.
+    ///
+    /// Nothing else would: the create branch never runs again for an existing
+    /// file, and compaction only fires once fifty entries have been evicted —
+    /// so the users with the longest history would keep a world-readable one
+    /// the longest. `createDirectory`'s attributes are no help either; they
+    /// apply only when it actually creates the directory.
+    func testRecordingTightensAHistoryLeftLooseByAnOlderBuild() throws {
+        let store = makeStore()
+        store.record(.finished(entry("status")), repoName: "Repo", repoPath: "/tmp/repo")
+        drain(store)
+
+        // Put the file and its directory back the way an older build left them.
+        try FileManager.default.setAttributes([.posixPermissions: 0o644],
+                                              ofItemAtPath: fileURL.path)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755],
+            ofItemAtPath: fileURL.deletingLastPathComponent().path)
+
+        store.record(.finished(entry("fetch")), repoName: "Repo", repoPath: "/tmp/repo")
+        drain(store)
+
+        XCTAssertEqual(try mode(of: fileURL), 0o600, "the file heals on the next append")
+        XCTAssertEqual(try mode(of: fileURL.deletingLastPathComponent()), 0o700,
+                       "and so does the directory that covers the compaction temp file")
     }
 
     private func mode(of url: URL) throws -> Int {

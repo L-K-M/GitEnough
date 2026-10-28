@@ -129,6 +129,13 @@ public final class GitActivityStore: ObservableObject {
             defer { try? handle.close() }
             _ = try? handle.seekToEnd()
             try? handle.write(contentsOf: line)
+            // A history written by an older build is already on disk at
+            // `0644 & ~umask`, and nothing else would ever narrow it: the
+            // create branch above is skipped forever, and compaction only runs
+            // once fifty entries have been evicted. Without this, upgrading
+            // leaves the exposure open indefinitely for exactly the users who
+            // have the longest history.
+            Self.tightenMode(of: fileURL.path, to: Self.ownerOnlyMask)
         }
     }
 
@@ -143,8 +150,28 @@ public final class GitActivityStore: ObservableObject {
     /// The directory matters as much as the file: `compactDisk` rewrites
     /// atomically, and the temp file an atomic write leaves behind for the
     /// length of the rename is not covered by the file's own mode.
-    private static let ownerOnly: [FileAttributeKey: Any] = [.posixPermissions: 0o600]
-    private static let ownerOnlyDirectory: [FileAttributeKey: Any] = [.posixPermissions: 0o700]
+    private static let ownerOnlyMask = 0o600
+    private static let ownerOnlyDirectoryMask = 0o700
+    private static let ownerOnly: [FileAttributeKey: Any] =
+        [.posixPermissions: ownerOnlyMask]
+    private static let ownerOnlyDirectory: [FileAttributeKey: Any] =
+        [.posixPermissions: ownerOnlyDirectoryMask]
+
+    /// Narrows an existing path's mode, never widening it.
+    ///
+    /// Masking rather than assigning, and the difference is the whole point:
+    /// this file's job is to keep the history owner-only, not to decide that
+    /// someone who ran `chmod 400` on it wants write access back. `0644`
+    /// becomes `0600`; `0400` stays `0400`.
+    private static func tightenMode(of path: String, to mask: Int) {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: path),
+              let current = (attributes[.posixPermissions] as? NSNumber)?.intValue
+        else { return }
+        let narrowed = current & mask
+        guard narrowed != current else { return }
+        try? FileManager.default.setAttributes([.posixPermissions: narrowed],
+                                               ofItemAtPath: path)
+    }
 
     private func prepareDirectory() {
         dispatchPrecondition(condition: .onQueue(ioQueue))
@@ -152,6 +179,12 @@ public final class GitActivityStore: ObservableObject {
         try? FileManager.default.createDirectory(
             at: directory, withIntermediateDirectories: true,
             attributes: Self.ownerOnlyDirectory)
+        // `createDirectory` applies its attributes only when it *creates* the
+        // directory — measured: re-running it with `0700` over an existing
+        // `0755` leaves `0755`. So the mode an older build left behind would
+        // never be narrowed, and that directory is what covers the temp file an
+        // atomic compaction leaves behind for the length of its rename.
+        Self.tightenMode(of: directory.path, to: Self.ownerOnlyDirectoryMask)
     }
 
     /// Keeps the newest `capacity` finished items on disk (running items are
@@ -165,14 +198,21 @@ public final class GitActivityStore: ObservableObject {
         let data = finished.compactMap { try? encoder.encode($0) }
             .reduce(Data()) { $0 + $1 + Data([0x0A]) }
         prepareDirectory()
+        // Read before the rewrite: the rename swaps in a new inode, so the old
+        // mode is unrecoverable afterwards and a hand-set `0400` would be
+        // rounded back up to this file's own `0600` floor.
+        let previous = (try? FileManager.default.attributesOfItem(atPath: fileURL.path))
+            .flatMap { ($0[.posixPermissions] as? NSNumber)?.intValue }
         // Atomic: a crash mid-rewrite must not leave a truncated history.
         try? data.write(to: fileURL, options: .atomic)
         // The rename is what loses the mode — the replacement is a *new* inode
         // created at the default mode, so a file that was `0600` before
-        // compaction is `0644 & ~umask` after it, and so is a mode the user set
-        // by hand. Re-applying is the whole reason this line exists; the
-        // owner-only directory above covers the temp file in between.
-        try? FileManager.default.setAttributes(Self.ownerOnly, ofItemAtPath: fileURL.path)
+        // compaction is `0644 & ~umask` after it. Restoring the narrower of the
+        // two is the whole reason this line exists; the owner-only directory
+        // above covers the temp file in between.
+        let restored = (previous ?? Self.ownerOnlyMask) & Self.ownerOnlyMask
+        try? FileManager.default.setAttributes([.posixPermissions: restored],
+                                               ofItemAtPath: fileURL.path)
     }
 
     /// Appended-since-last-compaction count. Compaction rewrites the whole
