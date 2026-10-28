@@ -1353,7 +1353,10 @@ final class GitIntegrationTests: XCTestCase {
     /// developer's real `UserDefaults`.
     private func isolatedDefaults() -> UserDefaults {
         let name = "GitEnoughTests-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: name) ?? .standard
+        // Force-unwrapped on purpose: falling back to `.standard` would read
+        // and write the developer's real defaults, which is the one thing this
+        // helper exists to prevent.
+        let defaults = UserDefaults(suiteName: name)!
         addTeardownBlock { defaults.removePersistentDomain(forName: name) }
         return defaults
     }
