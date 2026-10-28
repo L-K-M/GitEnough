@@ -1310,6 +1310,8 @@ final class GitIntegrationTests: XCTestCase {
             return hasher.finalize()
         }
 
+        // `client.log` passes `--all`, which is what makes the checkout below
+        // leave the commit set alone — without it the precondition fails.
         let before = try client.log(limit: 50)
         try run(["checkout", "feature"])
         let after = try client.log(limit: 50)
@@ -1321,6 +1323,13 @@ final class GitIntegrationTests: XCTestCase {
                           after.filter(\.isHead).map(\.hash),
                           "precondition: HEAD moved")
         XCTAssertNotEqual(signature(before), signature(after))
+
+        // The other direction, which the cache depends on just as much: two
+        // loads of an unchanged repository must hash the same. A stored
+        // property on `Commit` that varied per load — a fetch timestamp, a
+        // cached stat — would hash differently every time and quietly turn the
+        // skip into "rebuild every publish", with nothing failing.
+        XCTAssertEqual(signature(after), signature(try client.log(limit: 50)))
     }
 
     /// A throwaway repository with an unborn HEAD, removed when the test ends.

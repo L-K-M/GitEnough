@@ -86,15 +86,24 @@ final class HistoryPane {
     ///
     /// Hashing `Commit` whole is what keeps that from recurring: its synthesized
     /// `Hashable` covers every stored property, decorations included, so a field
-    /// added to the row cannot be forgotten here. The lane layout needs no entry
-    /// of its own — `GraphLayout.layout(commits:)` is a pure function of exactly
-    /// this list, so identical commits mean an identical graph.
+    /// added to the row cannot be forgotten here. The lane count rides along as
+    /// insurance rather than necessity — `GraphLayout.layout(commits:)` takes
+    /// the commit list and nothing else today, so identical commits already
+    /// mean an identical graph, but that invariant lives in another module and
+    /// a signature that depends on it silently is how this pane went stale in
+    /// the first place. Combining it cannot cause a spurious rebuild while the
+    /// invariant holds, and restores the old guarantee if it ever stops.
     ///
     /// Cheap enough for every publish: a few thousand hash combines against
     /// rebuilding as many widget trees.
     private func historySignature() -> Int {
+        // `Hasher`'s seed is fixed for the life of the process — the same
+        // property that lets `Set` and `Dictionary` work — so signatures from
+        // separate calls are comparable. They are *not* comparable across
+        // launches, which is why `builtSignature` is only ever in memory.
         var hasher = Hasher()
         hasher.combine(viewModel.canLoadMoreHistory)
+        hasher.combine(viewModel.layout.columnCount)
         let unpushed = viewModel.unpushedHashes
         for commit in viewModel.commits {
             hasher.combine(commit)
