@@ -314,6 +314,7 @@ struct ChangesView: View {
                 .disabled(viewModel.draftCommitMessage
                     .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                     || (!viewModel.amendLastCommit && viewModel.status.staged.isEmpty)
+                    || !viewModel.mergeState.allowsManualCommit
                     || viewModel.isBusy)
             }
         }
