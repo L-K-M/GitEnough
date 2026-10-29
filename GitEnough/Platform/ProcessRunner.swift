@@ -35,8 +35,15 @@ public enum ProcessRunner {
             case .launchFailed(let name, let underlying):
                 return "Could not run \(name): \(underlying)"
             case .timedOut(let name, let seconds):
-                return "\(name) did not finish within \(Int(seconds)) seconds."
+                return "\(name) did not finish within \(Self.describe(seconds)) seconds."
             }
+        }
+
+        /// Whole seconds without a decimal point, fractions with one — so a
+        /// sub-second bound does not report itself as "0 seconds".
+        private static func describe(_ seconds: TimeInterval) -> String {
+            let tenths = (seconds * 10).rounded() / 10
+            return tenths == tenths.rounded() ? "\(Int(tenths))" : "\(tenths)"
         }
     }
 
@@ -145,11 +152,27 @@ public enum ProcessRunner {
             // exists to end; they finish on their own when the pipes close.
             throw RunError.timedOut(executable.lastPathComponent, seconds: timeout)
         }
-        if timeout == nil { exited.wait() }
         // Cheap once the process has exited, and it is what makes
         // `terminationStatus` safe to read.
-        process.waitUntilExit()
-        group.wait()
+        if let timeout {
+            process.waitUntilExit()
+            // The child is gone, but its pipes can outlive it: a helper that
+            // spawned a daemon leaves that daemon holding the write ends, so
+            // the readers may never see EOF. An unbounded wait here would put
+            // back the unbounded wait the timeout exists to remove.
+            //
+            // On expiry the boxes are deliberately left unread — a reader is
+            // still writing one, and a partial read must never pass for the
+            // whole. `SecretService.read` hands this stdout back as an API key;
+            // half a key is worse than an error.
+            guard group.wait(timeout: .now() + terminationGrace) == .success else {
+                throw RunError.timedOut(executable.lastPathComponent, seconds: timeout)
+            }
+        } else {
+            exited.wait()
+            process.waitUntilExit()
+            group.wait()
+        }
 
         return Result(stdout: out.value,
                       stderr: String(decoding: err.value, as: UTF8.self)

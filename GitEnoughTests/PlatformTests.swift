@@ -102,6 +102,41 @@ final class ProcessRunnerTests: XCTestCase {
         XCTAssertEqual(result.exitCode, 0)
     }
 
+    /// A timeout has to bound the whole call, not just the child's lifetime.
+    /// `sh` backgrounds a long `sleep` — which inherits the stdout and stderr
+    /// pipes — then execs `echo` and is done in milliseconds. The pipes stay
+    /// open behind it, so a drain that waits for EOF waits forever.
+    ///
+    /// Measured on Linux (corelibs-foundation, Swift 6.2.1): all three
+    /// grandchild shapes below leave `Process` itself reporting the child as
+    /// still running, so the bound that actually fires is the one on the child,
+    /// not the one on the drain. The drain bound is depth for the platforms
+    /// where `terminationHandler` fires on process death alone. Either way the
+    /// contract this pins is the same: with a timeout set, `run` comes back.
+    func testATimeoutBoundsTheWholeCallNotJustTheChild() {
+        for script in ["sleep 300 & exec echo done",
+                       "setsid sleep 300 & exec echo done",
+                       "setsid sh -c 'sleep 300' & exec echo done"] {
+            let start = Date()
+            _ = try? ProcessRunner.run(URL(fileURLWithPath: "/bin/sh"),
+                                       ["-c", script], timeout: 1)
+            XCTAssertLessThan(Date().timeIntervalSince(start), 15,
+                              "run() never returned for: \(script)")
+        }
+    }
+
+    /// `Int(0.5)` is 0, and "did not finish within 0 seconds" reads as a bug in
+    /// the timeout rather than a report of it.
+    func testSubSecondTimeoutsAreNotReportedAsZero() {
+        let message = ProcessRunner.RunError
+            .timedOut("secret-tool", seconds: 0.5).errorDescription
+        XCTAssertEqual(message, "secret-tool did not finish within 0.5 seconds.")
+
+        let whole = ProcessRunner.RunError
+            .timedOut("secret-tool", seconds: 60).errorDescription
+        XCTAssertEqual(whole, "secret-tool did not finish within 60 seconds.")
+    }
+
     // MARK: - PATH lookup
 
     func testFindsACommandOnTheSearchPath() {
