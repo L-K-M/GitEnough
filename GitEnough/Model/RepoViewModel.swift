@@ -30,6 +30,8 @@ public final class RepoViewModel: ObservableObject, Identifiable {
     private let queueKey = DispatchSpecificKey<UInt8>()
 
     public static let historyPageSize = 300
+    private static let rebaseCommitRefusal =
+        "Can't commit while resolving a rebase. Use git rebase --continue, --skip, or --abort."
 
     // MARK: - Published state
 
@@ -227,12 +229,16 @@ public final class RepoViewModel: ObservableObject, Identifiable {
         let remotes = (try? client.remotes()) ?? []
         let stash = (try? client.stashList()) ?? []
         let operation = client.inProgressOperation()
+        let isEditingRebaseCommit = operation == .rebase && client.isEditingRebaseCommit()
         var operationLabel: String?
         if let operation { operationLabel = client.operationLabel(for: operation) }
         let mergeState = MergeState(
             operation: operation,
             operationLabel: operationLabel,
-            conflictedFiles: (try? client.conflictedPaths()) ?? []
+            conflictedFiles: (try? client.conflictedPaths()) ?? [],
+            isEditingRebaseCommit: isEditingRebaseCommit,
+            rebaseSkipTarget: operation == .rebase && !isEditingRebaseCommit
+                ? client.rebaseSkipTarget(headHash: status.headHash) : nil
         )
         var commits: [Commit]?
         var layout: GraphLayout?
@@ -641,6 +647,18 @@ public final class RepoViewModel: ObservableObject, Identifiable {
         }
     }
 
+    func skipRebaseCommit(_ expected: RebaseSkipTarget) {
+        perform("Skipping rebase commit…") { client in
+            guard client.inProgressOperation() == .rebase,
+                  !client.isEditingRebaseCommit(),
+                  client.rebaseSkipTarget(headHash: try client.status().headHash) == expected else {
+                throw GitError(message: "Can't skip: the rebase changed. Review it and try again.",
+                               exitCode: -1)
+            }
+            try client.rebaseSkip()
+        }
+    }
+
     /// Aborts whichever sequencer operation is in progress.
     public func abortOperation() {
         switch mergeState.operation {
@@ -931,6 +949,10 @@ public final class RepoViewModel: ObservableObject, Identifiable {
     }
 
     public func commit() {
+        guard mergeState.allowsManualCommit else {
+            errorMessage = Self.rebaseCommitRefusal
+            return
+        }
         let message = draftCommitMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !message.isEmpty else { return }
         // Amending an unborn HEAD dies on git's "You have nothing to amend" —
@@ -941,7 +963,13 @@ public final class RepoViewModel: ObservableObject, Identifiable {
         perform("Committing…", onSuccess: {
             self.draftCommitMessage = ""
             self.amendLastCommit = false
-        }) { try $0.commit(message: message, amend: amend) }
+        }) { client in
+            // A terminal may have started a rebase since the last UI snapshot.
+            guard client.inProgressOperation() != .rebase || client.isEditingRebaseCommit() else {
+                throw GitError(message: Self.rebaseCommitRefusal, exitCode: -1)
+            }
+            try client.commit(message: message, amend: amend)
+        }
     }
 
     // MARK: Stash

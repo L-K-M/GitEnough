@@ -370,7 +370,11 @@ public struct MergeState: Equatable {
     /// Human label, e.g. "Merge branch 'feature'" or "Rebasing main".
     public var operationLabel: String?
     public var conflictedFiles: [String]
+    var isEditingRebaseCommit = false
+    var rebaseSkipTarget: RebaseSkipTarget? = nil
 
     public var isInProgress: Bool { operation != nil }
     public var isResolvingConflicts: Bool { !conflictedFiles.isEmpty }
+    // Interactive edit stops need ordinary commits; conflict replay needs Continue.
+    public var allowsManualCommit: Bool { operation != .rebase || isEditingRebaseCommit }
 }
