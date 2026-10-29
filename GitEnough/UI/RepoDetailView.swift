@@ -17,6 +17,8 @@ struct RepoDetailView: View {
     /// Confirms aborting an in-progress merge/rebase/cherry-pick/revert —
     /// the single most destructive unguarded action in the banner.
     @State private var confirmingAbort = false
+    @State private var confirmingRebaseSkip = false
+    @State private var pendingRebaseSkip: RebaseSkipTarget?
     @State private var showingForcePushConfirmation = false
     /// The exact command the open confirmation dialog is showing. Compared
     /// against a freshly resolved one when the user confirms, so a refresh
@@ -211,6 +213,18 @@ struct RepoDetailView: View {
             Text("Aborting returns the repository to the state before the \(inProgressNoun) started. Any conflict resolutions you haven't committed will be lost.")
         }
 
+        .confirmationDialog("Skip the current rebase commit?",
+                            isPresented: $confirmingRebaseSkip,
+                            titleVisibility: .visible,
+                            presenting: pendingRebaseSkip) { target in
+            Button("Skip Commit", role: .destructive) {
+                viewModel.skipRebaseCommit(target)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
+            Text("This drops the replayed commit and discards uncommitted changes, then continues the rebase.")
+        }
+
         // `presenting:` rather than reading `pendingForcePush` inside the
         // closures. Both are captured from the same snapshot, so the two
         // spellings agree today — but only because SwiftUI happens to run a
@@ -374,6 +388,13 @@ struct RepoDetailView: View {
                 confirmingAbort = true
             }
             .disabled(viewModel.isBusy)
+            if let target = state.rebaseSkipTarget {
+                Button("Skip Commit…") {
+                    pendingRebaseSkip = target
+                    confirmingRebaseSkip = true
+                }
+                .disabled(viewModel.isBusy)
+            }
             if state.conflictedFiles.isEmpty {
                 Button(state.operation == .merge ? "Commit Merge" : "Continue \(noun)") {
                     viewModel.continueOperation()
