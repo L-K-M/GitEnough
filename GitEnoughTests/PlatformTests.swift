@@ -137,6 +137,20 @@ final class ProcessRunnerTests: XCTestCase {
         XCTAssertEqual(whole, "secret-tool did not finish within 60 seconds.")
     }
 
+    /// A drain that overruns is not the child overrunning, and saying so with
+    /// the caller's timeout would name a bound that never fired: a 60 s keyring
+    /// call that gives up on a 2 s drain would claim it waited 60.
+    func testADrainOverrunIsNotReportedAsTheChildOverrunning() {
+        let message = ProcessRunner.RunError
+            .outputNeverEnded("secret-tool", seconds: 2).errorDescription
+
+        XCTAssertEqual(message, "secret-tool finished, but its output never ended — "
+                           + "gave up after 2 seconds. Something it started is still "
+                           + "holding its pipes open.")
+        XCTAssertFalse(message?.contains("did not finish") ?? true,
+                       "the child did finish; only its output did not")
+    }
+
     // MARK: - PATH lookup
 
     func testFindsACommandOnTheSearchPath() {

@@ -76,6 +76,10 @@ public enum SecretService {
                 timeout: operationTimeout)
         } catch ProcessRunner.RunError.timedOut {
             throw SecretServiceError.timedOut
+        } catch ProcessRunner.RunError.outputNeverEnded {
+            // Different cause, same remedy for the person at the keyboard: the
+            // keyring did not see the write through.
+            throw SecretServiceError.timedOut
         }
         guard result.succeeded else {
             throw SecretServiceError.storeFailed(result.stderr)

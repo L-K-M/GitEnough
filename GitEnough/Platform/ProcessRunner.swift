@@ -27,6 +27,11 @@ public enum ProcessRunner {
         case notFound(String)
         case launchFailed(String, underlying: String)
         case timedOut(String, seconds: TimeInterval)
+        /// The child exited, but its pipes stayed open behind it — something it
+        /// started still holds the write ends. Separate from `timedOut` because
+        /// the child is not the thing that overran, and because the bound that
+        /// fired is the drain's, not the caller's.
+        case outputNeverEnded(String, seconds: TimeInterval)
 
         public var errorDescription: String? {
             switch self {
@@ -36,6 +41,10 @@ public enum ProcessRunner {
                 return "Could not run \(name): \(underlying)"
             case .timedOut(let name, let seconds):
                 return "\(name) did not finish within \(Self.describe(seconds)) seconds."
+            case .outputNeverEnded(let name, let seconds):
+                return "\(name) finished, but its output never ended — gave up after "
+                    + "\(Self.describe(seconds)) seconds. Something it started is still "
+                    + "holding its pipes open."
             }
         }
 
@@ -166,7 +175,8 @@ public enum ProcessRunner {
             // whole. `SecretService.read` hands this stdout back as an API key;
             // half a key is worse than an error.
             guard group.wait(timeout: .now() + terminationGrace) == .success else {
-                throw RunError.timedOut(executable.lastPathComponent, seconds: timeout)
+                throw RunError.outputNeverEnded(executable.lastPathComponent,
+                                                seconds: terminationGrace)
             }
         } else {
             exited.wait()
