@@ -5,17 +5,25 @@ import XCTest
 final class AppStateSelectionTests: XCTestCase {
     private var defaults: UserDefaults!
     private var suiteName = ""
+    private var activityDirectory: URL!
+    private var activityStore: GitActivityStore!
 
     override func setUpWithError() throws {
         try super.setUpWithError()
         suiteName = "GitEnough.AppStateSelectionTests.\(UUID().uuidString)"
         defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defaults.removePersistentDomain(forName: suiteName)
+        activityDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(suiteName)
+        try FileManager.default.createDirectory(at: activityDirectory, withIntermediateDirectories: true)
+        activityStore = GitActivityStore(fileURL: activityDirectory.appendingPathComponent("activity.jsonl"))
     }
 
     override func tearDownWithError() throws {
         defaults?.removePersistentDomain(forName: suiteName)
         defaults = nil
+        activityStore = nil
+        if let activityDirectory { try FileManager.default.removeItem(at: activityDirectory) }
+        activityDirectory = nil
         try super.tearDownWithError()
     }
 
@@ -24,7 +32,7 @@ final class AppStateSelectionTests: XCTestCase {
         seedRepositories([repo])
         defaults.set("/tmp/example/./repo", forKey: AppState.selectedRepositoryKey)
 
-        let state = AppState(defaults: defaults)
+        let state = AppState(defaults: defaults, activityStore: activityStore)
 
         XCTAssertEqual(state.selectedRepoPath, repo.path)
         XCTAssertEqual(state.selectedRepository, repo)
@@ -39,7 +47,7 @@ final class AppStateSelectionTests: XCTestCase {
         seedRepositories(repos)
         defaults.set("/tmp/no-longer-registered", forKey: AppState.selectedRepositoryKey)
 
-        let state = AppState(defaults: defaults)
+        let state = AppState(defaults: defaults, activityStore: activityStore)
 
         XCTAssertEqual(state.selectedRepoPath, repos[0].path)
         XCTAssertEqual(state.selectedRepository, repos[0])
@@ -53,7 +61,7 @@ final class AppStateSelectionTests: XCTestCase {
         ]
         seedRepositories(repos)
 
-        let state = AppState(defaults: defaults)
+        let state = AppState(defaults: defaults, activityStore: activityStore)
 
         XCTAssertEqual(state.selectedRepoPath, repos[0].path)
         XCTAssertEqual(state.selectedRepository, repos[0])
@@ -63,8 +71,10 @@ final class AppStateSelectionTests: XCTestCase {
     func testInitializationWithEmptyStoreClearsStaleSelection() {
         defaults.set("/tmp/no-longer-registered", forKey: AppState.selectedRepositoryKey)
 
-        let state = AppState(defaults: defaults)
+        let state = AppState(defaults: defaults, activityStore: activityStore)
 
+        XCTAssertTrue(state.activityStore === activityStore,
+                      "The state must use the injected diagnostics store")
         XCTAssertNil(state.selectedRepoPath)
         XCTAssertNil(state.selectedRepository)
         XCTAssertNil(defaults.string(forKey: AppState.selectedRepositoryKey))

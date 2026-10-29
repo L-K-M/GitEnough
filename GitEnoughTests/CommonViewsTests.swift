@@ -1,7 +1,7 @@
 // CommonViews is SwiftUI, so it lives outside the SwiftPM library and there
 // is nothing here for a Linux build to exercise. Compiled by the Xcode
 // project, where the views it tests actually exist.
-#if canImport(AppKit)
+#if canImport(AppKit) && !SWIFT_PACKAGE
 import AppKit
 import XCTest
 @testable import GitEnough

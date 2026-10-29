@@ -5,11 +5,11 @@ sibling apps (Zap, Jetty, TopDrawer):
 
 | Workflow | Trigger | What it does |
 |---|---|---|
-| [`ci.yml`](workflows/ci.yml) | every pull request + push to `main` | Two jobs. **Build & Test** (`macos-14`): `xcodebuild clean test` with **no code signing** — builds the app and runs the XCTest suite (parsers, graph layout, and a full end-to-end test that builds a real repo in a temp dir). **Core + GTK (Ubuntu)** (`swift:6.2.1-noble`): `swift build` + `swift test` for the platform-independent library, then builds the GTK 4 front end, so neither half of the Linux port can rot |
+| [`ci.yml`](workflows/ci.yml) | every pull request + push to `main` | Two jobs. **Build & Test** (`macos-26`): `xcodebuild clean test` with **no code signing** — builds the app and runs the XCTest suite (parsers, graph layout, and a full end-to-end test that builds a real repo in a temp dir). **Core + GTK (Ubuntu)** (`swift:6.2.1-noble`): `swift build` + `swift test` for the platform-independent library, then builds the GTK 4 front end, so neither half of the Linux port can rot |
 | [`release.yml`](workflows/release.yml) | pushing a `v*` tag | Release build **without Developer ID signing**, ad-hoc signed so it launches on Apple Silicon, packaged as **DMG + zip**, published as a GitHub Release, then **byte-verified** by re-downloading the assets |
 | [`zai-code-review.yml`](workflows/zai-code-review.yml) | PR opened/synchronized | Reviews the diff with **Z.AI GLM** (`L-K-M/zai-code-review`, needs the `ZAI_API_KEY` repo secret; no-op without it) |
 
-Both macOS jobs run on `macos-14` with a **pinned Xcode** (`16.2`), the Linux
+Both macOS jobs run on `macos-26` with a **pinned Xcode** (`16.2`), the Linux
 job runs in a **pinned official Swift image**, and every third-party action is
 **pinned to a commit SHA**. There are no third-party Swift dependencies, so
 there's nothing to cache.

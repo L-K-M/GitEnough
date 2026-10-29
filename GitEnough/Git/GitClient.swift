@@ -1426,7 +1426,7 @@ public final class GitClient {
     public func stashList() throws -> [StashEntry] {
         let f = GitParsers.fieldSep
         let result = try runReadChecked(
-            ["-C", worktree.path, "stash", "list", "--format=%gd\(f)%gs"], in: nil)
+            ["-C", worktree.path, "stash", "list", "--format=%gd\(f)%gs\(f)%H"], in: nil)
         return GitParsers.parseStash(result.stdout)
     }
 
@@ -1448,6 +1448,29 @@ public final class GitClient {
     public func stashDrop(index: Int) throws {
         try runChecked(
             ["-C", worktree.path, "stash", "drop", "stash@{\(index)}"], in: nil)
+    }
+
+    /// Resolve a captured selection on the repository queue immediately before
+    /// using it. A window's confirmation can outlive a pop/drop in another
+    /// window, so the captured reflog index alone cannot identify its target.
+    public func stashApply(_ entry: StashEntry, pop: Bool) throws {
+        try stashApply(index: currentStashIndex(for: entry), pop: pop)
+    }
+
+    public func stashDrop(_ entry: StashEntry) throws {
+        try stashDrop(index: currentStashIndex(for: entry))
+    }
+
+    private func currentStashIndex(for entry: StashEntry) throws -> Int {
+        guard let objectID = entry.objectID else {
+            throw GitError(message: "Can't identify this stash. Refresh and select it again.",
+                           exitCode: -1)
+        }
+        guard let current = try stashList().first(where: { $0.objectID == objectID }) else {
+            throw GitError(message: "This stash is no longer in the repository. Refresh and select a remaining stash.",
+                           exitCode: -1)
+        }
+        return current.index
     }
 
     // MARK: - Commit-targeted actions

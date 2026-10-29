@@ -65,7 +65,8 @@ private struct DiffLineView: View {
 
     var body: some View {
         lineText
-            .font(.system(size: 11, design: .monospaced))
+            .fixedSize(horizontal: true, vertical: false)
+            .font(.system(.callout, design: .monospaced))
             .foregroundStyle(foreground)
             .padding(.horizontal, 8)
             .frame(maxWidth: .infinity, alignment: .leading)

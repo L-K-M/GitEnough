@@ -6,11 +6,14 @@ import UniformTypeIdentifiers
 /// (current branch, dirty marker, ahead/behind) and drag-and-drop import.
 struct SidebarView: View {
 
-    @EnvironmentObject var appState: AppState
+    @EnvironmentObject var windowState: RepositoryWindowState
     @EnvironmentObject var store: RepoStore
     @AppStorage("sidebarSortOrder") private var sortOrderRaw = SidebarSortOrder.manual.rawValue
     @AppStorage("sidebarFilter") private var filterRaw = SidebarFilter.all.rawValue
     @State private var filterText = ""
+    @State private var listFocusRequest = UUID()
+    @FocusState private var searchFocused: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var sortOrder: SidebarSortOrder {
         SidebarSortOrder(rawValue: sortOrderRaw) ?? .manual
@@ -22,11 +25,12 @@ struct SidebarView: View {
 
     private var selection: Binding<String?> {
         Binding(
-            get: { appState.selectedRepoPath },
+            get: { windowState.selectedRepoPath },
             set: { path in
                 if let path, let repo = store.repositories.first(where: { $0.path == path }) {
-                    appState.select(repo)
-                } else if path == nil, let current = appState.selectedRepoPath,
+                    windowState.select(repo)
+                    listFocusRequest = UUID()
+                } else if path == nil, let current = windowState.selectedRepoPath,
                           !store.repositories.contains(where: { $0.path == current }) {
                     // The selected repo is gone for good (removed) — clear the
                     // dangling selection. A transient nil (the List briefly
@@ -34,7 +38,7 @@ struct SidebarView: View {
                     // this List has no deselect gesture, and letting it through
                     // wiped the selection and — with a logical filter active —
                     // the clicked repo's row along with it.
-                    appState.selectedRepoPath = nil
+                    windowState.selectedRepoPath = nil
                 }
             }
         )
@@ -52,7 +56,7 @@ struct SidebarView: View {
             // clean (nothing ahead, behind, or uncommitted) and would otherwise
             // vanish from the sidebar while its history shows in the detail pane.
             repos = repos.filter { repo in
-                repo.path == appState.selectedRepoPath || matchesLogicalFilter(repo)
+                repo.path == windowState.selectedRepoPath || matchesLogicalFilter(repo)
             }
         }
         if !filterText.isEmpty {
@@ -94,7 +98,7 @@ struct SidebarView: View {
     private var hiddenByFilterCount: Int {
         guard sidebarFilter != .all, filterText.isEmpty else { return 0 }
         return store.repositories.filter { repo in
-            repo.path != appState.selectedRepoPath && !matchesLogicalFilter(repo)
+            repo.path != windowState.selectedRepoPath && !matchesLogicalFilter(repo)
         }.count
     }
 
@@ -126,49 +130,16 @@ struct SidebarView: View {
             }
             .listStyle(.sidebar)
             .searchable(text: $filterText, placement: .sidebar, prompt: "Filter repositories")
+            .searchFocused($searchFocused)
+            .onChange(of: windowState.sidebarSearchRequest) { _, _ in searchFocused = true }
             .onDrop(of: [UTType.fileURL], isTargeted: nil, perform: handleDrop)
-            .onChange(of: appState.lastAddedRepoPath) { _, newPath in
+            .onChange(of: windowState.lastAddedRepoPath) { _, newPath in
                 reveal(newPath, with: proxy)
-            }
-            .toolbar {
-                ToolbarItem(placement: .primaryAction) {
-                    Menu {
-                        Picker("Show", selection: $filterRaw) {
-                            ForEach(SidebarFilter.allCases) { filter in
-                                Text(filter.displayName).tag(filter.rawValue)
-                            }
-                        }
-                    } label: {
-                        Image(systemName: sidebarFilter == .all
-                              ? "line.3.horizontal.decrease.circle"
-                              : "line.3.horizontal.decrease.circle.fill")
-                    }
-                    .help("Filter repositories by state")
-                }
-                ToolbarItem(placement: .primaryAction) {
-                    Menu {
-                        Picker("Sort by", selection: $sortOrderRaw) {
-                            ForEach(SidebarSortOrder.allCases) { order in
-                                Text(order.rawValue).tag(order.rawValue)
-                            }
-                        }
-                    } label: {
-                        Image(systemName: "arrow.up.arrow.down")
-                    }
-                    .help("Sort repositories")
-                }
-                ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        appState.showingAddRepository = true
-                    } label: {
-                        Image(systemName: "plus")
-                    }
-                    .help("Add a repository (⌘O)")
-                }
             }
             .safeAreaInset(edge: .bottom) {
                 if !store.repositories.isEmpty {
-                    VStack(spacing: 2) {
+                    VStack(spacing: 6) {
+                        sidebarControls
                         // Always-visible counterpart to the old list footer: a
                         // repo that "vanished" is usually just filter-hidden,
                         // and a hint below the fold of a long list explains
@@ -180,7 +151,7 @@ struct SidebarView: View {
                             .buttonStyle(.link)
                             .font(.caption)
                         }
-                        Text("Drop a folder to add it")
+                        Text("Drop a repository folder here")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -192,14 +163,54 @@ struct SidebarView: View {
         }
     }
 
+    private var sidebarControls: some View {
+        HStack(spacing: 12) {
+            Menu {
+                Button("Open Repository…") { windowState.openRepository() }
+                Button("Clone Repository…") { windowState.showingAddRepository = true }
+            } label: {
+                Image(systemName: "plus")
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .accessibilityLabel("Add Repository")
+            .help("Open or clone a repository")
+
+            Spacer()
+
+            Menu {
+                Picker("Show", selection: $filterRaw) {
+                    ForEach(SidebarFilter.allCases) { filter in
+                        Text(filter.displayName).tag(filter.rawValue)
+                    }
+                }
+                Divider()
+                Picker("Sort by", selection: $sortOrderRaw) {
+                    ForEach(SidebarSortOrder.allCases) { order in
+                        Text(order.rawValue).tag(order.rawValue)
+                    }
+                }
+            } label: {
+                Label("Repository Options", systemImage: sidebarFilter == .all
+                      ? "line.3.horizontal.decrease.circle"
+                      : "line.3.horizontal.decrease.circle.fill")
+                    .labelStyle(.iconOnly)
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .help("Filter and sort repositories")
+        }
+        .padding(.horizontal, 14)
+    }
+
     /// Scrolls the sidebar so a freshly added repository is on screen. Deferred
     /// one runloop turn so the List has actually inserted the row first, and
     /// clears the cue afterwards so re-adding the same repository re-reveals it.
     private func reveal(_ path: String?, with proxy: ScrollViewProxy) {
         guard let path else { return }
         DispatchQueue.main.async {
-            withAnimation { proxy.scrollTo(path, anchor: .center) }
-            appState.lastAddedRepoPath = nil
+            withAnimation(reduceMotion ? nil : .default) { proxy.scrollTo(path, anchor: .center) }
+            windowState.lastAddedRepoPath = nil
         }
     }
 
@@ -211,6 +222,7 @@ struct SidebarView: View {
             store.toggleStar(repo)
         }
         .tag(repo.path)
+        .nativeListRowFocus(isSelected: windowState.selectedRepoPath == repo.path, focusRequest: listFocusRequest)
         .contextMenu {
             Button(store.isStarred(repo) ? "Unstar" : "Star") {
                 store.toggleStar(repo)
@@ -223,7 +235,7 @@ struct SidebarView: View {
             }
             Divider()
             Button("Remove from GitEnough") {
-                appState.remove(repo)
+                windowState.remove(repo)
             }
         }
     }
@@ -241,7 +253,7 @@ struct SidebarView: View {
                 }
                 guard let url else { return }
                 DispatchQueue.main.async {
-                    appState.addDroppedRepository(at: url)
+                    windowState.addDroppedRepository(at: url)
                 }
             }
         }
@@ -263,7 +275,7 @@ private struct SidebarRow: View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 6) {
                 Text(repo.name)
-                    .font(.headline)
+                    .font(.body.weight(.medium))
                     .lineLimit(1)
                 if !summary.isValid {
                     Image(systemName: "exclamationmark.triangle")
