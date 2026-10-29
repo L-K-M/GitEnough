@@ -35,6 +35,7 @@ struct GitEnoughApp: App {
         .commands {
             AppCommands(appState: appState, appDelegate: appDelegate,
                         recentRepositories: recentRepositories)
+            CommitMessageUndoCommands()
             SelectionCommands()
             HistoryCommands()
             SidebarCommands()

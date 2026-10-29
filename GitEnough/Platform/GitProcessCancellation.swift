@@ -18,18 +18,20 @@ final class GitProcessCancellation: @unchecked Sendable {
     init(process: Process) {
         self.process = process
         processID = process.processIdentifier
-        let group = getpgid(processID)
-        processGroup = group == processID && group != getpgrp() ? group : nil
+        let group = processID > 1 ? getpgid(processID) : -1
+        processGroup = group > 1 && group == processID && group != getpgrp() ? group : nil
     }
 
     func cancel() {
         lock.lock()
         defer { lock.unlock() }
-        guard active else { return }
+        guard active, processID > 1 else { return }
+        active = false
         if let processGroup {
             // The verified group also covers children still holding stdout or
             // stderr after git exits. KILL is deliberate: a transport may ignore
-            // TERM, and clone writes only into an owned temporary directory.
+            // TERM. Current callers cancel clones only: new targets use owned
+            // staging; existing empty targets retain any partial contents.
             _ = kill(-processGroup, SIGKILL)
         } else if process.isRunning {
             // Do not send a group signal if a runtime did not isolate it.

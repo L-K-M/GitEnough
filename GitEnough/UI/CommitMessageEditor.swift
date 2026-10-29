@@ -28,17 +28,25 @@ struct CommitMessageEditor: NSViewRepresentable {
         private var isApplyingReplacement = false
         private var compositionBase: String?
         private var compositionFinishScheduled = false
+        private weak var observedWindow: NSWindow?
+        private var windowObservers: [NSObjectProtocol] = []
+        private var isPresentingSheet = false
         private lazy var textUndoManager = CurrentDraftUndoManager(isCurrent: { [weak self] in
             guard let self, let textView = self.textView else { return false }
             return !textView.hasMarkedText() && self.parent.text == textView.string
         }, didApply: { [weak self] in
             guard let self, let textView = self.textView else { return }
             self.parent.text = textView.string
+            self.parent.controller.refresh()
         })
 
         init(_ parent: CommitMessageEditor) {
             self.parent = parent
             lastFocusRequest = parent.focusRequest
+        }
+
+        deinit {
+            windowObservers.forEach(NotificationCenter.default.removeObserver)
         }
 
         func makeScrollView() -> NSScrollView {
@@ -67,10 +75,16 @@ struct CommitMessageEditor: NSViewRepresentable {
             view.delegate = self
             view.onCompositionBegan = { [weak self] in self?.beginComposition() }
             view.onCompositionEnded = { [weak self] in self?.scheduleCompositionFinish() }
-            view.onMovedToWindow = { [weak self] in self?.focusIfRequested() }
+            view.onMovedToWindow = { [weak self] in
+                self?.observeWindow()
+                self?.focusIfRequested()
+                self?.parent.controller.refresh()
+            }
+            view.onResponderChanged = { [weak self] in self?.parent.controller.refresh() }
             textView = view
             parent.controller.coordinator = self
             scrollView.documentView = view
+            parent.controller.refresh()
             return scrollView
         }
 
@@ -83,6 +97,7 @@ struct CommitMessageEditor: NSViewRepresentable {
         }
 
         func textDidChange(_ notification: Notification) {
+            defer { parent.controller.refresh() }
             guard let view = textView, !view.hasMarkedText() else { return }
             if compositionBase != nil && !isApplyingReplacement {
                 scheduleCompositionFinish()
@@ -92,6 +107,7 @@ struct CommitMessageEditor: NSViewRepresentable {
         }
 
         func synchronizeText() {
+            defer { parent.controller.refresh() }
             guard let view = textView, view.string != parent.text, !view.hasMarkedText(),
                   compositionBase == nil else { return }
             // Another window or a successful commit changed the shared draft.
@@ -109,6 +125,44 @@ struct CommitMessageEditor: NSViewRepresentable {
             lastFocusRequest = parent.focusRequest
             window.makeFirstResponder(view)
         }
+
+        var undoState: CommitMessageUndoState {
+            CommitMessageUndoState(isFocused: textView.map {
+                guard let window = $0.window else { return false }
+                return window.isKeyWindow && !isPresentingSheet && window.attachedSheet == nil
+                    && window.firstResponder === $0
+            } ?? false,
+                                   canUndo: textUndoManager.canUndo, canRedo: textUndoManager.canRedo,
+                                   undoTitle: textUndoManager.undoMenuItemTitle,
+                                   redoTitle: textUndoManager.redoMenuItemTitle)
+        }
+
+        private func observeWindow() {
+            guard observedWindow !== textView?.window else { return }
+            windowObservers.forEach(NotificationCenter.default.removeObserver)
+            windowObservers.removeAll()
+            observedWindow = textView?.window
+            isPresentingSheet = observedWindow?.attachedSheet != nil
+            guard let window = observedWindow else { return }
+            // A sheet keeps the parent's first responder. Remove our menu
+            // replacement while another window owns the keyboard so the sheet's
+            // native text field receives Undo, then restore it on return.
+            let notifications: [Notification.Name] = [NSWindow.didBecomeKeyNotification,
+                NSWindow.didResignKeyNotification, NSWindow.willBeginSheetNotification,
+                NSWindow.didEndSheetNotification]
+            windowObservers = notifications.map { name in
+                NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) {
+                    [weak self, weak window] notification in
+                    guard let self, let window, notification.object as? NSWindow === window else { return }
+                    if name == NSWindow.willBeginSheetNotification { self.isPresentingSheet = true }
+                    if name == NSWindow.didEndSheetNotification { self.isPresentingSheet = false }
+                    self.parent.controller.refresh()
+                }
+            }
+        }
+
+        func undo() { textUndoManager.undo() }
+        func redo() { textUndoManager.redo() }
 
         func finishEditing() {
             guard let view = textView else { return }
@@ -168,20 +222,52 @@ struct CommitMessageEditor: NSViewRepresentable {
             textUndoManager.setActionName(actionName)
             textUndoManager.endUndoGrouping()
             view.breakUndoCoalescing()
+            parent.controller.refresh()
         }
     }
 }
 
 /// Only the initiating editor receives an accepted generation's undo record.
 /// Keeping the editor weak lets a closed window finish generation safely.
-final class CommitMessageUndoController {
+struct CommitMessageUndoState: Equatable {
+    var isFocused = false
+    var canUndo = false
+    var canRedo = false
+    var undoTitle = "Undo"
+    var redoTitle = "Redo"
+}
+
+final class CommitMessageUndoController: ObservableObject {
     weak var coordinator: CommitMessageEditor.Coordinator?
+    @Published private(set) var state = CommitMessageUndoState()
+    private var refreshScheduled = false
 
     func applyGenerated(_ replacement: CommitMessageReplacement) {
         coordinator?.applyGenerated(replacement)
     }
 
     func finishEditing() { coordinator?.finishEditing() }
+    func undo() {
+        guard coordinator?.undoState.isFocused == true else { return }
+        coordinator?.undo()
+    }
+    func redo() {
+        guard coordinator?.undoState.isFocused == true else { return }
+        coordinator?.redo()
+    }
+
+    func refresh() {
+        guard !refreshScheduled else { return }
+        refreshScheduled = true
+        // Focus can change inside NSViewRepresentable.updateNSView. Publish
+        // after that update instead of mutating SwiftUI state during layout.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.refreshScheduled = false
+            let current = self.coordinator?.undoState ?? CommitMessageUndoState()
+            if self.state != current { self.state = current }
+        }
+    }
 }
 
 private final class CurrentDraftUndoManager: UndoManager {
@@ -212,22 +298,9 @@ final class CommitTextView: NSTextView {
     var onCompositionBegan: (() -> Void)?
     var onCompositionEnded: (() -> Void)?
     var onMovedToWindow: (() -> Void)?
+    var onResponderChanged: (() -> Void)?
     private weak var validatedUndoItem: NSMenuItem?
     private weak var validatedRedoItem: NSMenuItem?
-
-    @objc func undo(_ sender: Any?) { undoManager?.undo() }
-    @objc func redo(_ sender: Any?) { undoManager?.redo() }
-
-    override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        let modifiers = event.modifierFlags.intersection([.command, .shift, .option, .control])
-        guard window?.firstResponder === self,
-              event.charactersIgnoringModifiers?.lowercased() == "z",
-              modifiers == .command || modifiers == [.command, .shift] else {
-            return super.performKeyEquivalent(with: event)
-        }
-        let action = modifiers.contains(.shift) ? #selector(redo(_:)) : #selector(undo(_:))
-        return tryToPerform(action, with: nil)
-    }
 
     override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
         if let menuItem = item as? NSMenuItem, let enabled = validateUndoItem(menuItem) {
@@ -237,22 +310,28 @@ final class CommitTextView: NSTextView {
     }
 
     override func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
-        validateUndoItem(menuItem) ?? super.validateMenuItem(menuItem)
+        return validateUndoItem(menuItem) ?? super.validateMenuItem(menuItem)
     }
 
     private func validateUndoItem(_ item: NSMenuItem) -> Bool? {
         guard let manager = undoManager else { return nil }
-        if item.action == #selector(undo(_:)) {
+        if item.action == NSSelectorFromString("undo:") {
             validatedUndoItem = item
             item.title = manager.undoMenuItemTitle
             return manager.canUndo
         }
-        if item.action == #selector(redo(_:)) {
+        if item.action == NSSelectorFromString("redo:") {
             validatedRedoItem = item
             item.title = manager.redoMenuItemTitle
             return manager.canRedo
         }
         return nil
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let focused = super.becomeFirstResponder()
+        if focused { onResponderChanged?() }
+        return focused
     }
 
     override func resignFirstResponder() -> Bool {
@@ -263,6 +342,7 @@ final class CommitTextView: NSTextView {
             validatedUndoItem?.title = manager.undoMenuTitle(forUndoActionName: "")
             validatedRedoItem?.title = manager.redoMenuTitle(forUndoActionName: "")
         }
+        if resigned { onResponderChanged?() }
         return resigned
     }
 

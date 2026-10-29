@@ -13,7 +13,7 @@ struct ChangesView: View {
     @State private var listFocusRequest = UUID()
     @StateObject private var selectionModel = ChangesSelectionModel()
     @State private var messageFocusRequest = UUID()
-    @State private var messageUndoController = CommitMessageUndoController()
+    @StateObject private var messageUndoController = CommitMessageUndoController()
     @FocusState private var stashMessageFocused: Bool
     @State private var fileToDiscard: FileChange?
     @State private var showingStashSheet = false
@@ -133,6 +133,7 @@ struct ChangesView: View {
                 selectionModel.select(updated, in: viewModel)
             }
         }
+        .focusedSceneObject(messageUndoController.state.isFocused ? messageUndoController : nil)
         .focusedSceneValue(\.changesActions,
                            windowState.isPresentingSheet
                            || showingStashSheet || showingAmendPushedConfirmation || fileToDiscard != nil

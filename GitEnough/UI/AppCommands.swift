@@ -33,7 +33,7 @@ struct AppCommands: Commands {
                 .disabled(sheetPresented)
             Menu("Open Recent") {
                 ForEach(recentURLs, id: \.self) { url in
-                    Button(url.lastPathComponent) {
+                    Button(recentMenuTitle(for: url)) {
                         appDelegate.application(NSApplication.shared, open: [url])
                     }
                     .help(url.path)
@@ -128,5 +128,12 @@ struct AppCommands: Commands {
             Button("Git Activity History") { openWindow(id: "git-activity") }
                 .keyboardShortcut("a", modifiers: [.shift, .command])
         }
+    }
+
+    private func recentMenuTitle(for url: URL) -> String {
+        let name = url.lastPathComponent
+        guard recentURLs.filter({ $0.lastPathComponent == name }).count > 1 else { return name }
+        let parent = (url.deletingLastPathComponent().path as NSString).abbreviatingWithTildeInPath
+        return "\(name) (\(parent))"
     }
 }

@@ -21,6 +21,21 @@ final class CommitMessageEditorTests: XCTestCase {
         XCTAssertEqual(fixture.draft.value, "fix: Use the generated draft")
     }
 
+    func testNamedUndoSurvivesTheDefaultEventLoopGrouping() throws {
+        let fixture = try EditorFixture("Original", groupsByEvent: true)
+        fixture.generate("Generated")
+        let eventEnded = expectation(description: "Native event undo group closed")
+        _ = Timer.scheduledTimer(withTimeInterval: 0.02, repeats: false) { _ in eventEnded.fulfill() }
+        wait(for: [eventEnded], timeout: 3)
+
+        XCTAssertEqual(fixture.undo.undoMenuItemTitle, "Undo Generate Commit Message")
+        fixture.undo.undo()
+        XCTAssertEqual(fixture.draft.value, "Original")
+        XCTAssertEqual(fixture.undo.redoMenuItemTitle, "Redo Generate Commit Message")
+        fixture.undo.redo()
+        XCTAssertEqual(fixture.draft.value, "Generated")
+    }
+
     func testNativeMenuValidationNamesGeneratedUndoAndRedo() throws {
         let fixture = try EditorFixture("Original")
         fixture.generate("Generated")
@@ -42,34 +57,6 @@ final class CommitMessageEditorTests: XCTestCase {
         XCTAssertEqual(copyItem.title, "Copy Selection")
     }
 
-    func testFocusedNativeEditorHandlesStandardUndoAndRedoKeyEquivalents() throws {
-        _ = NSApplication.shared
-        let fixture = try EditorFixture("Original")
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 360, height: 120),
-                              styleMask: [], backing: .buffered, defer: false)
-        window.contentView = fixture.scrollView
-        XCTAssertTrue(window.makeFirstResponder(fixture.view))
-        fixture.generate("Generated")
-
-        let undoEvent = try XCTUnwrap(NSEvent.keyEvent(
-            with: .keyDown, location: .zero, modifierFlags: .command,
-            timestamp: 0, windowNumber: window.windowNumber, context: nil,
-            characters: "z", charactersIgnoringModifiers: "z", isARepeat: false, keyCode: 6))
-        XCTAssertTrue(fixture.view.performKeyEquivalent(with: undoEvent))
-        XCTAssertEqual(fixture.draft.value, "Original")
-
-        let redoEvent = try XCTUnwrap(NSEvent.keyEvent(
-            with: .keyDown, location: .zero, modifierFlags: [.command, .shift],
-            timestamp: 1, windowNumber: window.windowNumber, context: nil,
-            characters: "Z", charactersIgnoringModifiers: "Z", isARepeat: false, keyCode: 6))
-        XCTAssertTrue(fixture.view.performKeyEquivalent(with: redoEvent))
-        XCTAssertEqual(fixture.draft.value, "Generated")
-
-        XCTAssertTrue(window.makeFirstResponder(window))
-        XCTAssertFalse(fixture.view.performKeyEquivalent(with: undoEvent),
-                       "The editor must not intercept Undo when another responder has focus")
-    }
-
     func testNamedMenuTitlesAreClearedWhenAnotherControlTakesFocus() throws {
         _ = NSApplication.shared
         let fixture = try EditorFixture("Original")
@@ -84,6 +71,101 @@ final class CommitMessageEditorTests: XCTestCase {
 
         XCTAssertTrue(window.makeFirstResponder(window))
         XCTAssertEqual(item.title, fixture.undo.undoMenuTitle(forUndoActionName: ""))
+    }
+
+    func testCommandBridgeTracksNativeFocusAndNamedUndoState() async throws {
+        _ = NSApplication.shared
+        let fixture = try EditorFixture("Original")
+        let window = KeyStateWindow(contentRect: NSRect(x: 0, y: 0, width: 360, height: 120),
+                                    styleMask: .titled, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = fixture.scrollView
+        window.setKeyState(true)
+        XCTAssertTrue(window.makeFirstResponder(fixture.view))
+        fixture.generate("Generated")
+        await drainMain()
+        XCTAssertTrue(fixture.controller.state.isFocused)
+        XCTAssertEqual(fixture.controller.state.undoTitle, "Undo Generate Commit Message")
+        XCTAssertTrue(fixture.controller.state.canUndo)
+
+        fixture.controller.undo()
+        await drainMain()
+        XCTAssertEqual(fixture.draft.value, "Original")
+        XCTAssertEqual(fixture.controller.state.redoTitle, "Redo Generate Commit Message")
+
+        XCTAssertTrue(window.makeFirstResponder(window))
+        await drainMain()
+        XCTAssertFalse(fixture.controller.state.isFocused)
+        fixture.controller.redo()
+        XCTAssertEqual(fixture.draft.value, "Original",
+                       "A stale command callback must not edit a field that no longer owns focus")
+    }
+
+    func testResigningKeyWindowDropsTheComposerCommandBridgeWithoutChangingItsDraft() async throws {
+        _ = NSApplication.shared
+        let fixture = try EditorFixture("Original")
+        let parent = KeyStateWindow(contentRect: NSRect(x: 0, y: 0, width: 360, height: 120),
+                                    styleMask: .titled, backing: .buffered, defer: false)
+        parent.isReleasedWhenClosed = false
+        defer { parent.close() }
+        parent.contentView = fixture.scrollView
+        parent.setKeyState(true)
+        XCTAssertTrue(parent.makeFirstResponder(fixture.view))
+        fixture.generate("Generated")
+        await drainMain()
+        XCTAssertTrue(fixture.controller.state.isFocused)
+
+        parent.setKeyState(false)
+        await drainMain()
+        XCTAssertTrue(parent.firstResponder === fixture.view,
+                      "A parent keeps its first responder when a sheet or another window takes the keyboard")
+        XCTAssertFalse(fixture.controller.state.isFocused)
+        fixture.controller.undo()
+        XCTAssertEqual(fixture.draft.value, "Generated",
+                       "Undo in a sheet must not change the composer behind it")
+
+        parent.setKeyState(true)
+        await drainMain()
+        XCTAssertTrue(fixture.controller.state.isFocused)
+    }
+
+    func testSheetLifecycleDropsComposerCommandsBeforeTheSheetIsAttached() async throws {
+        _ = NSApplication.shared
+        let fixture = try EditorFixture("Original")
+        let window = KeyStateWindow(contentRect: NSRect(x: 0, y: 0, width: 360, height: 120),
+                                    styleMask: .titled, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = fixture.scrollView
+        window.setKeyState(true)
+        XCTAssertTrue(window.makeFirstResponder(fixture.view))
+        fixture.generate("Generated")
+        await drainMain()
+        XCTAssertTrue(fixture.controller.state.isFocused)
+
+        // AppKit announces a sheet before attachedSheet necessarily changes,
+        // and a SwiftUI sheet may leave the parent key and first responder intact.
+        NotificationCenter.default.post(name: NSWindow.willBeginSheetNotification, object: window)
+        XCTAssertNil(window.attachedSheet)
+        XCTAssertTrue(window.firstResponder === fixture.view)
+        fixture.controller.undo()
+        XCTAssertEqual(fixture.draft.value, "Generated")
+        await drainMain()
+        XCTAssertFalse(fixture.controller.state.isFocused,
+                       "The custom command group must disappear so the sheet uses native Undo")
+
+        NotificationCenter.default.post(name: NSWindow.didEndSheetNotification, object: window)
+        await drainMain()
+        XCTAssertTrue(fixture.controller.state.isFocused)
+        fixture.controller.undo()
+        XCTAssertEqual(fixture.draft.value, "Original")
+    }
+
+    private func drainMain() async {
+        let refreshed = expectation(description: "Native focus and undo state published")
+        DispatchQueue.main.async { refreshed.fulfill() }
+        await fulfillment(of: [refreshed], timeout: 3)
     }
 
     func testTypingAfterGenerationUndoesBeforeTheGeneratedReplacement() throws {
@@ -163,6 +245,20 @@ final class CommitMessageEditorTests: XCTestCase {
         XCTAssertEqual(fixture.draft.value, "New shared message")
     }
 
+    /// Exercise native responder retention and key notifications without
+    /// bringing an offscreen test window in front of the user's application.
+    @MainActor
+    private final class KeyStateWindow: NSWindow {
+        private var keyState = false
+        override var isKeyWindow: Bool { keyState }
+
+        func setKeyState(_ active: Bool) {
+            keyState = active
+            NotificationCenter.default.post(name: active ? NSWindow.didBecomeKeyNotification
+                                            : NSWindow.didResignKeyNotification, object: self)
+        }
+    }
+
     private final class Draft: @unchecked Sendable {
         var value: String
         init(_ value: String) { self.value = value }
@@ -177,9 +273,11 @@ final class CommitMessageEditorTests: XCTestCase {
         let view: NSTextView
         let undo: UndoManager
 
-        convenience init(_ text: String) throws { try self.init(Draft(text)) }
+        convenience init(_ text: String, groupsByEvent: Bool = false) throws {
+            try self.init(Draft(text), groupsByEvent: groupsByEvent)
+        }
 
-        init(_ draft: Draft) throws {
+        init(_ draft: Draft, groupsByEvent: Bool = false) throws {
             self.draft = draft
             let editor = CommitMessageEditor(
                 text: Binding(get: { draft.value }, set: { draft.value = $0 }),
@@ -188,7 +286,7 @@ final class CommitMessageEditorTests: XCTestCase {
             scrollView = coordinator.makeScrollView()
             view = try XCTUnwrap(scrollView.documentView as? NSTextView)
             undo = try XCTUnwrap(view.undoManager)
-            undo.groupsByEvent = false
+            undo.groupsByEvent = groupsByEvent
         }
 
         func generate(_ message: String) {

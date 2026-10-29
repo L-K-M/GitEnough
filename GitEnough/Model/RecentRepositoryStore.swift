@@ -12,11 +12,12 @@ public final class RecentRepositoryStore: ObservableObject {
 
     public init(defaults: UserDefaults, initialURLs: [URL] = []) {
         self.defaults = defaults
-        let storedURLs = defaults.stringArray(forKey: Self.storageKey)?.map {
+        let storedPaths = defaults.stringArray(forKey: Self.storageKey)
+        let storedURLs = storedPaths?.map {
             URL(fileURLWithPath: $0)
         }
         urls = Self.uniqueFileURLs(storedURLs ?? initialURLs)
-        persist()
+        if storedPaths != urls.map(\.path) { persist() }
     }
 
     public func noteOpened(_ url: URL) {

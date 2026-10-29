@@ -45,10 +45,11 @@ printf 'Keep the revised text readable in the main branch.\n' > "$fixture/notes.
 printf 'Fixture: %s\n' "$fixture"
 ```
 
-Build and launch the app from the repository root:
+Build and launch an isolated review identity from the repository root. Its
+preferences, Keychain service and diagnostics are separate from the normal app:
 
 ```sh
-xcodebuild -project GitEnough.xcodeproj -scheme GitEnough -configuration Debug -derivedDataPath /tmp/GitEnough-History-Polish CODE_SIGN_IDENTITY=- build
+xcodebuild -project GitEnough.xcodeproj -scheme GitEnough -configuration Debug -derivedDataPath /tmp/GitEnough-History-Polish PRODUCT_BUNDLE_IDENTIFIER=ch.lkmc.GitEnough.HistoryReview CODE_SIGN_IDENTITY=- build
 open -a /tmp/GitEnough-History-Polish/Build/Products/Debug/GitEnough.app "$fixture"
 ```
 
@@ -80,3 +81,9 @@ and the replacement interpolated Text with multiple bold underlined segments,
 monospaced callout typography, and the semantic addition color. Their pixel
 buffers were byte-for-byte equal. This check does not replace the running-app
 checks above.
+
+The combined running build passed the compact/wide checks with the deliberately
+long metadata fixture. Reference and author text truncated within their bounds;
+the wide date column remained visible. Full accessible metadata included the
+omitted names. Arrow selection, search and the colored, emphasized diff were
+exercised, and the unstaged working-file bytes and index state were unchanged.

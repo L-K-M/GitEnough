@@ -37,7 +37,7 @@ final class SidebarGroupingTests: XCTestCase {
         XCTAssertNotNil(groups.first { $0.id == "forge:forge.example:4000" })
     }
 
-    func testAccountGroupsKeepTheHostAndCompleteNamespaceDistinct() {
+    func testAccountGroupsCombineHostsButKeepCompleteNamespacesDistinct() {
         let repos = [repo("GitHub"), repo("GitLab"), repo("GitLabSubgroup"), repo("GitLabOther")]
         let summaries = [
             repos[0].path: summary("git@github.com:team/project.git"),
@@ -46,11 +46,85 @@ final class SidebarGroupingTests: XCTestCase {
             repos[3].path: summary("https://gitlab.com/other/subgroup/project.git"),
         ]
         let groups = SidebarGrouping.groups(for: repos, mode: .account, summaries: summaries)
-        XCTAssertEqual(groups.count, 4)
-        XCTAssertEqual(groups.first { $0.id == "account:github.com/team" }?.subtitle, "GitHub")
-        XCTAssertEqual(groups.first { $0.id == "account:gitlab.com/team/subgroup" }?.title,
+        XCTAssertEqual(groups.count, 3)
+        XCTAssertEqual(groups.first { $0.id == "account:owner:team" }?.subtitle, "GitHub, GitLab")
+        XCTAssertEqual(groups.first { $0.id == "account:owner:team" }?.repositories,
+                       Array(repos.prefix(2)))
+        XCTAssertEqual(groups.first { $0.id == "account:owner:team/subgroup" }?.title,
                        "team/subgroup")
-        XCTAssertEqual(Set(groups.map(\.id)).count, 4)
+        XCTAssertNotNil(groups.first { $0.id == "account:owner:other/subgroup" })
+    }
+
+    func testGitHubAccountGroupingIgnoresOwnerCaseAndKeepsFirstDisplayName() {
+        let repos = [repo("First"), repo("Second")]
+        let groups = SidebarGrouping.groups(for: repos, mode: .account, summaries: [
+            repos[0].path: summary("git@github.com:Acme/first.git"),
+            repos[1].path: summary("https://github.com/acme/second.git"),
+        ])
+
+        XCTAssertEqual(groups.count, 1)
+        XCTAssertEqual(groups.first?.id, "account:owner:acme")
+        XCTAssertEqual(groups.first?.title, "Acme")
+        XCTAssertEqual(groups.first?.subtitle, "GitHub")
+        XCTAssertEqual(groups.first?.repositories, repos)
+    }
+
+    func testUnknownHostAccountGroupingMatchesOwnerCaseForPresentation() {
+        let repos = [repo("First"), repo("Second")]
+        let groups = SidebarGrouping.groups(for: repos, mode: .account, summaries: [
+            repos[0].path: summary("git@forge.example:Acme/first.git"),
+            repos[1].path: summary("https://forge.example/acme/second.git"),
+        ])
+
+        XCTAssertEqual(groups.count, 1)
+        XCTAssertEqual(groups.first?.id, "account:owner:acme")
+        XCTAssertEqual(groups.first?.title, "Acme")
+        XCTAssertEqual(groups.first?.subtitle, "forge.example")
+        XCTAssertEqual(groups.first?.repositories, repos)
+    }
+
+    func testAccountGroupsAggregateSortedUniqueForgesAcrossCaseVariants() {
+        let repos = [repo("Codeberg"), repo("GitLab"), repo("GitHub"), repo("GitHubAgain")]
+        let groups = SidebarGrouping.groups(for: repos, mode: .account, summaries: [
+            repos[0].path: summary("https://codeberg.org/Acme/one.git"),
+            repos[1].path: summary("git@gitlab.com:acme/two.git"),
+            repos[2].path: summary("https://github.com/ACME/three.git"),
+            repos[3].path: summary("git@github.com:Acme/four.git"),
+        ])
+
+        XCTAssertEqual(groups.count, 1)
+        XCTAssertEqual(groups.first?.id, "account:owner:acme")
+        XCTAssertEqual(groups.first?.title, "Acme")
+        XCTAssertEqual(groups.first?.subtitle, "GitHub, GitLab, codeberg.org")
+        XCTAssertEqual(groups.first?.repositories, repos)
+    }
+
+    func testAccountGroupingUsesTheFullDecodedOwnerNamespace() {
+        let repos = [repo("First"), repo("Second"), repo("OtherNamespace")]
+        let groups = SidebarGrouping.groups(for: repos, mode: .account, summaries: [
+            repos[0].path: summary("https://forge.example/Team%20Space/Subgroup/one.git"),
+            repos[1].path: summary("https://gitlab.com/team%20space/subgroup/two.git"),
+            repos[2].path: summary("https://forge.example/other/Subgroup/three.git"),
+        ])
+
+        XCTAssertEqual(groups.count, 2)
+        let matching = groups.first { $0.id == "account:owner:team space/subgroup" }
+        XCTAssertEqual(matching?.title, "Team Space/Subgroup")
+        XCTAssertEqual(matching?.repositories, Array(repos.prefix(2)))
+        XCTAssertEqual(matching?.subtitle, "GitLab, forge.example")
+        XCTAssertNotNil(groups.first { $0.id == "account:owner:other/subgroup" })
+    }
+
+    func testAccountNamedLocalDoesNotMergeWithRepositoriesWithoutARemote() {
+        let repos = [repo("Hosted"), repo("Local")]
+        let groups = SidebarGrouping.groups(for: repos, mode: .account, summaries: [
+            repos[0].path: summary("https://github.com/local/one.git"),
+            repos[1].path: summary(nil),
+        ])
+
+        XCTAssertEqual(groups.count, 2)
+        XCTAssertEqual(groups.first { $0.id == "account:owner:local" }?.repositories, [repos[0]])
+        XCTAssertEqual(groups.first { $0.id == "account:local" }?.repositories, [repos[1]])
     }
 
     func testLocalUnavailableAndLoadingRepositoriesRemainReachable() {

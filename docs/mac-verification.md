@@ -156,14 +156,77 @@ lifecycle for a repository folder; commit drafts autosave separately.
 
 The follow-up adds automatic and manual repository groups, clone cancellation,
 native generated-message undo, durable recent paths, one history-list width
-measurement and source-warning cleanup. The shared core suite passes 472 tests.
+measurement and source-warning cleanup. Automated coverage includes account
+matching across forges, stable namespaces, safe clone cancellation, draft
+replacement and isolated persistence. Hosted tests use a separate app identity.
 Native editor tests exercise named undo/redo, standard key equivalents, later
 typing, separate editor stacks and marked input. Grouping/store tests use UUID
 preference suites; Git cancellation tests use disposable local transports.
 Running-app verification uses a separate bundle identifier, preferences,
 Keychain service and activity directory, with a loopback model stub. The normal
 app's activity directory and existing preferences retain their paths.
-Combined GUI verification and hosted-suite checks are in progress.
+
+Running-app clone checks passed with a local SSH transport deliberately waiting
+for 30 seconds and ignoring TERM. Both Cancel Clone and Escape stopped the
+transport and its sleep child, removed private staging and re-enabled the same
+form. Retrying at the same destination succeeded. Existing empty folders and a
+symlink destination cloned successfully; a nonempty destination was refused
+without changing its user file. A file added concurrently during an existing-
+folder clone survived cancellation, and the status correctly requested review
+rather than promising an immediate retry. Physical directory identities and
+cloned README bytes were compared after these checks.
+
+Three recent clone paths remained available after rebuilding and changing the
+development signature. Duplicate repository names now include their parent path
+in Open Recent. Selecting the intended duplicate opened its correct working copy;
+Clear Menu then emptied the menu and disabled its clear command.
+
+The production preference export was compared after the isolated hosted run:
+all 31 registrations and their order, stars, exclusions and original selection
+were unchanged. Fixture activity entries were absent from production diagnostics.
+The running app displayed Undo Generate Commit Message and Redo Generate Commit
+Message, with working standard shortcuts. Later typing undid before generation;
+a newer shared draft disabled another window's stale undo; a delayed response
+kept newer typed text. Search and Settings retained their own native editing
+undo. Command-Return committed from the native composer, cleared the successful
+draft and left the disabled commit command inert. Tab and Shift-Tab moved out of
+and back into the composer without inserting tabs.
+
+A final focus check found that a parent window retains its text responder while
+a sheet owns input. The composer now relinquishes its focused-scene command
+object during key-window and sheet transitions, with a live action guard as
+well. Regression tests cover retained responders and the sheet-begin notification
+arriving before attachment. In the running app, Clone URL and Stash message Undo
+changed only their own fields; dismissal restored composer Undo/Redo. Search and
+Settings retained native Undo, and the background draft stayed unchanged.
+
+Account mode combined Atlas, Harbor and Eclair's matching account namespace
+under one header listing GitHub, GitLab and codeberg.org. Forge mode stayed
+host-specific. Creating a manual group from an automatic account group switched
+to and revealed the requested destination. Membership survived an app relaunch.
+
+The long-name history fixture was inspected in compact and wide layouts. Subject,
+ref, author and date columns stayed within their bounds, and the full accessible
+metadata retained hidden ref names. Arrow selection and search worked, and the
+system monospaced diff retained semantic colors and bold underlined changed
+words. Browsing preserved the unstaged file bytes and Git index state.
+
+## Follow-up review decisions
+
+The first completed review contained no confirmed important defect. A runtime
+Combine probe verified collection mutations emit publication, and the store loads
+repositories before group assignments. Native disclosure navigation and manual
+create/move/reload were exercised in the app. The replacement callback runs before
+model publication and rejects a newer draft; both automated and running-app tests
+cover that contract. Scene restoration runs in onAppear, not during body building.
+
+Cancellation helpers are constructed only after successful process launch. Runtime
+probes found PID zero before launch and the same positive PID after exit; Mac and
+Linux transport tests verified process-group isolation and descendant cancellation.
+The helper additionally refuses nonpositive/system PIDs and disarms after its first
+signal. Only cloning currently supplies cancellation tokens, and late cancellation
+after successful publication intentionally leaves success intact. Other minor
+defensive suggestions are deferred; the readable system diff font is retained.
 
 ## Preference-test incident
 

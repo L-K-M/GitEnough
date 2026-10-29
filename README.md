@@ -99,9 +99,13 @@ before building. From a fresh checkout:
 To verify the app and core tests:
 
 ```bash
-xcodebuild -project GitEnough.xcodeproj -scheme GitEnough -destination 'platform=macOS' -derivedDataPath build/DerivedData CODE_SIGN_IDENTITY=- test
+xcodebuild -project GitEnough.xcodeproj -scheme GitEnough -destination 'platform=macOS' -derivedDataPath build/TestDerivedData PRODUCT_BUNDLE_IDENTIFIER=ch.lkmc.GitEnough.TestHost CODE_SIGN_IDENTITY=- test
 swift test
 ```
+
+The hosted test command uses a separate app identity and build folder, so the
+test app does not load the normal app's preferences, Keychain service or activity
+history. The normal app keeps its existing data locations.
 
 The optional `scripts/build.sh` wrapper still supports Release packaging and installation;
 it requires [release-tool](https://github.com/L-K-M/release-tool)'s `lkm-build` on `PATH`.

@@ -77,6 +77,7 @@ public enum SidebarGrouping {
         }
 
         var buckets: [String: SidebarRepositoryGroup] = [:]
+        var forgeNamesByGroup: [String: Set<String>] = [:]
         for repository in repositories {
             let key = automaticKey(for: repository, mode: mode, summary: summaries[repository.path])
             if buckets[key.id] == nil {
@@ -85,10 +86,19 @@ public enum SidebarGrouping {
                                                          repositories: [], manualGroupID: nil)
             }
             buckets[key.id]?.repositories.append(repository)
+            if mode == .account, let forgeName = key.subtitle {
+                forgeNamesByGroup[key.id, default: []].insert(forgeName)
+            }
         }
-        return buckets.values.sorted { left, right in
-            let fallbackIDs: Set<String> = ["\(mode.rawValue):other", "\(mode.rawValue):local",
-                                            "\(mode.rawValue):loading", "letter:#"]
+        let grouped = buckets.values.map { group in
+            guard let forgeNames = forgeNamesByGroup[group.id] else { return group }
+            return SidebarRepositoryGroup(id: group.id, title: group.title,
+                                          subtitle: forgeNames.sorted().joined(separator: ", "),
+                                          repositories: group.repositories, manualGroupID: group.manualGroupID)
+        }
+        let fallbackIDs: Set<String> = ["\(mode.rawValue):other", "\(mode.rawValue):local",
+                                       "\(mode.rawValue):loading", "letter:#"]
+        return grouped.sorted { left, right in
             let leftIsFallback = fallbackIDs.contains(left.id)
             let rightIsFallback = fallbackIDs.contains(right.id)
             if leftIsFallback != rightIsFallback { return !leftIsFallback }
@@ -141,8 +151,15 @@ public enum SidebarGrouping {
         if mode == .forge {
             return GroupKey(id: "forge:\(authority)", title: forgeName)
         }
-        let owner = forge.owner.removingPercentEncoding ?? forge.owner
-        return GroupKey(id: "account:\(authority)/\(forge.owner)", title: owner, subtitle: forgeName)
+        // ForgeRepo escapes its input path for website URLs. Undo that layer,
+        // then decode the remote URL's namespace for the presentation label.
+        let originalOwner = forge.owner.removingPercentEncoding ?? forge.owner
+        let owner = originalOwner.removingPercentEncoding ?? originalOwner
+        // This is a user-chosen presentation grouping across forges, not a claim
+        // that similarly named accounts share authentication or identity.
+        let ownerKey = owner.folding(options: .caseInsensitive,
+                                     locale: Locale(identifier: "en_US_POSIX"))
+        return GroupKey(id: "account:owner:\(ownerKey)", title: owner, subtitle: forgeName)
     }
 
     private static func manualBuckets(_ repositories: [Repository],

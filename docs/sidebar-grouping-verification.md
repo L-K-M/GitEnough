@@ -6,10 +6,14 @@ filters, and discovery exclusions keep their established formats.
 
 Choose View > Group Repositories by or the Repository Options menu at the bottom
 of the sidebar. Forge and Account use a cached remote URL, preferring `origin` and then
-the first configured remote. They make no network request. Account identity
-includes both the host and complete owner namespace, so equally named accounts
-on different hosts remain separate. Self-hosted forges use their actual host and
-web port rather than a guessed provider name. First Letter supports Unicode
+the first configured remote. They make no network request. Account mode combines
+matching complete owner namespaces across hosts, ignoring case for presentation.
+It preserves the first display spelling and lists sorted unique forge names in
+the group subtitle, such as `GitHub, GitLab, codeberg.org`. This grouping does not
+claim that similarly named accounts share authentication or identity. Nested
+namespaces remain distinct: `team/tools` and `other/tools` are separate groups.
+Forge mode stays host-specific. Self-hosted forges use their actual host and web
+port rather than a guessed provider name. First Letter supports Unicode
 letters, folds accented initials, and places non-letter initials under `#`.
 
 Each window remembers one expanded group. Expanding another group closes the
@@ -32,7 +36,8 @@ modify production preferences:
 swift test --filter 'SidebarGroupingTests|ManualRepositoryGroupStoreTests'
 ```
 
-Coverage includes host/account separation, nested namespaces, Unicode initials,
+Coverage includes host-specific Forge groups, cross-host Account aggregation,
+case variants, decoded nested namespaces, Unicode initials,
 local/unavailable/loading repositories, incoming sort order, empty manual groups,
 name validation, stable group IDs after reload, normalized repository identities,
 removal/re-add behavior, and byte-preservation of established preference values
@@ -45,7 +50,10 @@ remote. Remote URL strings are enough; do not fetch example remotes.
 
 1. Verify No Grouping preserves the original order, stars, sorting, logical
    filters, text search, and manual drag reordering.
-2. Check Forge, Account, and First Letter. Verify all registrations remain
+2. Check Forge, Account, and First Letter. In Account mode, check matching
+   `Acme`/`acme` namespaces on GitHub, GitLab, and a self-hosted forge combine
+   under the first display spelling with all forge names in the subtitle.
+   Forge mode should keep the hosts separate. Verify all registrations remain
    reachable, including local repositories. Expand two groups successively and
    confirm only the latest stays open. Exercise disclosure headers with mouse,
    Tab, and arrow keys.
@@ -79,3 +87,14 @@ navigation also clears it and reveals the appropriate group. Verify the original
 sequence in the running app: open GitHub, click collapsed GitLab, press Right Arrow,
 then Left Arrow. GitLab should open and close, the prior repository should remain
 in the detail pane, and opening another header should preserve the accordion rule.
+
+## Observed results
+
+These checks passed in the isolated running app using disposable working
+copies: Forge, Account and First Letter; one-open-group expansion; Right/Left
+header navigation; search into a collapsed group and restoring the prior group;
+manual create/move/rename/delete; duplicate-name validation; Return/Escape sheets;
+two independent window expansions; and both windows recovering when their shared
+manual group was deleted. Deletion returned registrations to Ungrouped.
+A fresh scene now reveals the selected repository's group, while an explicitly
+saved collapsed state remains distinct from a scene with no saved state.

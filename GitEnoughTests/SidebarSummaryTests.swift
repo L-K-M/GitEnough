@@ -35,26 +35,34 @@ final class SidebarSummaryTests: XCTestCase {
         XCTAssertEqual(try client.remotes().count, 2)
     }
 
-    func testBackgroundSummaryWaitsForTheRepositoryOperationQueue() throws {
+    func testBackgroundSummaryWaitsForTheRepositoryOperationQueue() async throws {
         let repo = Repository(url: root)
         let model = RepoViewModel(repo: repo, defaults: defaults)
-        let entered = DispatchSemaphore(value: 0)
+        let entered = expectation(description: "repository operation started")
         let release = DispatchSemaphore(value: 0)
-        model.queue.async { entered.signal(); release.wait() }
-        XCTAssertEqual(entered.wait(timeout: .now() + 2), .success)
-        defer { release.signal(); model.queue.sync {} }
-        let started = DispatchSemaphore(value: 0)
-        let finished = DispatchGroup()
-        finished.enter()
+        model.queue.async { entered.fulfill(); release.wait() }
+        await fulfillment(of: [entered], timeout: 2)
+        defer { release.signal() }
+        let started = expectation(description: "summary read requested")
+        let finished = expectation(description: "summary read finished")
+        let progress = SummaryReadProgress()
         Task.detached {
-            started.signal()
+            started.fulfill()
             _ = await AppState.summaries(for: [repo])
-            finished.leave()
+            await progress.finish()
+            finished.fulfill()
         }
-        XCTAssertEqual(started.wait(timeout: .now() + 2), .success)
-        XCTAssertEqual(finished.wait(timeout: .now() + 0.2), .timedOut,
+        await fulfillment(of: [started], timeout: 2)
+        try await Task.sleep(nanoseconds: 200_000_000)
+        let completedEarly = await progress.isFinished
+        XCTAssertFalse(completedEarly,
                        "Summary reads must not bypass an in-flight repository operation")
         release.signal()
-        XCTAssertEqual(finished.wait(timeout: .now() + 5), .success)
+        await fulfillment(of: [finished], timeout: 5)
     }
+}
+
+private actor SummaryReadProgress {
+    private(set) var isFinished = false
+    func finish() { isFinished = true }
 }

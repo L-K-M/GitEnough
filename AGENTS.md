@@ -71,7 +71,7 @@ engine). Or directly:
 
 ```bash
 xcodebuild -project GitEnough.xcodeproj -scheme GitEnough -configuration Debug build
-xcodebuild -project GitEnough.xcodeproj -scheme GitEnough -destination 'platform=macOS' test
+xcodebuild -project GitEnough.xcodeproj -scheme GitEnough -destination 'platform=macOS' -derivedDataPath build/TestDerivedData PRODUCT_BUNDLE_IDENTIFIER=ch.lkmc.GitEnough.TestHost CODE_SIGN_IDENTITY=- test
 ```
 
 On Linux (Swift 6.0+; CI pins 6.2.1), or on macOS to check the core in
