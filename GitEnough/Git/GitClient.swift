@@ -1264,6 +1264,17 @@ public final class GitClient {
 
     /// Marks a conflicted path resolved (for when the user fixed it by hand or in
     /// a tool that didn't stage it).
+    ///
+    /// **Deleting the file is a resolution**, not a reason to refuse. A
+    /// modify/delete conflict (`u UD`/`u DU`) is resolved either by keeping the
+    /// surviving side or by accepting the deletion, and accepting it means the
+    /// file is gone — at which point the marker scan below used to throw
+    /// "no such file" and the conflict could not be cleared from the GUI at all.
+    /// git has no such objection: measured on 2.43, `git add -- <path>` on a
+    /// `u UD` entry whose file was removed exits 0 and stages the deletion
+    /// (`1 D. … <path>`). The same dead end was reached automatically whenever
+    /// an external merge tool resolved by deleting, since `openMergeTool`
+    /// finishes through here.
     public func markResolved(path: String) throws {
         if try fileHasConflictMarkers(path) {
             throw GitError(
@@ -1280,9 +1291,30 @@ public final class GitClient {
     /// git's "was it resolved?" prompt (which hits a headless EOF), so GitEnough
     /// verifies the file itself. Throws when the file can't be inspected so a
     /// read/permission failure can never be mistaken for a resolved conflict.
+    ///
+    /// **A file that is not there has no markers.** That is the one absence this
+    /// distinguishes from a failure: it is how a modify/delete conflict is
+    /// resolved in favour of the deletion, and how a merge tool that resolves by
+    /// deleting leaves the worktree. The distinction is made on the open
+    /// error's own code, so every other failure — a permissions problem, an I/O
+    /// error, a path that turned into a directory — still throws, which is the
+    /// property the doc above claims and this keeps.
     public func fileHasConflictMarkers(_ path: String, chunkSize: Int = 64 * 1024) throws -> Bool {
         let url = worktree.appendingPathComponent(path)
-        let handle = try FileHandle(forReadingFrom: url)
+        let handle: FileHandle
+        do {
+            handle = try FileHandle(forReadingFrom: url)
+        } catch {
+            // The *error*, not a second look at the filesystem. `fileExists`
+            // is false for more than absence — an ancestor directory that
+            // denies search answers false too — so forgiving everything it
+            // calls missing would forgive exactly the permission failure this
+            // method promises to surface. Asking the error that already
+            // happened is also fail-safe: an unrecognised shape rethrows,
+            // which is the behaviour this whole change relaxes.
+            guard Self.isFileNotFound(error) else { throw error }
+            return false
+        }
         defer { try? handle.close() }
         let opening = Array("<<<<<<<".utf8)
         let closing = Array(">>>>>>>".utf8)
@@ -1307,6 +1339,23 @@ public final class GitClient {
             }
         }
         return false
+    }
+
+    /// Whether an open failure means "there is nothing at that path".
+    ///
+    /// Both spellings are checked because the two platforms report it
+    /// differently: Foundation wraps it as `NSFileReadNoSuchFileError`, and a
+    /// raw POSIX `ENOENT` reaches here from some paths on corelibs-foundation.
+    /// A dangling symlink lands here too, and that is the right answer — `open`
+    /// follows the link and genuinely finds nothing, and a symlink carries no
+    /// conflict markers either way.
+    private static func isFileNotFound(_ error: Error) -> Bool {
+        let error = error as NSError
+        if error.domain == NSCocoaErrorDomain {
+            return error.code == NSFileReadNoSuchFileError
+                || error.code == NSFileNoSuchFileError
+        }
+        return error.domain == NSPOSIXErrorDomain && error.code == Int(ENOENT)
     }
 
     /// Resolves a conflicted path by checking out one side and staging it.
