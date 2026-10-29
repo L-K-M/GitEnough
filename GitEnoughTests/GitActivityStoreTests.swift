@@ -139,6 +139,91 @@ final class GitActivityStoreTests: XCTestCase {
         XCTAssertTrue(reloaded.items.isEmpty)
     }
 
+    // MARK: - On-disk permissions
+
+    /// The history holds every git argv the app has run plus the stderr tail of
+    /// every failure. It must not be readable by other accounts on the machine,
+    /// and it has three chances to become so: creation, append, and the atomic
+    /// compaction — whose rename makes a *new* inode and is the one that
+    /// regresses.
+    func testHistoryFileIsOwnerOnlyThroughCreationAppendAndCompaction() throws {
+        // capacity 1 so every record after the first drops one item; the store
+        // compacts once 50 have been dropped.
+        let store = makeStore(capacity: 1)
+
+        store.record(.finished(entry("status")), repoName: "Repo", repoPath: "/tmp/repo")
+        drain(store)
+        XCTAssertEqual(try mode(of: fileURL), 0o600, "mode at creation")
+        XCTAssertEqual(try mode(of: fileURL.deletingLastPathComponent()), 0o700,
+                       "the directory holding it — an atomic rewrite's temp file "
+                       + "lives here and carries no mode of its own")
+
+        store.record(.finished(entry("fetch")), repoName: "Repo", repoPath: "/tmp/repo")
+        drain(store)
+        XCTAssertEqual(try mode(of: fileURL), 0o600, "mode after an append")
+
+        for index in 0..<60 {
+            store.record(.finished(entry("log \(index)")),
+                         repoName: "Repo", repoPath: "/tmp/repo")
+        }
+        drain(store)
+        XCTAssertEqual(try mode(of: fileURL), 0o600, "mode after compaction")
+    }
+
+    /// A mode the user set by hand must *survive* compaction, not merely stay
+    /// below the floor — the rename replaces the inode, so the mode has to be
+    /// read before the rewrite and restored after it. Asserted as equality on
+    /// purpose: `<= 0o600` would pass for an implementation that silently
+    /// re-opened a frozen file for writing.
+    func testCompactionPreservesAManuallyTightenedMode() throws {
+        let store = makeStore(capacity: 1)
+        store.record(.finished(entry("status")), repoName: "Repo", repoPath: "/tmp/repo")
+        drain(store)
+        try FileManager.default.setAttributes([.posixPermissions: 0o400],
+                                              ofItemAtPath: fileURL.path)
+
+        for index in 0..<60 {
+            store.record(.finished(entry("log \(index)")),
+                         repoName: "Repo", repoPath: "/tmp/repo")
+        }
+        drain(store)
+        XCTAssertEqual(try mode(of: fileURL), 0o400,
+                       "compaction must neither widen nor round up a frozen file")
+    }
+
+    /// An upgrade has to heal what an older build left behind.
+    ///
+    /// Nothing else would: the create branch never runs again for an existing
+    /// file, and compaction only fires once fifty entries have been evicted —
+    /// so the users with the longest history would keep a world-readable one
+    /// the longest. `createDirectory`'s attributes are no help either; they
+    /// apply only when it actually creates the directory.
+    func testRecordingTightensAHistoryLeftLooseByAnOlderBuild() throws {
+        let store = makeStore()
+        store.record(.finished(entry("status")), repoName: "Repo", repoPath: "/tmp/repo")
+        drain(store)
+
+        // Put the file and its directory back the way an older build left them.
+        try FileManager.default.setAttributes([.posixPermissions: 0o644],
+                                              ofItemAtPath: fileURL.path)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755],
+            ofItemAtPath: fileURL.deletingLastPathComponent().path)
+
+        store.record(.finished(entry("fetch")), repoName: "Repo", repoPath: "/tmp/repo")
+        drain(store)
+
+        XCTAssertEqual(try mode(of: fileURL), 0o600, "the file heals on the next append")
+        XCTAssertEqual(try mode(of: fileURL.deletingLastPathComponent()), 0o700,
+                       "and so does the directory that covers the compaction temp file")
+    }
+
+    private func mode(of url: URL) throws -> Int {
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        let permissions = try XCTUnwrap(attributes[.posixPermissions] as? NSNumber)
+        return permissions.intValue & 0o777
+    }
+
     // MARK: - Filtering
 
     private var sampleItems: [GitActivityStore.Item] {
