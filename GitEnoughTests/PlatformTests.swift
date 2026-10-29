@@ -289,19 +289,35 @@ final class SecretServiceLookupTests: XCTestCase {
     /// And the other half: a keyring that cannot be reached is *not* evidence.
     /// Reported as `unavailable` so Settings leaves the stored key alone
     /// instead of writing an empty one over it.
+    /// Asserts through `lookup` rather than through `secret-tool`, so a
+    /// regression that mapped every non-zero exit to `.absent` would fail
+    /// here. Checking only that stderr is non-empty would prove the signal
+    /// exists while leaving the code that reads it untested.
+    ///
+    /// The broken session is staged on the process environment, because
+    /// `lookup` builds its own child and takes no environment argument —
+    /// which is the point: this drives the production path.
     func testAnUnreachableKeyringReadsAsUnavailable() throws {
         try XCTSkipUnless(SecretService.isAvailable, "secret-tool is not installed")
-        // No session bus and no display: secret-tool cannot reach or autolaunch
-        // anything, and says so on stderr, which is what separates this from
-        // the silent non-zero exit that means "not found".
-        let result = try ProcessRunner.run(
-            XCTUnwrap(ProcessRunner.which("secret-tool")),
-            ["lookup", "service", service, "account", "present"],
-            environmentOverrides: ["DBUS_SESSION_BUS_ADDRESS": "", "DISPLAY": ""],
-            timeout: 20)
 
-        try XCTSkipIf(result.succeeded, "a keyring answered anyway; cannot stage a failure here")
-        XCTAssertFalse(result.stderr.isEmpty,
-                       "an unreachable keyring must be distinguishable from an empty one")
+        let bus = ProcessInfo.processInfo.environment["DBUS_SESSION_BUS_ADDRESS"]
+        let display = ProcessInfo.processInfo.environment["DISPLAY"]
+        defer {
+            bus.map { setenv("DBUS_SESSION_BUS_ADDRESS", $0, 1) }
+            display.map { setenv("DISPLAY", $0, 1) }
+        }
+        // No session bus and no display: secret-tool can neither reach a
+        // keyring nor autolaunch one, and says so on stderr — the talkative
+        // failure that separates this from the silent exit meaning "not
+        // found". Both must go, or it blocks trying to autolaunch.
+        unsetenv("DBUS_SESSION_BUS_ADDRESS")
+        unsetenv("DISPLAY")
+
+        let lookup = SecretService.lookup(service: service, account: "present")
+
+        try XCTSkipIf(lookup != .unavailable && lookup != .absent,
+                      "a keyring answered anyway; cannot stage a failure here")
+        XCTAssertEqual(lookup, .unavailable,
+                       "a keyring that could not be reached must not read as empty")
     }
 }
