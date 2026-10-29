@@ -19,8 +19,8 @@ struct SettingsView: View {
         // macOS Form doesn't scroll, so with the API-key/buttons/status rows it
         // overflowed the 360 pt window and the Save/Load Models/Test buttons
         // (and the status text) were unreachable on default font sizes.
-        .frame(width: 480)
-        .frame(minHeight: 360)
+        .frame(width: 580)
+        .frame(minHeight: 440)
     }
 }
 
@@ -67,6 +67,7 @@ private struct GeneralSettingsView: View {
                     Spacer()
                     Button("Choose…") { chooseDiscoveryFolder() }
                     Button("Scan Now") { appState.scanDiscoveryFolder() }
+                        .disabled(discoveryFolder.isEmpty)
                     Button("Clear") { discoveryFolder = "" }
                         .disabled(discoveryFolder.isEmpty)
                 }
@@ -97,10 +98,15 @@ private struct GeneralSettingsView: View {
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
         panel.prompt = "Watch"
-        if panel.runModal() == .OK, let url = panel.url {
+        let completion: (NSApplication.ModalResponse) -> Void = { response in
+            guard response == .OK, let url = panel.url else { return }
             discoveryFolder = url.path
-            // Pick up whatever is in there right away rather than on the next tick.
             appState.scanDiscoveryFolder()
+        }
+        if let window = NSApp.keyWindow {
+            panel.beginSheetModal(for: window, completionHandler: completion)
+        } else {
+            panel.begin(completionHandler: completion)
         }
     }
 

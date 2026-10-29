@@ -122,7 +122,8 @@ final class ChangesPane {
             isSyncingMessage = false
         }
         gtk_widget_set_sensitive(commitButton,
-                                 viewModel.status.staged.isEmpty ? 0 : 1)
+                                 viewModel.status.staged.isEmpty
+                                    || !viewModel.mergeState.allowsManualCommit ? 0 : 1)
         gtk_widget_set_sensitive(generateButton, viewModel.isGeneratingMessage ? 0 : 1)
         diffView.show(viewModel.selectedFileDiff)
     }

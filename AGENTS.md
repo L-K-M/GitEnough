@@ -13,7 +13,7 @@ builds, one source tree** below). The SwiftUI front end stays macOS-only.
 
 ## Tech Stack
 
-- **Language:** Swift (latest stable), macOS 14+ deployment target.
+- **Language:** Swift (latest stable), macOS 26+ deployment target.
 - **UI:** SwiftUI (NavigationSplitView two-pane shell, Canvas for the graph),
   AppKit where needed (NSWorkspace, NSPasteboard, NSOpenPanel).
 - **Git:** shells out to the user's own `git` binary (GitShell/GitClient) — no
@@ -51,7 +51,7 @@ builds, one source tree** below). The SwiftUI front end stays macOS-only.
 | | Xcode project | SwiftPM package |
 |---|---|---|
 | Builds | the whole app, macOS | `GitEnough` library (everything except `UI/`) + `gitenough-gtk` |
-| Platforms | macOS 14+ | library: macOS and Linux · GTK app: Linux |
+| Platforms | macOS 26+ | library: macOS and Linux · GTK app: Linux |
 | Tests | all of `GitEnoughTests/` | all of `GitEnoughTests/`, same files |
 
 `Package.swift` points its targets at the **existing** `GitEnough/` and
@@ -64,7 +64,7 @@ package's `exclude:` list.
 
 The Xcode project uses Xcode 16 file-system–synchronized groups, so new files
 added under `GitEnough/` or `GitEnoughTests/` are picked up automatically — no
-`project.pbxproj` edits needed. **Requires Xcode 16+.**
+`project.pbxproj` edits needed. **Requires Xcode 26+.**
 
 `scripts/build.sh` builds and reveals the app (stub for the shared `lkm-build`
 engine). Or directly:
@@ -181,7 +181,7 @@ front end, or the two will drift.
   stand-ins. Compiled out on macOS, where the real implementations apply.
 - `GitIntegrationTests` — builds a real repo in a temp dir and drives
   GitClient end to end (staging, merging, conflicts, stash). Runs in CI on both
-  macos-14 and Ubuntu, where git exists.
+  macos-26 and Ubuntu, where git exists.
 
 <!-- shared-rules:start -->
 

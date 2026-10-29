@@ -78,6 +78,24 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertEqual(Set(commits.map(\.hash)).count, 4)
     }
 
+    func testLogClassifiesSlashNamedLocalAndRemoteRefsExactly() throws {
+        // A local branch can even share the displayed name of a remote ref.
+        try run(["branch", "topic/one"])
+        try run(["branch", "origin/topic"])
+        try run(["update-ref", "refs/remotes/origin/topic", "HEAD"])
+        try run(["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/topic"])
+        try run(["tag", "release/one"])
+
+        let head = try XCTUnwrap(client.log(limit: 50).first { $0.isHead })
+
+        XCTAssertTrue(head.decorations.contains(RefDecoration(kind: .localBranch, name: "topic/one")))
+        XCTAssertTrue(head.decorations.contains(RefDecoration(kind: .localBranch, name: "origin/topic")))
+        XCTAssertTrue(head.decorations.contains(RefDecoration(kind: .remoteBranch, name: "origin/topic")))
+        XCTAssertTrue(head.decorations.contains(RefDecoration(kind: .tag, name: "release/one")))
+        XCTAssertFalse(head.decorations.contains { $0.name == "origin/HEAD" })
+        XCTAssertFalse(head.decorations.contains(RefDecoration(kind: .remoteBranch, name: "topic/one")))
+    }
+
     func testGraphLayoutOfMergeShape() throws {
         let commits = try client.log(limit: 50)
         let layout = GraphLayout.layout(commits: commits)
@@ -796,7 +814,11 @@ final class GitIntegrationTests: XCTestCase {
         try run(["init", "--bare", upURL.path])
         try run(["init", "--bare", upStreamURL.path])
         try run(["remote", "add", "up", upURL.path])
-        try run(["remote", "add", "up/stream", upStreamURL.path])
+        // Newer Git refuses adding a remote nested under another remote's
+        // name. Existing configurations can still contain one, so construct
+        // that legacy configuration directly and exercise the same operations.
+        try run(["config", "remote.up/stream.url", upStreamURL.path])
+        try run(["config", "remote.up/stream.fetch", "+refs/heads/*:refs/remotes/up/stream/*"])
 
         try run(["checkout", "-b", "port"])
         try client.push(remote: "up/stream", localBranch: "port", remoteBranch: "port",
@@ -1681,6 +1703,61 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertEqual(try client.conflictedPaths(), ["a.txt"])
     }
 
+    private func makeViewModel(at url: URL? = nil) -> RepoViewModel {
+        let suite = "GitEnoughTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        addTeardownBlock { defaults.removePersistentDomain(forName: suite) }
+        let viewModel = RepoViewModel(repo: Repository(url: url ?? repoURL), defaults: defaults)
+        viewModel.refresh()
+        waitForOperations(on: viewModel)
+        return viewModel
+    }
+
+    private func waitForOperations(on viewModel: RepoViewModel) {
+        let finished = expectation(description: "Repository work applied")
+        viewModel.queue.async {
+            DispatchQueue.main.async { finished.fulfill() }
+        }
+        wait(for: [finished], timeout: 10)
+    }
+
+    func testCommitDuringResolvedRebasePreservesHeadAndDraft() throws {
+        try makeConflictingBranch("conflicter")
+        XCTAssertThrowsError(try run(["rebase", "conflicter"]))
+        try client.resolveConflict(path: "a.txt", ours: false)
+        let viewModel = makeViewModel()
+        XCTAssertEqual(viewModel.mergeState.operation, .rebase)
+        XCTAssertFalse(viewModel.mergeState.allowsManualCommit)
+        XCTAssertFalse(viewModel.status.staged.isEmpty)
+        let head = try client.commitDetail("HEAD")?.hash
+        viewModel.draftCommitMessage = "Keep this draft"
+
+        viewModel.commit()
+        waitForOperations(on: viewModel)
+
+        XCTAssertEqual(try client.commitDetail("HEAD")?.hash, head)
+        XCTAssertEqual(viewModel.draftCommitMessage, "Keep this draft")
+        XCTAssertTrue(viewModel.errorMessage?.contains("git rebase --continue") ?? false)
+    }
+
+    func testCommitRechecksRebaseAfterStaleSnapshot() throws {
+        let viewModel = makeViewModel()
+        XCTAssertNil(viewModel.mergeState.operation)
+        try makeConflictingBranch("conflicter")
+        XCTAssertThrowsError(try run(["rebase", "conflicter"]))
+        try client.resolveConflict(path: "a.txt", ours: false)
+        let head = try client.commitDetail("HEAD")?.hash
+        viewModel.draftCommitMessage = "Keep this draft"
+
+        viewModel.commit()
+        waitForOperations(on: viewModel)
+
+        XCTAssertEqual(try client.commitDetail("HEAD")?.hash, head)
+        XCTAssertEqual(viewModel.draftCommitMessage, "Keep this draft")
+        XCTAssertEqual(viewModel.mergeState.operation, .rebase)
+        XCTAssertTrue(viewModel.errorMessage?.contains("git rebase --continue") ?? false)
+    }
+
     func testRebaseConflictDetectionResolutionAndContinue() throws {
         try makeConflictingBranch("conflicter")
         XCTAssertNil(client.inProgressOperation())
@@ -1693,6 +1770,7 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertEqual(try client.conflictedPaths(), ["a.txt"])
         XCTAssertFalse(try client.status().conflicted.isEmpty)
         XCTAssertEqual(client.operationLabel(for: .rebase), "Rebasing main")
+        XCTAssertThrowsError(try client.rebaseContinue())
 
         // Ours during a rebase is the new base (conflicter); theirs is main's
         // commit being replayed.
@@ -1716,6 +1794,235 @@ final class GitIntegrationTests: XCTestCase {
         let content = try String(contentsOf: repoURL.appendingPathComponent("a.txt"), encoding: .utf8)
         XCTAssertEqual(content, "from main\n")
         XCTAssertFalse(try client.status().isDirty)
+    }
+
+    private enum RebaseBackend: String {
+        case merge, apply
+    }
+
+    private func assertRebaseSkip(backend: RebaseBackend) throws {
+        try makeConflictingBranch("conflicter")
+        try write("keep me\n", to: "after-conflict.txt")
+        try client.stage(paths: ["after-conflict.txt"])
+        try client.commit(message: "Keep the next commit")
+        XCTAssertThrowsError(try run(["rebase", "--\(backend.rawValue)", "conflicter"]))
+        XCTAssertEqual(client.inProgressOperation(), .rebase)
+        XCTAssertEqual(try client.conflictedPaths(), ["a.txt"])
+
+        let viewModel = makeViewModel()
+        let target = try XCTUnwrap(viewModel.mergeState.rebaseSkipTarget)
+        viewModel.skipRebaseCommit(target)
+        waitForOperations(on: viewModel)
+
+        XCTAssertNil(viewModel.errorMessage)
+        XCTAssertNil(viewModel.mergeState.operation)
+        let subjects = try client.log(limit: 50).map(\.subject)
+        XCTAssertFalse(subjects.contains("Change a on main"))
+        XCTAssertEqual(subjects.first, "Keep the next commit")
+        XCTAssertEqual(try String(contentsOf: repoURL.appendingPathComponent("a.txt"),
+                                  encoding: .utf8), "from conflicter\n")
+        XCTAssertFalse(try client.status().isDirty)
+    }
+
+    func testRebaseSkipDropsConflictedCommitAndReplaysTheNext() throws {
+        try assertRebaseSkip(backend: .merge)
+    }
+
+    func testSkipRejectsARebaseThatAdvancedWhileConfirmationWasOpen() throws {
+        try makeConflictingBranch("conflicter")
+        try write("second change on main\n", to: "a.txt")
+        try client.stage(paths: ["a.txt"])
+        try client.commit(message: "Second main change")
+        XCTAssertThrowsError(try run(["rebase", "--merge", "conflicter"]))
+        let viewModel = makeViewModel()
+        let target = try XCTUnwrap(viewModel.mergeState.rebaseSkipTarget)
+
+        // A terminal skips the first conflict while the app's confirmation is open.
+        XCTAssertThrowsError(try client.rebaseSkip())
+        XCTAssertEqual(client.inProgressOperation(), .rebase)
+        viewModel.skipRebaseCommit(target)
+        waitForOperations(on: viewModel)
+
+        XCTAssertEqual(client.inProgressOperation(), .rebase)
+        XCTAssertEqual(viewModel.mergeState.operation, .rebase)
+        XCTAssertTrue(viewModel.errorMessage?.contains("changed") ?? false)
+        XCTAssertEqual(try client.conflictedPaths(), ["a.txt"])
+    }
+
+    func testSkipRejectsAChangedDestinationOrAbortedRebase() throws {
+        try makeConflictingBranch("conflicter")
+        XCTAssertThrowsError(try run(["rebase", "--merge", "conflicter"]))
+        let viewModel = makeViewModel()
+        let target = try XCTUnwrap(viewModel.mergeState.rebaseSkipTarget)
+        try client.rebaseAbort()
+        try run(["checkout", "conflicter"])
+        try write("new base\n", to: "base.txt")
+        try client.stage(paths: ["base.txt"])
+        try client.commit(message: "Advance the rebase destination")
+        try run(["checkout", "main"])
+        XCTAssertThrowsError(try run(["rebase", "--merge", "conflicter"]))
+        let current = try XCTUnwrap(client.rebaseSkipTarget(headHash: client.status().headHash))
+        XCTAssertEqual(current.commit, target.commit)
+        XCTAssertNotEqual(current.headHash, target.headHash)
+
+        viewModel.skipRebaseCommit(target)
+        waitForOperations(on: viewModel)
+
+        XCTAssertEqual(client.inProgressOperation(), .rebase)
+        XCTAssertTrue(viewModel.errorMessage?.contains("changed") ?? false)
+
+        try client.rebaseAbort()
+        viewModel.skipRebaseCommit(target)
+        waitForOperations(on: viewModel)
+
+        XCTAssertNil(client.inProgressOperation())
+        XCTAssertTrue(viewModel.errorMessage?.contains("changed") ?? false)
+    }
+
+    func testApplyRebaseSkipDropsConflictedCommitAndReplaysTheNext() throws {
+        try assertRebaseSkip(backend: .apply)
+    }
+
+    func testApplyRebaseConflictDetectionAndContinue() throws {
+        try makeConflictingBranch("conflicter")
+        XCTAssertThrowsError(try run(["rebase", "--apply", "conflicter"]))
+        XCTAssertEqual(client.inProgressOperation(), .rebase)
+        XCTAssertFalse(client.isEditingRebaseCommit())
+        XCTAssertThrowsError(try client.rebaseContinue())
+
+        try client.resolveConflict(path: "a.txt", ours: false)
+        try client.rebaseContinue()
+
+        XCTAssertNil(client.inProgressOperation())
+        XCTAssertEqual(try client.log(limit: 1).first?.subject, "Change a on main")
+        XCTAssertFalse(try client.status().isDirty)
+    }
+
+    func testApplyRebaseAbortRestoresState() throws {
+        try makeConflictingBranch("conflicter")
+        XCTAssertThrowsError(try run(["rebase", "--apply", "conflicter"]))
+        XCTAssertEqual(client.inProgressOperation(), .rebase)
+
+        try client.rebaseAbort()
+
+        XCTAssertNil(client.inProgressOperation())
+        XCTAssertEqual(try String(contentsOf: repoURL.appendingPathComponent("a.txt"),
+                                  encoding: .utf8), "from main\n")
+        XCTAssertFalse(try client.status().isDirty)
+    }
+
+    func testCommitAtInteractiveRebaseEditStopCanAmend() throws {
+        try assertCanAmendAtEditStop(in: repoURL)
+    }
+
+    private enum RebaseExit {
+        case finish, abort
+    }
+
+    private func assertAmendRejectsMovedHead(after exit: RebaseExit) throws {
+        try write("first\n", to: "edit-first.txt")
+        try client.stage(paths: ["edit-first.txt"])
+        try client.commit(message: "Commit to edit")
+        try write("next\n", to: "edit-next.txt")
+        try client.stage(paths: ["edit-next.txt"])
+        try client.commit(message: "Next commit")
+        _ = try GitShell.shared.runChecked(
+            ["rebase", "--interactive", "HEAD~2"], in: repoURL,
+            environmentOverrides: ["GIT_SEQUENCE_EDITOR": "sed -i.bak '1s/^pick /edit /'"])
+        let viewModel = makeViewModel()
+        XCTAssertTrue(viewModel.mergeState.allowsManualCommit)
+        XCTAssertEqual(try client.commitDetail("HEAD")?.subject, "Commit to edit")
+        viewModel.amendLastCommit = true
+        viewModel.draftCommitMessage = "Keep this draft"
+
+        switch exit {
+        case .finish: try client.rebaseContinue()
+        case .abort: try client.rebaseAbort()
+        }
+        XCTAssertNil(client.inProgressOperation())
+        let tip = try XCTUnwrap(client.commitDetail("HEAD"))
+        XCTAssertEqual(tip.subject, "Next commit")
+        XCTAssertNotEqual(tip.hash, viewModel.status.headHash)
+
+        viewModel.commit()
+        waitForOperations(on: viewModel)
+
+        XCTAssertEqual(try client.commitDetail("HEAD")?.hash, tip.hash)
+        XCTAssertEqual(viewModel.draftCommitMessage, "Keep this draft")
+        XCTAssertTrue(viewModel.errorMessage?.contains("amend") ?? false)
+    }
+
+    func testAmendRejectsMovedHeadAfterRebaseFinishes() throws {
+        try assertAmendRejectsMovedHead(after: .finish)
+    }
+
+    func testAmendRejectsMovedHeadAfterRebaseAborts() throws {
+        try assertAmendRejectsMovedHead(after: .abort)
+    }
+
+    func testLinkedWorktreeEditStopUsesItsPrivateGitDirectory() throws {
+        let linked = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitEnoughLinked-\(UUID().uuidString)")
+        addTeardownBlock { try? FileManager.default.removeItem(at: linked) }
+        try run(["worktree", "add", "--detach", linked.path, "HEAD"])
+
+        try assertCanAmendAtEditStop(in: linked)
+
+        XCTAssertNil(client.inProgressOperation())
+        XCTAssertFalse(client.isEditingRebaseCommit())
+    }
+
+    private func assertCanAmendAtEditStop(in directory: URL) throws {
+        let editingClient = GitClient(worktree: directory)
+        try "edit me\n".write(to: directory.appendingPathComponent("edit.txt"),
+                             atomically: true, encoding: .utf8)
+        try editingClient.stage(paths: ["edit.txt"])
+        try editingClient.commit(message: "Commit to edit")
+        _ = try GitShell.shared.runChecked(
+            ["rebase", "--interactive", "HEAD~1"], in: directory,
+            environmentOverrides: ["GIT_SEQUENCE_EDITOR": "sed -i.bak 's/^pick /edit /'"])
+        XCTAssertEqual(editingClient.inProgressOperation(), .rebase)
+        XCTAssertTrue(editingClient.isEditingRebaseCommit())
+        let viewModel = makeViewModel(at: directory)
+        XCTAssertTrue(viewModel.mergeState.allowsManualCommit)
+        XCTAssertNil(viewModel.mergeState.rebaseSkipTarget)
+        viewModel.amendLastCommit = true
+        viewModel.draftCommitMessage = "Edited commit"
+
+        viewModel.commit()
+        waitForOperations(on: viewModel)
+
+        XCTAssertNil(viewModel.errorMessage)
+        XCTAssertEqual(try editingClient.commitDetail("HEAD")?.subject, "Edited commit")
+        try editingClient.rebaseContinue()
+        XCTAssertNil(editingClient.inProgressOperation())
+    }
+
+    func testManualCommitStillCompletesResolvedMerge() throws {
+        try makeConflictingBranch("conflicter")
+        XCTAssertThrowsError(try client.merge("conflicter"))
+        try client.resolveConflict(path: "a.txt", ours: false)
+        let viewModel = makeViewModel()
+        XCTAssertTrue(viewModel.mergeState.allowsManualCommit)
+        viewModel.draftCommitMessage = "Resolved merge"
+
+        viewModel.commit()
+        waitForOperations(on: viewModel)
+
+        XCTAssertNil(viewModel.errorMessage)
+        XCTAssertNil(client.inProgressOperation())
+        XCTAssertEqual(try client.log(limit: 1).first?.parents.count, 2)
+    }
+
+    func testGitAmStateIsNotARebase() throws {
+        let gitDir = try XCTUnwrap(client.gitDir())
+        let applyDir = gitDir.appendingPathComponent("rebase-apply")
+        try FileManager.default.createDirectory(at: applyDir, withIntermediateDirectories: true)
+        try "".write(to: applyDir.appendingPathComponent("applying"),
+                     atomically: true, encoding: .utf8)
+
+        XCTAssertNil(client.inProgressOperation())
+        XCTAssertFalse(client.isEditingRebaseCommit())
     }
 
     func testCherryPickConflictDetectionAndAbort() throws {

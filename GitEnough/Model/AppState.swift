@@ -60,7 +60,7 @@ public final class AppState: ObservableObject {
 
     /// App-wide persistent git command history ("shell history" window).
     /// Every repo view model's activity log forwards events here.
-    public let activityStore = GitActivityStore()
+    public let activityStore: GitActivityStore
 
     /// UserDefaults key for the watch folder (Settings → General → Repository
     /// discovery). Shared with SettingsView's @AppStorage.
@@ -81,8 +81,10 @@ public final class AppState: ObservableObject {
         return viewModel(for: repo)
     }
 
-    public init(defaults: UserDefaults = .standard) {
+    public init(defaults: UserDefaults = .standard,
+                activityStore: GitActivityStore = GitActivityStore()) {
         self.defaults = defaults
+        self.activityStore = activityStore
         store = RepoStore(defaults: defaults)
         let savedPath = defaults.string(forKey: Self.selectedRepositoryKey)
         // Initialize the wrapped property before consulting another instance
