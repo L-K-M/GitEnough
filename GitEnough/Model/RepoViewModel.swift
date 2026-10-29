@@ -961,11 +961,16 @@ public final class RepoViewModel: ObservableObject, Identifiable {
     ///
     /// `allowsManualCommit` is one of the terms rather than a separate check in
     /// each front end: it is the same question, and leaving it out here would
-    /// re-open mid-rebase commits on both at once.
+    /// re-open mid-rebase commits on both at once. `conflicted.isEmpty` is here
+    /// for the same reason, and arrived the same way: the macOS view had grown
+    /// it locally while the GTK box had no conflict check at all, so the two
+    /// front ends disagreed about whether Commit is offered with unmerged
+    /// files. Deciding it once is what stops that recurring.
     public var canCommit: Bool {
         !draftCommitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && (amendLastCommit || !status.staged.isEmpty)
             && mergeState.allowsManualCommit
+            && status.conflicted.isEmpty
             && !isBusy
     }
 
@@ -993,9 +998,14 @@ public final class RepoViewModel: ObservableObject, Identifiable {
         // not reach the command line either.
         let amend = amendLastCommit && !status.isUnborn
         let expectedHeadHash = status.headHash
+        let committedDraftRevision = draftCommitMessageRevision
         // Only clear the box on success — a rejected hook must not eat the message.
         perform("Committing…", onSuccess: {
-            self.draftCommitMessage = ""
+            // Typing can continue while a hook runs, including in another
+            // window on this repository. That newer draft belongs to the user.
+            if self.draftCommitMessageRevision == committedDraftRevision {
+                self.draftCommitMessage = ""
+            }
             self.amendLastCommit = false
         }) { client in
             // A terminal may have started a rebase since the last UI snapshot.
@@ -1020,12 +1030,12 @@ public final class RepoViewModel: ObservableObject, Identifiable {
     }
 
     public func stashApply(_ entry: StashEntry, pop: Bool) {
-        perform(pop ? "Popping stash…" : "Applying stash…") { try $0.stashApply(index: entry.index, pop: pop) }
+        perform(pop ? "Popping stash…" : "Applying stash…") { try $0.stashApply(entry, pop: pop) }
     }
 
     public func stashDrop(_ entry: StashEntry) {
         perform("Dropping stash…", invalidatesMessageGeneration: false) {
-            try $0.stashDrop(index: entry.index)
+            try $0.stashDrop(entry)
         }
     }
 

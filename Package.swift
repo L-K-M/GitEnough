@@ -45,7 +45,7 @@ let linuxTargets: [Target] = []
 
 let package = Package(
     name: "GitEnough",
-    platforms: [.macOS(.v14)],
+    platforms: [.macOS("26.0")],
     products: [
         .library(name: "GitEnough", targets: ["GitEnough"]),
     ],

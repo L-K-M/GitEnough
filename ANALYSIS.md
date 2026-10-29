@@ -111,51 +111,29 @@ backlog and reconciled against it afterwards. Entries use the schema
 severity. No blocking findings: nothing in this wave corrupts a repository,
 destroys uncommitted work, or crashes the app.
 
-**Eight PRs are open from this wave and their entries have been removed from
-this document** (`#109`–`#116`): the per-side status letter (`o-L2`), Mark
-Resolved accepting a deletion (`o-L7`), the GTK history signature (`o-L1`), the
-activity history's file mode (`C5b`), the HEAD-row rescan (`o-P2`), the GTK
-commit-box enablement and amend read-back (`o-X15`, `o-X16`), the history page's
-queue ownership (`o-L11`), and the GTK diff pane rendering through `DiffParser`.
-`o-X5` was removed as already shipped in `main`; `o-X13` was removed because it
-does not reproduce (see Verified non-issues).
+**Twelve PRs are open from this wave and their entries have been removed from
+this document** (`#109`–`#116`, `#119`–`#122`): the per-side status letter
+(`o-L2`), Mark Resolved accepting a deletion (`o-L7`), the GTK history signature
+(`o-L1`), the activity history's file mode (`C5b`), the HEAD-row rescan
+(`o-P2`), the GTK commit-box enablement and amend read-back (`o-X15`, `o-X16`),
+the history page's queue ownership (`o-L11`), the GTK diff pane rendering
+through `DiffParser`, the rename destination unquoted twice (`o-L10`), the
+duplicate-parent phantom lane (`o-H5`), the GTK front end reporting a failed
+✨ Generate, and the Settings surface itself (`o-PS9`), which `#122` builds
+along with the keyring timeout that case exposed. `o-X5` was removed as already
+shipped in `main`; `o-X13` was removed because it does not reproduce (see
+Verified non-issues).
 
 **How the evidence was gathered.** The container had no Swift toolchain and no
 gtk4, so both were installed to match the CI pins — Swift 6.2.1 on Ubuntu 24.04
-and gtk4 4.14.5 — after which `GITENOUGH_NO_GTK=1 swift test` (421 tests, ~81 s),
-`swift build --product gitenough-gtk`, real git 2.43 experiments and small C
-probes against `GtkTextBuffer` all ran locally. `GitEnough/UI/` is macOS-only and
+and gtk4 4.14.5 — after which `GITENOUGH_NO_GTK=1 swift test` (421 tests at the
+time, ~81 s), `swift build --product gitenough-gtk`, real git 2.43 experiments
+and small C probes against `GtkTextBuffer` all ran locally. `Xvfb` is installed
+too, so the GTK front end can be built *and run*: `xvfb-run` satisfies
+`gtk_init_check`, and a temporary `main.swift` that assembles a real pane over a
+real view model and then walks the live widget tree is how the GTK findings here
+were confirmed and their fixes shown to work. `GitEnough/UI/` is macOS-only and
 could not be compiled here; findings in it are read from source, and say so.
-
-### No Settings surface on Linux
-
-missing features — important
-
-The LLM provider, base URL, model and API key are configurable only through
-`GitEnough/UI/SettingsView.swift`, which is macOS-only. The GTK ✨ Generate
-button is wired and functional, but there is no way to give it an endpoint or a
-key short of writing the key into the Secret Service by hand with `secret-tool`
-and the rest into `UserDefaults`. So the headline feature is unreachable on the
-platform. (`o-PS9` is the same gap seen from the keyring side: the *writer*
-exists — `SecretService.save` — and nothing calls it.)
-
-Build a GTK preferences dialog over the same `LLMConfiguration` and
-`KeychainStore`. Roughly a day. **Deliberately left without a PR in this wave**:
-it is a feature build rather than a fix, and with no display in the review
-environment it could not be shown to work.
-
-### The GTK diff pane has nowhere to report a failed generation
-
-bugs — nice-to-have
-
-Nothing renders `viewModel.messageGenerationError`. `RepoDetailPane` surfaces
-`errorMessage`, but a failed ✨ Generate writes to the *other* property, so on
-Linux the button simply re-enables and nothing says why — no API key, a bad
-endpoint, and a model refusing all look identical. macOS shows it as a caption
-under the commit box (`UI/ChangesView.swift:251`).
-
-Add the same caption label to `Linux/GitEnoughGTK/ChangesPane.swift`, driven from
-`refresh()` like every other piece of its state. About an hour.
 
 ### The HEAD ring is wider than the lane it sits in
 
@@ -171,55 +149,91 @@ as well as vertically. (`o-X10` records the GTK half, where every row clips.)
 Size the strip to `graphWidth` plus the ring overhang, or clip vertically only.
 About an hour, and it fixes both front ends at once.
 
-### Removing a repository leaves two maps holding its path
+### Removing a repository leaves its auto-fetch timestamp behind
 
 general issues — nice-to-have
 
-`AppState.remove(_:)` deletes `store.summaries[repo.path]` for the exact
-spelling, while `RepoStore.remove` removes *every* normalized spelling of the
-folder; and `lastAutoFetchByRepo` is never pruned at all. Both are small
-unbounded dictionaries keyed by paths that no longer exist — not a leak anyone
-will notice, but the same normalization bug `RepoStore` was fixed for.
+`AppState.lastAutoFetchByRepo` (`Model/AppState.swift:76`) is written on every
+automatic fetch and pruned nowhere, so `AppState.remove(_:)` leaves an entry
+keyed by a path that is no longer registered. Remove a repository and add it
+back in the same session and it inherits the old timestamp, so its first
+auto-fetch is skipped until the interval elapses from a fetch that happened
+before the removal. Bounded by the number of repositories ever opened, so it is
+a wrong answer rather than a leak.
 
-Prune both by normalized path, next to the `removePersistedDraft` call that
-already does the equivalent for the commit draft. Twenty minutes.
+Prune it in `remove(_:)`, beside the `removePersistedDraft` call that already
+does the equivalent for the commit draft. Twenty minutes.
+
+**Correction.** An earlier version of this entry claimed a second map leaks the
+same way — `summaries[repo.path]` deleted by exact spelling while repositories
+are removed by *normalized* spelling — and put that line in `AppState.remove`,
+where it is not. It is `RepoStore.swift:227`, and the orphan is unreachable:
+`addDiscovered` is the only code that appends to `repositories`, and it already
+refuses a folder whose normalized path is present, so two spellings never
+coexist for the mismatch to strand one. `starredPaths.remove(repo.path)` on the
+next line is exact-spelling for the same reason and equally safe.
 
 ### Commit is disabled without saying why
 
 usability — nice-to-have
 
-`UI/ChangesView.swift`'s Commit button is gated by a three-term predicate and
-carries no `.help()`, so a user with a message typed and nothing staged sees a
-dead button and no reason. The Stage All button two sections up does this
-correctly: it names the conflicting files in its tooltip. On an unborn repo the
-same silence applies to the amend toggle.
+`UI/ChangesView.swift:314`'s Commit button is gated by a four-term predicate —
+an empty message, nothing staged without an amend, a rebase in progress, or busy
+— and carries no `.help()` at all, so a user with a message typed and nothing
+staged sees a dead button and no reason. The Stage All button two sections up
+does this correctly: `stageAllBlockedHelp` names the conflicting files in its
+tooltip. The amend toggle is a softer version of the same thing — it is disabled
+on an unborn repo, but its tooltip describes the action rather than the refusal.
 
-Give the button a tooltip derived from whichever term of `canCommit` is false.
-Half an hour.
+Give the button a tooltip derived from whichever term is false, the way
+`stageAllBlockedHelp` does. Half an hour.
+
+Write this one *after* PR #116 lands: that PR replaces the inline predicate with
+a `canCommit` property on the view model, so the tooltip should read its terms
+rather than re-derive them — and written now it conflicts with #116 in the same
+expression.
 
 ### An all-whitespace commit message is a silent no-op
 
 usability — nice-to-have
 
-`RepoViewModel.commit()` trims the draft and returns on empty without setting
-`errorMessage`. On macOS the button is disabled so it never bites; a keyboard
-shortcut or a future caller reaches it, and nothing at all happens.
+`RepoViewModel.commit()` (`Model/RepoViewModel.swift:985`) trims the draft and
+returns on empty without setting `errorMessage`. The GTK front end reaches it
+today: its Commit button is gated on the staged list alone, so staging a file
+and clicking Commit with an empty box does nothing whatsoever, and says nothing.
+On macOS the only caller is a button that is disabled in exactly this state,
+`.keyboardShortcut(.return, modifiers: .command)` included, so it should never
+bite there — read from source, since `UI/` does not compile on Linux.
 
-Set the error instead of returning. Fifteen minutes.
+PR #116 closes the reachable path by gating both front ends on one `canCommit`
+that includes the message term — but the silent `return` stays behind it, so the
+next caller finds the same dead end. Set the error instead of returning. Fifteen
+minutes.
 
-### The staged patch is grapheme-walked twice on the repo queue
+### Measuring the staged patch walks all of it to answer a bounded question
 
 performance problems, stuttering, and jank — nice-to-have
 
-`AI/CommitMessageGenerator.swift:60` does `diff.count > maxDiffCharacters` and
-`diff.prefix(maxDiffCharacters)`, both grapheme-cluster walks over the whole
-staged patch, and the patch is read on the repository's serial queue — so a huge
-staged refactor stalls every other repo operation behind ✨ Generate before the
-request is even built. Distinct from `o-A1`, which is about the request body
-being unbounded; this is the cost of computing the bound.
+`AI/CommitMessageGenerator.swift:59` asks `diff.count > maxDiffCharacters`.
+`String.count` counts grapheme clusters, so it walks the entire staged patch
+however large it is — to settle a question that is decided by the first
+`maxDiffCharacters + 1` of them. The walk runs on the repository's serial queue,
+so a huge staged refactor stalls every other repo operation behind ✨ Generate
+before the request is even built. Distinct from `o-A1`, which is about the
+request body being unbounded; this is the cost of computing the bound.
 
-Cap on UTF-8 bytes with a scalar boundary, and bound `diffStat` while there.
-About an hour. Shares a fixture with `o-A1`.
+Compare `diff.utf8.count` instead — a native Swift string stores its UTF-8
+length, so the test is O(1) — and truncate on that byte budget at a scalar
+boundary, which is the cap the request actually wants. Half an hour. Shares a
+fixture with `o-A1`.
+
+**Correction.** An earlier version of this entry said the patch is walked
+*twice*, counting `String(diff.prefix(maxDiffCharacters))` as a second full
+walk. It is not: `prefix(_:)` stops once it has the requested number of
+elements, so that half is bounded by the cap and costs nothing extra. The
+unbounded work sitting next to it is `diffStat`, interpolated into the prompt in
+full by design (`o-A1`) — so the two are worth one pass, but only the `count` is
+waste.
 
 ---
 
@@ -519,13 +533,6 @@ file, rewrite it on disk, refresh, assert `selectedFileDiff` changed.
 first `/`. For a remote literally named `up/stream`, tracking `up/stream/feature`
 offers to create a local branch called `stream/feature`. `Remote.split` already
 solves this correctly by longest configured prefix; route this through it.
-
-### o-L10 · Rename destinations are C-unquoted twice — S
-
-A rename whose destination path needs C-quoting is unquoted once by the
-name-status parser and again downstream, so a path containing a literal
-backslash-escape sequence is corrupted. **Test:** a rename to a path containing
-`\t` as two literal characters.
 
 ### o-L13 · `discard` on a corrupt HEAD ref silently unstages instead of reporting the breakage — S
 
@@ -1808,14 +1815,6 @@ than a decoration that shuffles. **Test:** lay out a window, prepend a new branc
 tip, assert every pre-existing lane's `colorIndex` is unchanged. **That test
 fails today.** Unlocks **o-D3**.
 
-### o-H5 · A merge with a duplicate parent leaks an immortal phantom lane — S
-
-The algorithm rests on "at most one lane expects any given hash". `git commit-tree
--p X -p X` breaks it, and the duplicate lane is never closed — it runs to the
-bottom of every subsequent render. Rare but reachable, and cheap to guard:
-de-duplicate a commit's parent list at layout entry. **Test:** `GraphLayoutTests`
-with a duplicate-parent merge; assert `columnCount` returns to 1 below it.
-
 ### o-H6 · Typing in the filter yanks the commit list sideways — S
 
 Filtering changes `columnCount`, which changes the graph strip's width, which
@@ -2625,10 +2624,12 @@ No error, no message, no row. The macOS front end reports it.
 ### o-X19 · Per-repository global CSS and settings handlers, never removed — S
 
 Leaks one `GtkCssProvider` and one handler per repository selected, for the life
-of the process. Three call sites, all needing the same fix: `HistoryPane.init`
-installs the `.commit-list` stylesheet on the **display** and a `Theme.onChange`
-handler, and each `DiffView.init` installs a second `Theme.onChange` handler, so
-a session that opens ten repositories carries ten of each. Bounded rather than
+of the process. Two call sites on `main`, both in `HistoryPane.init`
+(`HistoryPane.swift:36` and `:57`): it installs the `.commit-list` stylesheet on
+the **display** and a `Theme.onChange` handler, so a session that opens ten
+repositories carries ten of each. PR #110 adds a third — one `Theme.onChange`
+per `DiffView.init`, for the theme-aware diff colours — which wants releasing by
+the same mechanism rather than one of its own. Bounded rather than
 unbounded — panes are cached per repository, not rebuilt per publish — but every
 theme change then iterates the whole list. **Fix:** give `Theme.onChange` and
 `UI.applyStyle` a cancellable handle and have the owners release it in `deinit`;
@@ -2822,15 +2823,6 @@ same remedy — configure once, or use a per-call formatter.
 Subscribers are stored in a dictionary and notified in its iteration order, which
 is unspecified and varies per process. macOS delivers in subscription order.
 **Fix:** an ordered store, so the two platforms behave alike.
-
-### o-PS9 · The Linux keyring has no writer — M
-
-`SecretService.save` exists and `KeychainStore` routes to it, so the *model*
-can store a key on Linux — what is missing is any surface that calls it. The
-Settings window is `UI/`, which is macOS-only, so the AI feature cannot be
-configured on Linux at all. Pairs with **No Settings surface on Linux** below:
-the keyring write and the dialog that drives it are the same gap seen from two
-sides.
 
 ### o-PS10 · `KeychainStore` imports `Security` from `AI/` — S
 
@@ -3109,8 +3101,11 @@ time and produces nothing.*
 
 ## Suggested next pickups (highest value first)
 
-*The list below is wave 5's ranking, merged with the standing one. Wave 5's top
-five have shipped (PRs #96–#101); what remains starts at the sixth.*
+*The list below is wave 5's ranking, merged with the standing one. Shipped items
+are struck from it rather than marked, so **the first entry is always the next
+pickup** — don't go looking for an ordinal. The numbering has gaps where shipped
+items were removed and the rest were left in place; a gap means something
+landed, not that an entry is missing.*
 
 ### Broken things, in order of what they cost the user
 
@@ -3132,8 +3127,9 @@ five have shipped (PRs #96–#101); what remains starts at the sixth.*
 8. **o-A1 + o-A2 + o-A3 (+ o-A7, o-A8) · Harden the LLM request.** Bound the
    stat, use a delimiter the payload cannot forge, set a real wall-clock
    deadline. All five are the same request path and share a fixture.
-9. **o-A6 + o-PS9 · Make local models usable**, on both platforms. The best
-   answer to the app's own privacy positioning.
+9. **o-A6 · Make local models usable**, on both platforms — `#122` gives Linux
+   the Settings surface this needed, so only the "no API key" half of `o-A6`
+   is left. The best answer to the app's own privacy positioning.
 
 ### The everyday loop
 

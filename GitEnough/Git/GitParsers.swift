@@ -283,7 +283,7 @@ public enum GitParsers {
         return remotes
     }
 
-    // MARK: - git stash list --format=%gd%x1F%gs
+    // MARK: - git stash list --format=%gd%x1F%gs%x1F%H
 
     public static func parseStash(_ output: String) -> [StashEntry] {
         var entries: [StashEntry] = []
@@ -296,8 +296,12 @@ public enum GitParsers {
                     .replacingOccurrences(of: "}", with: "")) else { continue }
             // %gs is either "WIP on <branch>: <hash> <subject>" (no -m given) or
             // "On <branch>: <message>" (custom message given).
+            // %H is last, so a literal field separator inside the user-supplied
+            // message cannot replace the object's identity or truncate the text.
+            let objectID = fields.count > 2 ? fields.last.flatMap { $0.isEmpty ? nil : $0 } : nil
+            let subjectFields = objectID == nil ? fields.dropFirst() : fields.dropFirst().dropLast()
             var branch = ""
-            var message = fields[1]
+            var message = subjectFields.joined(separator: fieldSep)
             var isWIP = false
             var rest: String?
             if message.hasPrefix("WIP on ") {
@@ -316,7 +320,8 @@ public enum GitParsers {
                     if pieces.count == 2 { message = String(pieces[1]) }
                 }
             }
-            entries.append(StashEntry(index: index, branch: branch, message: message))
+            entries.append(StashEntry(index: index, branch: branch, message: message,
+                                      objectID: objectID))
         }
         return entries
     }

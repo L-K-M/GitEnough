@@ -1,8 +1,6 @@
 import SwiftUI
 
-/// Program entry point. GitEnough is a regular windowed app (Dock icon, standard
-/// menus) built around a single NavigationSplitView window: repositories on the
-/// left, the selected repository on the right.
+/// Each workspace has independent navigation over one shared repository store.
 @main
 struct GitEnoughApp: App {
 
@@ -22,8 +20,8 @@ struct GitEnoughApp: App {
     }
 
     var body: some Scene {
-        WindowGroup("GitEnough") {
-            ContentView()
+        WindowGroup("GitEnough", id: "repository") {
+            ContentView(appState: appState, appDelegate: appDelegate)
                 .environmentObject(appState)
                 .environmentObject(appState.store)
                 .frame(minWidth: 860, minHeight: 520)
@@ -31,7 +29,10 @@ struct GitEnoughApp: App {
         }
         .defaultSize(width: 1240, height: 780)
         .commands {
-            AppCommands(appState: appState)
+            AppCommands(appState: appState, appDelegate: appDelegate)
+            SelectionCommands()
+            HistoryCommands()
+            SidebarCommands()
         }
 
         /// The persistent git command history ("shell history") — one shared

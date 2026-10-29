@@ -372,6 +372,17 @@ final class GitParsersTests: XCTestCase {
         XCTAssertEqual(entries[1].branch, "feature")
         XCTAssertEqual(entries[1].message, "experiments")
         XCTAssertEqual(entries[0].ref, "stash@{0}")
+        XCTAssertNil(entries[0].objectID)
+    }
+
+    func testParseStashPreservesStableIdentityAndMessageSeparators() {
+        let hash = String(repeating: "ab", count: 20)
+        let output = "stash@{1}\(f)On feature: first\(f)second\(f)\(hash)\n"
+        let entry = GitParsers.parseStash(output).first
+
+        XCTAssertEqual(entry?.objectID, hash)
+        XCTAssertEqual(entry?.message, "first\(f)second")
+        XCTAssertEqual(entry?.branch, "feature")
     }
 
     // MARK: - Name-status (commit files)

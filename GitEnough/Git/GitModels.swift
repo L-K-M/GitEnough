@@ -319,6 +319,16 @@ public struct StashEntry: Identifiable, Hashable {
     public let index: Int          // stash@{n}
     public let branch: String      // branch the stash was taken on
     public let message: String
+    /// Stable identity; the reflog index changes when another stash is removed.
+    /// Nil only for legacy, two-field parser input.
+    public let objectID: String?
+
+    public init(index: Int, branch: String, message: String, objectID: String? = nil) {
+        self.index = index
+        self.branch = branch
+        self.message = message
+        self.objectID = objectID
+    }
 
     public var id: Int { index }
     public var ref: String { "stash@{\(index)}" }
