@@ -19,9 +19,12 @@ final class RepositoryWindowState: ObservableObject {
     @Published var selectedTab: DetailTab = .history
     @Published var inspectorVisible = true
     @Published var sidebarSearchRequest = UUID()
+    /// Explicit navigation reveals its group; restoring a repository must not
+    /// overwrite the independently saved accordion expansion.
+    @Published private(set) var repositorySelectionRequest = UUID()
     @Published var expandedSidebarGroupID: String?
-    /// A stored empty group ID means intentionally collapsed. A new scene has
-    /// no saved value and should reveal its selected repository's group.
+    /// Scene metadata can contain a legacy empty (collapsed) value; the
+    /// accordion reconciles that to one open group.
     var hasSavedSidebarGroupState = false
     @Published var showingAddRepository = false
     @Published var showingNewBranch = false
@@ -61,6 +64,7 @@ final class RepositoryWindowState: ObservableObject {
         // and the Linux front end. Other windows do not observe this selection.
         appState.select(repo)
         observeActiveRepository()
+        repositorySelectionRequest = UUID()
     }
 
     func activate() {

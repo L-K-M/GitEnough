@@ -16,16 +16,22 @@ Forge mode stays host-specific. Self-hosted forges use their actual host and web
 port rather than a guessed provider name. First Letter supports Unicode
 letters, folds accented initials, and places non-letter initials under `#`.
 
-Each window remembers one expanded group. Expanding another group closes the
-previous one. Searching reveals the first matching group while other matching
-group headers retain their counts. Clearing the search restores the previous
-accordion state, or reveals the repository selected during the search.
+Grouped mode uses fixed headers and one independently scrollable repository
+body. Opening another group replaces the open body. The first header stays at
+the top; the last stays at the bottom unless its own body is open below it.
+Headers remain present during text and logical filtering, including groups with
+no matching repositories. Searching opens a group with matches; clearing the
+search restores the prior group or reveals the repository chosen during search.
+Each open window has its own expanded group. The quit/relaunch limitation is recorded below. If headers cannot physically fit a
+short window, an accessible overflow scroll must keep them reachable rather than
+compress or clip them.
 
 Manual groups support New Group, Rename Group, Delete Group, and the repository
 context menu's Move to Group. Deleting a group moves its repository registrations
 to Ungrouped. It does not remove repository registrations or change their files.
 Creating a group or choosing an explicit destination clears filters so the new
-destination is visible. Empty manual groups remain manageable outside filters.
+destination is visible. Empty manual groups remain manageable, including while
+filters are active.
 
 ## Automated checks
 
@@ -54,47 +60,139 @@ remote. Remote URL strings are enough; do not fetch example remotes.
    `Acme`/`acme` namespaces on GitHub, GitLab, and a self-hosted forge combine
    under the first display spelling with all forge names in the subtitle.
    Forge mode should keep the hosts separate. Verify all registrations remain
-   reachable, including local repositories. Expand two groups successively and
-   confirm only the latest stays open. Exercise disclosure headers with mouse,
-   Tab, and arrow keys.
-3. Search for a repository inside a currently collapsed group. Its matching
-   group should open. Clear the search and check the prior accordion state;
-   repeat after selecting a search result and check the new selection is visible.
+   reachable, including local repositories. Open two groups successively and
+   confirm one body stays open. Up/Down moves header focus; Right, Space, or
+   Return opens the focused group. Tab enters its native repository List, where
+   repeated Up/Down selects rows. Header focus leaves the active repository intact.
+3. Search for a repository inside another group. A matching body should open,
+   and every header should remain reachable with updated counts. Clear the search
+   and check the prior open group; repeat after choosing a search result and
+   check the new repository selection is visible.
 4. Create an empty group with Return, cancel another with Escape, and verify a
    blank name is disabled. Try a duplicate name with different capitalization;
    the sheet should show an actionable error and preserve its text.
 5. Move two repositories to the group, rename it, then reopen the app and verify
    membership persists. Delete the group and confirm both registrations appear
    under Ungrouped with their files, stars, and original flat order intact.
-6. Open two repository windows. Change the app-wide grouping mode, then expand
-   different groups in the two windows. Verify their expansions remain
-   independent and restore after reopening.
+6. Open two repository windows. Change the app-wide grouping mode, then open
+   different groups and select different repositories. Verify their live states
+   remain independent while switching between windows. Record quit/relaunch
+   behavior separately: the independently browsed group currently resets to the
+   selected repository's group, as described under restoration limits below.
 7. Delete a group from another window while it is expanded. The first window
    should recover to a valid group. Apply a filter with no matches and use Clear
    Filters to recover without losing the selected repository.
 
-## Header keyboard regression
+## Fixed-header regression and observed results
 
-The initial grouped build selected a GitLab disclosure header in the accessibility
-outline after a mouse click, but the window remained first responder. Right Arrow
-did not expand it. Repository rows already had the native-list responder bridge;
-headers did not, and the selection binding rejected their IDs.
+The revised fixed-header layout was exercised in the running app using owned
+disposable fixtures. Automated coverage includes eight rendered
+accordion/split-window tests and the explicit-navigation window-state contract.
+Those component checks do not cover full-app repository reveal and do not
+replace the running-app checks below.
 
-Headers now have explicit stable tags and window-local outline selection. Selecting
-a header requests the native list as first responder without changing the active
-repository. Selecting a repository clears header selection; external repository
-navigation also clears it and reveals the appropriate group. Verify the original
-sequence in the running app: open GitHub, click collapsed GitLab, press Right Arrow,
-then Left Arrow. GitLab should open and close, the prior repository should remain
-in the detail pane, and opening another header should preserve the accordion rule.
+Before this revision, DisclosureGroups lived inside one scrolling outline.
+Opening a group with many repositories made its siblings scroll away. The
+reproduction was to open the first group, scroll its repositories to the bottom,
+and look for the first and last group headers. The revised layout keeps the
+headers fixed and scrolls the open repository body between them.
 
-## Observed results
+Verified behavior:
 
-These checks passed in the isolated running app using disposable working
-copies: Forge, Account and First Letter; one-open-group expansion; Right/Left
-header navigation; search into a collapsed group and restoring the prior group;
-manual create/move/rename/delete; duplicate-name validation; Return/Escape sheets;
-two independent window expansions; and both windows recovering when their shared
-manual group was deleted. Deletion returned registrations to Ungrouped.
-A fresh scene now reveals the selected repository's group, while an explicitly
-saved collapsed state remains distinct from a scene with no saved state.
+- **First, middle, and last groups:** every header remained visible in the normal
+  layout. The first header stayed at the top and the last at the bottom unless
+  its body was open beneath it. Only the active group's body scrolled.
+- **Empty, short, and long bodies:** each occupied the same remaining vertical
+  budget. Empty or short content did not pull later headers upward or reduce the
+  body to its content height.
+- **Less than one row of remaining space:** at 961 × 573 with sixteen group
+  headers, every header stayed visible while the body used the small remaining
+  gap. Scrolling over the final header did not move the headers. The native
+  geometry regression verifies 90 points of headers and a 30-point body fit
+  exactly inside a 120-point viewport; true header overflow remains scrollable.
+- **Keyboard and selection:** Up/Down moved focus between headers. Right, Space,
+  and Return opened the focused group while one body stayed open. Tab entered
+  the native List; repeated Up/Down selected repository rows stably. Header
+  navigation preserved the active repository until a row was chosen.
+- **Search and recovery:** searching for the eighteenth Alpha repository kept
+  all headers present, including zero-match counts. Escape restored the prior
+  group. Clear Filters exposed its native accessibility name and action and
+  worked from the empty body outside a List.
+- **Manual groups:** Return created an empty group; rename and deletion worked.
+  Deleting it opened a valid fallback and preserved all 29 fixture registrations.
+- **Explicit opening and reveal:** reopening the already selected eighteenth
+  Alpha repository while a query hid its row cleared the query, reapplied native
+  selection, and scrolled it fully into view. Grouped and flat modes passed, with
+  fixed headers retained in grouped mode. Ordinary arrow navigation stayed stable.
+- **Independent windows:** two windows retained different open groups and
+  repository selections when switching between them.
+- **Flat mode:** mouse and keyboard selection, stars, the Uncommitted Changes
+  filter, and Show All worked in the unchanged flat List.
+- **Physical overflow:** with 24 empty group headers in an insufficiently tall
+  window, the exceptional overflow scroll made the final header reachable and
+  clickable. Normal windows used body-only scrolling.
+- **Actual resizing:** with the commit inspector visible, resizing the real app
+  between 961 × 573 and 1920 × 960 passed after the metadata ScrollView fix
+  described below. This covers the short and tall window layouts.
+
+## Reopening an already selected repository
+
+Before the fix, explicitly opening an already selected repository after a query
+hid its row could clear the query yet leave the row offscreen. Accessibility
+reported Alpha18 selected while the scrollbar stayed at the top and only
+Alpha01–Alpha12 were visible. The manual reproduction uses name sorting: select
+Alpha18, search for Alpha01 in the same group, then use Command-O to open Alpha18
+again.
+
+In the corrected running app, Command-O cleared the query, selected Alpha18, and
+scrolled it fully into view at the bottom with all headers pinned. The same
+selection-and-visibility flow passed in flat mode. Repeated ordinary arrow
+navigation retained the existing List and stable selection. Explicit Open, add,
+and drop refresh the native List and reapply selection after its body mounts;
+ordinary row navigation preserves its native table and keyboard focus.
+
+This regression is verified manually in the actual app. The rendered component
+and native split-window tests do not establish this full-app reveal behavior.
+Repeat the procedure after changing sidebar identity, filtering, selection,
+or scroll-view ownership; require both the correct native selection and a fully
+visible target row.
+
+## Inspector resize regression
+
+The full app crashed in the inspector-resize path on clean main `9366597`.
+Headless component and native split-window tests
+did not reproduce that full-app crash, so their passing results were insufficient
+to establish the fix.
+
+The fix removes the existing vertical `fixedSize` modifier from the commit
+metadata ScrollView in `CommitDetailView`. The inspector-visible 961 × 573 ↔
+1920 × 960 sequence then passed in the actual app. This is the manual regression
+evidence for that change; it should be repeated after later layout changes.
+
+## Long metadata and restoration limits
+
+The long-metadata fixture contains twenty paragraphs and a final sentinel. Show
+More expanded the body, metadata scrolling reached the sentinel and Show Less at
+both 1240 × 780 and 961 × 573, and Show Less returned to bounded content. Resizing
+with that commit selected remained stable. Its empty test commit changed no files.
+
+Live windows retain independent selections and expanded groups. In repeated
+quit/relaunch checks on this macOS 27.0.1 test machine, an independently browsed
+group reset to the selected repository's group in both Manual and Forge modes.
+The owned profile had `NSQuitAlwaysKeepsWindows=true` and no
+`ApplePersistenceIgnoreState` value; native `open -a` launch was also checked.
+This remains a limitation; earlier one-off restoration observations are not
+claimed as a repeatable pass. Repository registrations and manual assignments
+persist, and fresh scenes always have one group open. No custom window-state
+persistence or changes to the user's system restoration settings were added.
+
+## Earlier observed results
+
+The preceding outline-based build passed these checks in an isolated running app
+with disposable working copies: the original grouping modes, manual
+create/move/rename/delete, duplicate-name validation, Return/Escape sheets,
+repository-row keyboard selection, search recovery, independent window expansion,
+and cross-window recovery after group deletion. The earlier header-focus defect
+was also reproduced and fixed: an accessibility-selected header had left the
+window as first responder, so Right Arrow did nothing. Those results predate the
+fixed-header component and do not establish its keyboard or layout behavior.

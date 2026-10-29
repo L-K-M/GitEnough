@@ -23,7 +23,8 @@ Desktop never gave you: a proper **IntelliJ-style branch/merge graph** and
   list as you type, and sort it manually, by name, or by recently opened.
 - **Repository groups.** Choose View → Group Repositories by, or use the
   sidebar's Repository Options menu, to group by forge, account, first letter,
-  or your own named groups. One group opens at a time in each window. Create
+  or your own named groups. One group opens at a time in each window; headers
+  stay visible while its repository list scrolls. Create
   and manage manual groups from the sidebar menus; Move to Group assigns a
   repository without moving its files.
 - **Watch folder.** Point Settings → General at a folder (say `~/code`) and
