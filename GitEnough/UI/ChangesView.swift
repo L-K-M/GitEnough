@@ -47,13 +47,6 @@ struct ChangesView: View {
         viewModel.amendWouldRewritePushedCommit
     }
 
-    private var canCommit: Bool {
-        !viewModel.isBusy && viewModel.mergeState.allowsManualCommit
-            && conflicts.isEmpty
-            && !viewModel.draftCommitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && (viewModel.amendLastCommit || !viewModel.status.staged.isEmpty)
-    }
-
     private var selectedRow: Binding<ChangeRowID?> {
         Binding(get: {
             selection.map { ChangeRowID(path: $0.file.path, isStaged: $0.isStaged) }
@@ -73,7 +66,7 @@ struct ChangesView: View {
             canUnstage: !viewModel.isBusy && selection?.isStaged == true,
             canStageAll: !viewModel.isBusy && conflicts.isEmpty && !viewModel.status.unstaged.isEmpty,
             canUnstageAll: !viewModel.isBusy && !viewModel.status.staged.isEmpty,
-            canCommit: canCommit,
+            canCommit: viewModel.canCommit,
             canStash: !viewModel.isBusy && !conflictUIActive && viewModel.status.isDirty,
             canGenerate: !viewModel.isBusy && !viewModel.isGeneratingMessage && !viewModel.status.staged.isEmpty,
             canDiscard: !viewModel.isBusy && selection != nil,
@@ -99,7 +92,7 @@ struct ChangesView: View {
 
     private func requestCommit() {
         messageUndoController.finishEditing()
-        guard canCommit else { return }
+        guard viewModel.canCommit else { return }
         if amendRewritesPushedCommit {
             showingAmendPushedConfirmation = true
         } else {
@@ -372,8 +365,7 @@ struct ChangesView: View {
                         Label("Generate", systemImage: "sparkles")
                     }
                 }
-                .disabled(viewModel.isGeneratingMessage || viewModel.isBusy
-                    || viewModel.status.staged.isEmpty)
+                .disabled(!viewModel.canGenerateCommitMessage)
                 .help("Write the commit message with the configured LLM (Settings → AI)")
 
                 if !viewModel.draftCommitMessage.isEmpty {
@@ -401,7 +393,10 @@ struct ChangesView: View {
                 Button("Commit", action: requestCommit)
                 .help("Commit staged changes (⌘↩)")
                 .buttonStyle(.borderedProminent)
-                .disabled(!canCommit)
+                // The predicate itself lives on the view model, so the GTK
+                // commit box cannot describe this button differently — which
+                // it did, and in both directions.
+                .disabled(!viewModel.canCommit)
             }
         }
         .padding(10)

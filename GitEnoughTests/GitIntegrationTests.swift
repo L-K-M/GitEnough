@@ -1789,6 +1789,12 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertFalse(viewModel.status.staged.isEmpty)
         let head = try client.commitDetail("HEAD")?.hash
         viewModel.draftCommitMessage = "Keep this draft"
+        // The refusal below is the backstop. `canCommit` is what both front
+        // ends draw from, so the button has to be dark before the click, not
+        // merely harmless after it — every other term of `canCommit` is
+        // satisfied here, so only the rebase can be holding it.
+        XCTAssertFalse(viewModel.canCommit,
+                       "Commit is offered during a rebase it would be refused for")
 
         viewModel.commit()
         waitForOperations(on: viewModel)
@@ -2056,6 +2062,37 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertNil(editingClient.inProgressOperation())
     }
 
+    /// A merge stops with unmerged entries, and committing then is something
+    /// git refuses. The macOS view checked for that locally while the GTK box
+    /// did not, so the two front ends disagreed about whether Commit is on
+    /// offer; `canCommit` is where that question is settled for both.
+    ///
+    /// Note this is the one state `allowsManualCommit` does not cover: a merge
+    /// is not a rebase, so that term is true here and only the conflict term
+    /// holds the button.
+    func testCommitIsNotOfferedWhileFilesAreUnmerged() throws {
+        try makeConflictingBranch("conflicter")
+        XCTAssertThrowsError(try client.merge("conflicter"))
+        // Something unrelated staged alongside the conflict, so the staged-list
+        // term is satisfied and cannot be what holds the button. Without this
+        // the assertion below passes for the wrong reason: a conflicted merge
+        // of one file stages nothing.
+        try write("unrelated\n", to: "b.txt")
+        try run(["add", "b.txt"])
+
+        let viewModel = makeViewModel()
+        viewModel.draftCommitMessage = "Commit over a conflict"
+
+        XCTAssertFalse(viewModel.status.conflicted.isEmpty, "precondition")
+        XCTAssertFalse(viewModel.status.staged.isEmpty, "precondition")
+        XCTAssertTrue(viewModel.mergeState.allowsManualCommit,
+                      "a merge is not a rebase, so that term cannot be the one holding it")
+        XCTAssertFalse(viewModel.isBusy, "precondition")
+
+        XCTAssertFalse(viewModel.canCommit,
+                       "Commit is offered while files are still unmerged")
+    }
+
     func testManualCommitStillCompletesResolvedMerge() throws {
         try makeConflictingBranch("conflicter")
         XCTAssertThrowsError(try client.merge("conflicter"))
@@ -2063,6 +2100,8 @@ final class GitIntegrationTests: XCTestCase {
         let viewModel = makeViewModel()
         XCTAssertTrue(viewModel.mergeState.allowsManualCommit)
         viewModel.draftCommitMessage = "Resolved merge"
+        XCTAssertTrue(viewModel.canCommit,
+                      "and is offered again once the conflict is resolved")
 
         viewModel.commit()
         waitForOperations(on: viewModel)

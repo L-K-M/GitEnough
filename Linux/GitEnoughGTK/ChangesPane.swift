@@ -27,6 +27,10 @@ final class ChangesPane {
     /// True while the model is writing the commit box, so echoing that back as
     /// a user edit can't fight the caret.
     private var isSyncingMessage = false
+    /// The same guard for the amend checkbox, which is now two-way: setting it
+    /// from the model emits `toggled`, and writing that straight back would
+    /// make the model's own clear look like the user ticking the box.
+    private var isSyncingAmend = false
 
     init(viewModel: RepoViewModel) {
         self.viewModel = viewModel
@@ -88,9 +92,8 @@ final class ChangesPane {
         connect(stagedList, "row-selected") { [weak self] _ in self?.showDiff(staged: true) }
         connect(messageBuffer, "changed") { [weak self] in self?.messageEdited() }
         connect(amendToggle, "toggled") { [weak self] in
-            guard let self else { return }
-            viewModel.amendLastCommit =
-                gtk_check_button_get_active(cast(amendToggle, to: GtkCheckButton.self)) != 0
+            guard let self, !isSyncingAmend else { return }
+            viewModel.amendLastCommit = amendIsChecked
         }
 
         observer = ModelObserver(viewModel) { [weak self] in self?.refresh() }
@@ -121,11 +124,42 @@ final class ChangesPane {
             gtk_text_buffer_set_text(messageBuffer, viewModel.draftCommitMessage, -1)
             isSyncingMessage = false
         }
-        gtk_widget_set_sensitive(commitButton,
-                                 viewModel.status.staged.isEmpty
-                                    || !viewModel.mergeState.allowsManualCommit ? 0 : 1)
-        gtk_widget_set_sensitive(generateButton, viewModel.isGeneratingMessage ? 0 : 1)
+        syncCommitControls()
         diffView.show(viewModel.selectedFileDiff)
+    }
+
+    /// The commit box's enablement, read from the view model rather than
+    /// re-derived here — the same reason the Push button asks
+    /// `pushCapability`. This pane used to gate Commit on the staged list
+    /// alone, which is wrong in both directions: it offered the button with an
+    /// empty message and while an operation was running, where the click does
+    /// nothing at all, and it withheld the button for an amend that only
+    /// rewords the last message, which stages nothing by definition.
+    private func syncCommitControls() {
+        gtk_widget_set_sensitive(commitButton, viewModel.canCommit ? 1 : 0)
+        gtk_widget_set_sensitive(generateButton,
+                                 viewModel.canGenerateCommitMessage ? 1 : 0)
+        // Nothing to amend before the first commit, and the model clears a
+        // stale flag on every snapshot — so the checkbox has to be able to say
+        // both things.
+        gtk_widget_set_sensitive(amendToggle, viewModel.status.isUnborn ? 0 : 1)
+        syncAmendToggle()
+    }
+
+    /// Reads the amend flag back from the model. It is not a one-way control:
+    /// a successful commit clears it, and so does any snapshot of an unborn
+    /// HEAD. Without this the checkbox kept its tick while the model had
+    /// already dropped it, and the next commit would quietly not amend.
+    private func syncAmendToggle() {
+        guard amendIsChecked != viewModel.amendLastCommit else { return }
+        isSyncingAmend = true
+        gtk_check_button_set_active(cast(amendToggle, to: GtkCheckButton.self),
+                                    viewModel.amendLastCommit ? 1 : 0)
+        isSyncingAmend = false
+    }
+
+    private var amendIsChecked: Bool {
+        gtk_check_button_get_active(cast(amendToggle, to: GtkCheckButton.self)) != 0
     }
 
     private func rowKey(_ change: FileChange) -> String {

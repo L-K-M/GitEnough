@@ -949,6 +949,44 @@ public final class RepoViewModel: ObservableObject, Identifiable {
         }
     }
 
+    /// Whether Commit would do anything.
+    ///
+    /// A view-model property for the same reason `canPull` and
+    /// `canPushOrPublish` are: the decision is made once, so two front ends
+    /// cannot describe one button differently. They already had — the GTK box
+    /// gated Commit on the staged list alone, which offered the button with an
+    /// empty message (where `commit()` returns silently), offered it mid-fetch
+    /// (where the operation gate turns the click away just as silently), and
+    /// withheld it for the one commit that legitimately stages nothing: an
+    /// amend that only rewords the last message.
+    ///
+    /// `allowsManualCommit` is one of the terms rather than a separate check in
+    /// each front end: it is the same question, and leaving it out here would
+    /// re-open mid-rebase commits on both at once. `conflicted.isEmpty` is here
+    /// for the same reason, and arrived the same way: the macOS view had grown
+    /// it locally while the GTK box had no conflict check at all, so the two
+    /// front ends disagreed about whether Commit is offered with unmerged
+    /// files. Deciding it once is what stops that recurring.
+    public var canCommit: Bool {
+        !draftCommitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && (amendLastCommit || !status.staged.isEmpty)
+            && mergeState.allowsManualCommit
+            && status.conflicted.isEmpty
+            && !isBusy
+    }
+
+    /// Whether ✨ Generate has anything to send. An empty staged diff costs a
+    /// request and describes nothing, so it is not a message worth asking for.
+    ///
+    /// That deliberately excludes an amend-only reword, where `canCommit` is
+    /// true and this is not: the patch `generateCommitMessage` sends *is* the
+    /// staged diff, so there would be nothing in the request to write a message
+    /// about. Offering it there would need the last commit's own diff as the
+    /// input instead, which is a different feature rather than a relaxed guard.
+    public var canGenerateCommitMessage: Bool {
+        !isGeneratingMessage && !isBusy && !status.staged.isEmpty
+    }
+
     public func commit() {
         guard mergeState.allowsManualCommit else {
             errorMessage = Self.rebaseCommitRefusal
