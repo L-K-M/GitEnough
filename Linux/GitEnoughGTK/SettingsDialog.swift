@@ -42,15 +42,24 @@ final class SettingsDialog {
     private var savedConfiguration = LLMConfiguration.default
     private var savedAPIKey = ""
     private var isBusy = false
-    /// True between opening the dialog and the keyring answering. Gates Save
-    /// alone — see `reload()`.
-    private var isReadingKey = false
     /// Set once `savedAPIKey` is known to match the keyring, by either the
     /// opening read or a successful save. A save beats a slow read to it, and
     /// the read must then not overwrite what the save just established.
     private var keyIsKnown = false
+    /// Whether the user has typed in the key field since the dialog opened.
+    ///
+    /// This is what licenses a write to the keyring. Without it, Save on a
+    /// dialog whose opening read failed would send the empty field to
+    /// `saveAPIKey`, which deletes — destroying a key the user never touched
+    /// in order to save a model name. Clearing the field on purpose still
+    /// counts as editing, so an explicit "remove my key" keeps working.
+    private var userEditedKey = false
     /// Suppresses the dirty check while the dialog is filling its own fields.
     private var isPopulating = false
+    /// Bumped on every `present()`. An async result carrying an older value
+    /// describes a showing the user has already left, and must not be applied
+    /// to the fields in front of them.
+    private var presentation = 0
 
     /// `secret-tool` is a process, and so is every `which` probe in front of it.
     /// One serial queue keeps a save and a re-read from interleaving, and keeps
@@ -115,6 +124,7 @@ final class SettingsDialog {
     /// with `secret-tool` and with any other GitEnough window, so what was in
     /// the fields last time is not evidence of what is stored now.
     func present() {
+        presentation += 1
         reload()
         gtk_window_present(window)
     }
@@ -206,9 +216,12 @@ final class SettingsDialog {
         for entry in [baseURLEntry, apiKeyEntry, modelEntry] {
             connect(entry, "changed") { [weak self] in
                 guard let self, !isPopulating else { return }
-                syncSaveButton()
                 refreshStatus()
             }
+        }
+        connect(apiKeyEntry, "changed") { [weak self] in
+            guard let self, !isPopulating else { return }
+            userEditedKey = true
         }
 
         connect(modelChoices, "notify::selected") { [weak self] _ in
@@ -225,51 +238,85 @@ final class SettingsDialog {
 
     private func save() {
         let configuration = currentConfiguration()
-        let key = currentAPIKey()
+        // Only a key the user actually typed is written. Sending the field's
+        // current value unconditionally would hand `saveAPIKey` an empty string
+        // whenever the opening read failed, and that deletes — losing a stored
+        // key because someone changed the model. An explicit clear still
+        // reaches here, because clearing the field is editing it.
+        let key = userEditedKey ? currentAPIKey() : nil
+        let showing = presentation
         // The non-secret half is UserDefaults and lands immediately; only the
         // key has to go out to a process.
         configuration.save()
         setBusy(true)
         show(status: "Saving…", kind: .plain)
         Self.keyring.async { [weak self] in
-            let failure: String?
-            do {
-                try LLMConfiguration.saveAPIKey(key)
-                failure = nil
-            } catch {
-                failure = error.localizedDescription
+            // nil key means "leave the stored one alone", so no write and no
+            // failure to report.
+            let failure: String? = key.flatMap { pending in
+                do {
+                    try LLMConfiguration.saveAPIKey(pending)
+                    return nil
+                } catch {
+                    return error.localizedDescription
+                }
             }
             DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
+                guard let self, presentation == showing else { return }
                 setBusy(false)
-                guard let failure else {
-                    savedConfiguration = configuration
-                    savedAPIKey = key
-                    keyIsKnown = true
-                    show(status: "Saved.", kind: .success)
-                    return
-                }
-                // The settings are stored, the key is not — say which, rather
-                // than reporting a half-write as either outcome.
-                savedConfiguration = configuration
-                show(status: "Saved the provider settings. The API key was not stored: "
-                         + failure, kind: .failure)
+                finish(save: configuration, key: key, failure: failure)
             }
         }
+    }
+
+    /// Records what reached storage and says so without overclaiming.
+    ///
+    /// The fields stay editable while the write is out — it can take the full
+    /// keyring timeout — so what is on screen now may be newer than what was
+    /// written. The snapshot still becomes `saved…`, because it is what is
+    /// stored; `refreshStatus` then compares it against the live fields and
+    /// says "Unsaved changes" on its own. Reporting a flat "Saved." here would
+    /// claim the newer values had landed, and they would be gone on reopening.
+    private func finish(save configuration: LLMConfiguration, key: String?, failure: String?) {
+        savedConfiguration = configuration
+        if failure == nil, let key {
+            savedAPIKey = key
+            keyIsKnown = true
+        }
+
+        let moved = currentConfiguration() != configuration
+            || (key.map { $0 != currentAPIKey() } ?? false)
+
+        if let failure {
+            show(status: "Saved the provider settings. The API key was not stored: "
+                     + failure, kind: .failure)
+            return
+        }
+        if moved {
+            show(status: "Saved what was on screen when you pressed Save. "
+                     + "Your later edits are not saved yet.", kind: .plain)
+            return
+        }
+        show(status: key == nil
+                ? "Saved. The stored API key was left as it is."
+                : "Saved.",
+             kind: .success)
     }
 
     /// Fetches the provider's model list into the picker under the model field.
     /// Uses the fields as typed rather than what is stored, so a key can be
     /// tried before it is committed to the keyring.
     private func loadModels() {
+        let asked = currentConfiguration()
         let generator = currentGenerator()
+        let showing = presentation
         setBusy(true)
         show(status: "Loading models…", kind: .plain)
         Task { [weak self] in
             do {
                 let models = try await generator.fetchModels()
                 await MainActor.run { [weak self] in
-                    guard let self else { return }
+                    guard let self, accepts(asked, from: showing) else { return }
                     setBusy(false)
                     // `fetchModels` turns an empty list into an error, so there
                     // is no empty-but-successful case to handle here.
@@ -278,7 +325,7 @@ final class SettingsDialog {
                 }
             } catch {
                 await MainActor.run { [weak self] in
-                    guard let self else { return }
+                    guard let self, accepts(asked, from: showing) else { return }
                     setBusy(false)
                     show(status: "Couldn't load the model list (\(error.localizedDescription)) "
                              + "— type the model name instead.", kind: .failure)
@@ -287,10 +334,31 @@ final class SettingsDialog {
         }
     }
 
+    /// Whether a result for `asked`, requested during showing `showing`, still
+    /// describes what is on screen.
+    ///
+    /// A models list or a test verdict is only about the provider and endpoint
+    /// it was fetched for. Switch provider while one is in flight, or close and
+    /// reopen the dialog, and applying it would label the new configuration
+    /// with the old one's answer. The busy state is cleared either way so the
+    /// buttons do not stay dead.
+    private func accepts(_ asked: LLMConfiguration, from showing: Int) -> Bool {
+        guard presentation == showing else { return false }
+        guard currentConfiguration() == asked else {
+            setBusy(false)
+            show(status: "The provider changed while that was loading, so the result "
+                     + "was discarded. Try again.", kind: .plain)
+            return false
+        }
+        return true
+    }
+
     /// One real round trip proves endpoint, key and model together, which three
     /// separate validations could not.
     private func testConnection() {
+        let asked = currentConfiguration()
         let generator = currentGenerator()
+        let showing = presentation
         setBusy(true)
         show(status: "Testing…", kind: .plain)
         Task { [weak self] in
@@ -301,14 +369,14 @@ final class SettingsDialog {
                     branch: "main")
                 let subject = message.components(separatedBy: "\n").first ?? ""
                 await MainActor.run { [weak self] in
-                    guard let self else { return }
+                    guard let self, accepts(asked, from: showing) else { return }
                     setBusy(false)
                     show(status: "Connection works — sample message: “\(subject)”",
                          kind: .success)
                 }
             } catch {
                 await MainActor.run { [weak self] in
-                    guard let self else { return }
+                    guard let self, accepts(asked, from: showing) else { return }
                     setBusy(false)
                     show(status: error.localizedDescription, kind: .failure)
                 }
@@ -331,36 +399,21 @@ final class SettingsDialog {
         clearModelChoices()
         isPopulating = false
 
-        // Only Save waits on the keyring, and only until the user supplies a key
-        // of their own. Everything else is live immediately.
-        //
-        // The read can be slow, and on a session with a locked keyring and no
-        // prompter it takes the full `SecretService.operationTimeout`. Blocking
-        // the dialog on it would mean a minute of dead controls for the one user
-        // who most needs to fix their configuration. Gating Save alone keeps the
-        // one guarantee that matters: Save cannot write an empty key over a
-        // stored one just because the read had not landed yet.
-        isReadingKey = true
+        // Nothing waits on the keyring. The read can take the full
+        // `SecretService.operationTimeout` on a session with a locked keyring
+        // and no prompter, and a minute of dead controls is worst for the one
+        // user who most needs to fix their configuration. Save is safe to leave
+        // live because it writes the key only when the user has edited it —
+        // see `userEditedKey`.
         keyIsKnown = false
+        userEditedKey = false
+        let showing = presentation
         show(status: "Reading the keyring…", kind: .plain)
-        syncSaveButton()
         Self.keyring.async { [weak self] in
-            let key = LLMConfiguration.apiKey ?? ""
+            let lookup = LLMConfiguration.apiKeyLookup
             let available = KeychainStore.isAvailable
             DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                isReadingKey = false
-                if !keyIsKnown {
-                    keyIsKnown = true
-                    savedAPIKey = key
-                    // Anything the user typed while the read was out is theirs,
-                    // and the stored value must not land on top of it.
-                    if currentAPIKey().isEmpty {
-                        isPopulating = true
-                        setText(apiKeyEntry, key)
-                        isPopulating = false
-                    }
-                }
+                guard let self, presentation == showing else { return }
                 // Said before a save fails rather than after, since the remedy
                 // is to install a package and the field looks ordinary.
                 UI.setVisible(keyringWarning, !available)
@@ -370,9 +423,47 @@ final class SettingsDialog {
                                    + "stored. On Ubuntu: sudo apt install libsecret-tools")
                     UI.addClass(keyringWarning, "error")
                 }
-                syncSaveButton()
-                refreshStatus()
+                apply(lookup: lookup)
             }
+        }
+    }
+
+    /// Takes what the keyring said about the stored key.
+    ///
+    /// The three answers are not interchangeable. `absent` is evidence that
+    /// nothing is stored, so an empty field is the truth. `unavailable` is the
+    /// absence of evidence: the field stays empty because there is nothing to
+    /// show, but the dialog must not conclude the key is empty — doing so is
+    /// what let a Save for an unrelated model change delete a perfectly good
+    /// key.
+    private func apply(lookup: SecretLookup) {
+        // A save that beat the read to it already knows better.
+        guard !keyIsKnown else { return }
+
+        switch lookup {
+        case .found(let key):
+            keyIsKnown = true
+            savedAPIKey = key
+            // Anything the user typed while the read was out is theirs, and the
+            // stored value must not land on top of it.
+            if !userEditedKey {
+                isPopulating = true
+                setText(apiKeyEntry, key)
+                isPopulating = false
+            }
+            refreshStatus()
+
+        case .absent:
+            keyIsKnown = true
+            savedAPIKey = ""
+            refreshStatus()
+
+        case .unavailable:
+            // Deliberately leaves `keyIsKnown` false, so Save still refuses to
+            // touch the key unless the user edits it.
+            show(status: "Couldn't read the stored API key, so it is not shown. "
+                     + "Saving will leave it as it is unless you type a new one.",
+                 kind: .failure)
         }
     }
 
@@ -451,20 +542,11 @@ final class SettingsDialog {
         show(status: dirty ? "Unsaved changes." : "", kind: .plain)
     }
 
-    /// Save is offered once the dialog knows what is stored — or once the user
-    /// has typed a key, which answers the same question: there is then
-    /// something to write, and nothing to lose by writing it.
-    private func syncSaveButton() {
-        let waiting = isBusy || (isReadingKey && currentAPIKey().isEmpty)
-        gtk_widget_set_sensitive(saveButton, waiting ? 0 : 1)
-    }
-
     private func setBusy(_ busy: Bool) {
         isBusy = busy
-        for button in [loadModelsButton, testButton] {
+        for button in [saveButton, loadModelsButton, testButton] {
             gtk_widget_set_sensitive(button, busy ? 0 : 1)
         }
-        syncSaveButton()
         UI.setVisible(spinner, busy)
         if busy {
             gtk_spinner_start(opaque(spinner))

@@ -97,6 +97,12 @@ public struct LLMConfiguration: Equatable {
         get { KeychainStore.read(account: Keys.keychainAccount) }
     }
 
+    /// The stored key with absence and failure kept apart, for Settings, which
+    /// must not mistake a keyring it could not reach for one holding no key.
+    public static var apiKeyLookup: SecretLookup {
+        KeychainStore.lookup(account: Keys.keychainAccount)
+    }
+
     public static func saveAPIKey(_ key: String) throws {
         let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty {

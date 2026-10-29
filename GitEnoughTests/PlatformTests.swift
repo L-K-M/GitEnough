@@ -250,3 +250,58 @@ final class MergeToolCatalogueTests: XCTestCase {
         XCTAssertTrue(real.isInstalled)
     }
 }
+
+/// The Secret Service lookup that Settings depends on to decide whether it may
+/// write. These need a real keyring, so they skip where one is not reachable
+/// rather than passing vacuously.
+final class SecretServiceLookupTests: XCTestCase {
+
+    private let service = "GitEnoughTests.lookup"
+
+    override func tearDown() {
+        SecretService.delete(service: service, account: "present")
+        super.tearDown()
+    }
+
+    private func requireKeyring() throws {
+        try XCTSkipUnless(SecretService.isAvailable, "secret-tool is not installed")
+        // A store that works is the only proof the session has a live keyring;
+        // `isAvailable` only says the helper exists.
+        try XCTSkipUnless(
+            (try? SecretService.save(secret: "probe", service: service, account: "present")) != nil,
+            "no Secret Service is answering in this session")
+    }
+
+    func testAStoredSecretIsFound() throws {
+        try requireKeyring()
+        XCTAssertEqual(SecretService.lookup(service: service, account: "present"),
+                       .found("probe"))
+    }
+
+    /// The distinction the whole fix rests on: a keyring that answers "nothing
+    /// here" is evidence, and the caller may act on it.
+    func testNothingStoredReadsAsAbsentRatherThanUnavailable() throws {
+        try requireKeyring()
+        XCTAssertEqual(SecretService.lookup(service: service, account: "no-such-account"),
+                       .absent)
+    }
+
+    /// And the other half: a keyring that cannot be reached is *not* evidence.
+    /// Reported as `unavailable` so Settings leaves the stored key alone
+    /// instead of writing an empty one over it.
+    func testAnUnreachableKeyringReadsAsUnavailable() throws {
+        try XCTSkipUnless(SecretService.isAvailable, "secret-tool is not installed")
+        // No session bus and no display: secret-tool cannot reach or autolaunch
+        // anything, and says so on stderr, which is what separates this from
+        // the silent non-zero exit that means "not found".
+        let result = try ProcessRunner.run(
+            XCTUnwrap(ProcessRunner.which("secret-tool")),
+            ["lookup", "service", service, "account", "present"],
+            environmentOverrides: ["DBUS_SESSION_BUS_ADDRESS": "", "DISPLAY": ""],
+            timeout: 20)
+
+        try XCTSkipIf(result.succeeded, "a keyring answered anyway; cannot stage a failure here")
+        XCTAssertFalse(result.stderr.isEmpty,
+                       "an unreachable keyring must be distinguishable from an empty one")
+    }
+}

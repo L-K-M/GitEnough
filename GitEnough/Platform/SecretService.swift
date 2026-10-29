@@ -94,16 +94,39 @@ public enum SecretService {
     /// so every one of those is the same answer here: nothing to hand back.
     /// Writing cannot be so relaxed, and `save` reports each case separately.
     public static func read(service: String, account: String) -> String? {
-        guard let tool = secretTool,
-              let result = try? ProcessRunner.run(
-                  tool, ["lookup"] + attributes(service: service, account: account),
-                  timeout: operationTimeout),
-              result.succeeded
-        else { return nil }
+        guard case .found(let secret) = lookup(service: service, account: account) else {
+            return nil
+        }
+        return secret
+    }
+
+    /// The stored secret, distinguishing "nothing is stored" from "the keyring
+    /// could not be asked". Blocking; call it off the main thread.
+    ///
+    /// `secret-tool lookup` leaves exactly one usable signal for the
+    /// difference, measured on libsecret 0.21 / gtk4 4.14.5:
+    ///
+    ///     key exists                exit 0, the value on stdout, stderr empty
+    ///     nothing stored            exit 1, stdout empty, **stderr empty**
+    ///     keyring not reachable     exit 1, stdout empty, **stderr non-empty**
+    ///
+    /// So a silent non-zero exit is absence and a talkative one is a failure.
+    /// A missing tool or a timeout are failures too — in neither case did
+    /// anything confirm that the store is empty.
+    public static func lookup(service: String, account: String) -> SecretLookup {
+        guard let tool = secretTool else { return .unavailable }
+        guard let result = try? ProcessRunner.run(
+            tool, ["lookup"] + attributes(service: service, account: account),
+            timeout: operationTimeout)
+        else { return .unavailable }
+
+        guard result.succeeded else {
+            return result.stderr.isEmpty ? .absent : .unavailable
+        }
         // `secret-tool lookup` prints the secret raw, with no trailing newline;
         // trim anyway so a keyring that adds one can't corrupt the key.
         let secret = result.standardOutput.trimmingCharacters(in: .newlines)
-        return secret.isEmpty ? nil : secret
+        return secret.isEmpty ? .absent : .found(secret)
     }
 
     /// Removes the stored secret. Best effort: a missing tool or a missing item
