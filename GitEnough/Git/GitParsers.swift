@@ -154,10 +154,19 @@ public enum GitParsers {
                 // 2 <XY> <sub> <mH> <mI> <mW> <hH> <hI> <X><score> <path><TAB><origPath>
                 let fields = splitLimit(line, maxSplits: 9)
                 guard fields.count == 10 else { continue }
+                // Both halves arrive quoted independently, and both are handed
+                // over still quoted: `makeChange` unquotes each exactly once.
+                // Unquoting the destination here as well ran it through twice,
+                // and `unquoteGitPath` is not idempotent — it strips the outer
+                // quotes of whatever it is given, so a destination whose own
+                // name begins and ends with `"` lost them. `git mv plain.txt
+                // '"quoted"'` emits `"\"quoted\""`, which became `quoted`: a
+                // path not in the repository, which stage and unstage then fail
+                // on and discard silently acts on.
                 let paths = fields[9].components(separatedBy: "\t")
-                let path = unquoteGitPath(paths[0])
-                let original = paths.count > 1 ? unquoteGitPath(paths[1]) : nil
-                apply(change: makeChange(path: path, originalPath: original, xy: fields[1]),
+                apply(change: makeChange(path: paths[0],
+                                         originalPath: paths.count > 1 ? paths[1] : nil,
+                                         xy: fields[1]),
                       to: &status)
             } else if line.hasPrefix("u ") {
                 // u <XY> <sub> <m1> <m2> <m3> <mW> <h1> <h2> <h3> <path>
@@ -198,8 +207,10 @@ public enum GitParsers {
         let chars = Array(xy)
         let x = chars.count > 0 ? chars[0] : "."
         let y = chars.count > 1 ? chars[1] : "."
+        // Both sides unquote here, so no caller has to decide — the split
+        // responsibility is what let the destination be unquoted twice.
         return FileChange(path: unquoteGitPath(path),
-                          originalPath: originalPath,
+                          originalPath: originalPath.map(unquoteGitPath),
                           stagedStatus: FileChange.Status(rawValue: String(x)),
                           unstagedStatus: FileChange.Status(rawValue: String(y)))
     }
