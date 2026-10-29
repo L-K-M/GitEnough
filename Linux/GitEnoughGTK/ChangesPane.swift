@@ -78,16 +78,26 @@ final class ChangesPane {
         // configured" is the default state of a fresh install, so the most
         // likely first use of the feature was also the most confusing.
         //
-        // Wrapping, not ellipsizing: the text that matters most is often the
-        // end of a provider's HTTP body, and this column is narrow. Capped at
-        // three lines, like the macOS caption, so a long body cannot push the
-        // buttons off the bottom of the pane. Hidden while nil, so the commit
-        // box keeps its usual height in the ordinary case.
+        // Wrapping, and capped at three lines like the macOS caption, so a long
+        // body cannot push the buttons off the bottom of the pane. Hidden while
+        // nil, so the commit box keeps its usual height in the ordinary case.
+        //
+        // MIDDLE rather than END, because what gets dropped matters: a
+        // provider's refusal opens with a status line and a URL and names the
+        // cause at the very end. Measured on gtk4 4.14.5 in this column, for a
+        // 210-byte error, counting which source bytes actually receive a glyph:
+        //
+        //   NONE    4 lines   head [0,111)   tail [172,210)   overflows the cap
+        //   END     3 lines   head [0,111)   tail [210,210)   tail not drawn
+        //   MIDDLE  3 lines   head [0,111)   tail [180,210)   tail drawn
+        //
+        // So END would have hidden exactly the part worth reading, for exactly
+        // the long bodies this caption exists to surface.
         UI.addClass(generationError, "error")
         let errorLabel = opaque(generationError)
         gtk_label_set_wrap(errorLabel, 1)
         gtk_label_set_lines(errorLabel, 3)
-        gtk_label_set_ellipsize(errorLabel, PANGO_ELLIPSIZE_END)
+        gtk_label_set_ellipsize(errorLabel, PANGO_ELLIPSIZE_MIDDLE)
         gtk_label_set_max_width_chars(errorLabel, 1)
         UI.setVisible(generationError, false)
         let commitBox = UI.box(GTK_ORIENTATION_VERTICAL, spacing: 6, margin: 6)
