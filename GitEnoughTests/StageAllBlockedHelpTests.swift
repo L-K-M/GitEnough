@@ -1,7 +1,7 @@
 // ChangesView is SwiftUI, so it lives outside the SwiftPM library and there is
 // nothing here for a Linux build to exercise. Compiled by the Xcode project,
 // where the view it tests actually exists.
-#if canImport(AppKit)
+#if canImport(AppKit) && !SWIFT_PACKAGE
 import XCTest
 @testable import GitEnough
 

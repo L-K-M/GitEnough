@@ -319,6 +319,16 @@ public struct StashEntry: Identifiable, Hashable {
     public let index: Int          // stash@{n}
     public let branch: String      // branch the stash was taken on
     public let message: String
+    /// Stable identity; the reflog index changes when another stash is removed.
+    /// Nil only for legacy, two-field parser input.
+    public let objectID: String?
+
+    public init(index: Int, branch: String, message: String, objectID: String? = nil) {
+        self.index = index
+        self.branch = branch
+        self.message = message
+        self.objectID = objectID
+    }
 
     public var id: Int { index }
     public var ref: String { "stash@{\(index)}" }
@@ -370,7 +380,11 @@ public struct MergeState: Equatable {
     /// Human label, e.g. "Merge branch 'feature'" or "Rebasing main".
     public var operationLabel: String?
     public var conflictedFiles: [String]
+    var isEditingRebaseCommit = false
+    var rebaseSkipTarget: RebaseSkipTarget? = nil
 
     public var isInProgress: Bool { operation != nil }
     public var isResolvingConflicts: Bool { !conflictedFiles.isEmpty }
+    // Interactive edit stops need ordinary commits; conflict replay needs Continue.
+    public var allowsManualCommit: Bool { operation != .rebase || isEditingRebaseCommit }
 }

@@ -163,11 +163,13 @@ struct EmptyPane: View {
                 .foregroundStyle(.secondary)
             if let subtitle {
                 Text(subtitle)
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
+                    .frame(maxWidth: 360)
             }
         }
+        .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }

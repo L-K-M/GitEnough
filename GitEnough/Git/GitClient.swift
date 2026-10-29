@@ -1344,6 +1344,24 @@ public final class GitClient {
         return mergeHead != nil ? .merge : nil
     }
 
+    /// Git writes `amend` at an interactive edit stop, where manual commits are required.
+    func isEditingRebaseCommit() -> Bool {
+        guard let gitDir = gitDir() else { return false }
+        return FileManager.default.fileExists(
+            atPath: gitDir.appendingPathComponent("rebase-merge/amend").path)
+    }
+
+    func rebaseSkipTarget(headHash: String?) -> RebaseSkipTarget? {
+        guard let headHash,
+              let result = try? runReadChecked(
+                ["-C", worktree.path, "rev-parse", "--verify", "REBASE_HEAD"], in: nil) else {
+            return nil
+        }
+        let commit = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !commit.isEmpty else { return nil }
+        return RebaseSkipTarget(commit: commit, headHash: headHash)
+    }
+
     /// A human label for the operation banner: MERGE_MSG's first line for merges,
     /// "Rebasing <branch>" for rebases, a plain phrase otherwise.
     public func operationLabel(for operation: InProgressOperation) -> String? {
@@ -1379,6 +1397,10 @@ public final class GitClient {
         try runChecked(["-C", worktree.path, "rebase", "--continue"], in: nil)
     }
 
+    func rebaseSkip() throws {
+        try runChecked(["-C", worktree.path, "rebase", "--skip"], in: nil)
+    }
+
     public func rebaseAbort() throws {
         try runChecked(["-C", worktree.path, "rebase", "--abort"], in: nil)
     }
@@ -1404,7 +1426,7 @@ public final class GitClient {
     public func stashList() throws -> [StashEntry] {
         let f = GitParsers.fieldSep
         let result = try runReadChecked(
-            ["-C", worktree.path, "stash", "list", "--format=%gd\(f)%gs"], in: nil)
+            ["-C", worktree.path, "stash", "list", "--format=%gd\(f)%gs\(f)%H"], in: nil)
         return GitParsers.parseStash(result.stdout)
     }
 
@@ -1426,6 +1448,29 @@ public final class GitClient {
     public func stashDrop(index: Int) throws {
         try runChecked(
             ["-C", worktree.path, "stash", "drop", "stash@{\(index)}"], in: nil)
+    }
+
+    /// Resolve a captured selection on the repository queue immediately before
+    /// using it. A window's confirmation can outlive a pop/drop in another
+    /// window, so the captured reflog index alone cannot identify its target.
+    public func stashApply(_ entry: StashEntry, pop: Bool) throws {
+        try stashApply(index: currentStashIndex(for: entry), pop: pop)
+    }
+
+    public func stashDrop(_ entry: StashEntry) throws {
+        try stashDrop(index: currentStashIndex(for: entry))
+    }
+
+    private func currentStashIndex(for entry: StashEntry) throws -> Int {
+        guard let objectID = entry.objectID else {
+            throw GitError(message: "Can't identify this stash. Refresh and select it again.",
+                           exitCode: -1)
+        }
+        guard let current = try stashList().first(where: { $0.objectID == objectID }) else {
+            throw GitError(message: "This stash is no longer in the repository. Refresh and select a remaining stash.",
+                           exitCode: -1)
+        }
+        return current.index
     }
 
     // MARK: - Commit-targeted actions
