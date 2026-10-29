@@ -12,7 +12,8 @@ struct ChangesView: View {
     @State private var selection: ChangeSelection?
     @State private var listFocusRequest = UUID()
     @StateObject private var selectionModel = ChangesSelectionModel()
-    @FocusState private var messageFocused: Bool
+    @State private var messageFocusRequest = UUID()
+    @StateObject private var messageUndoController = CommitMessageUndoController()
     @FocusState private var stashMessageFocused: Bool
     @State private var fileToDiscard: FileChange?
     @State private var showingStashSheet = false
@@ -46,13 +47,6 @@ struct ChangesView: View {
         viewModel.amendWouldRewritePushedCommit
     }
 
-    private var canCommit: Bool {
-        !viewModel.isBusy && viewModel.mergeState.allowsManualCommit
-            && conflicts.isEmpty
-            && !viewModel.draftCommitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && (viewModel.amendLastCommit || !viewModel.status.staged.isEmpty)
-    }
-
     private var selectedRow: Binding<ChangeRowID?> {
         Binding(get: {
             selection.map { ChangeRowID(path: $0.file.path, isStaged: $0.isStaged) }
@@ -72,7 +66,7 @@ struct ChangesView: View {
             canUnstage: !viewModel.isBusy && selection?.isStaged == true,
             canStageAll: !viewModel.isBusy && conflicts.isEmpty && !viewModel.status.unstaged.isEmpty,
             canUnstageAll: !viewModel.isBusy && !viewModel.status.staged.isEmpty,
-            canCommit: canCommit,
+            canCommit: viewModel.canCommit,
             canStash: !viewModel.isBusy && !conflictUIActive && viewModel.status.isDirty,
             canGenerate: !viewModel.isBusy && !viewModel.isGeneratingMessage && !viewModel.status.staged.isEmpty,
             canDiscard: !viewModel.isBusy && selection != nil,
@@ -82,13 +76,23 @@ struct ChangesView: View {
             unstageAll: { viewModel.unstage(viewModel.status.staged) },
             commit: requestCommit,
             stash: { showingStashSheet = true },
-            generate: { viewModel.generateCommitMessage() },
+            generate: generateMessage,
             discard: { fileToDiscard = selection?.file },
-            editMessage: { messageFocused = true })
+            editMessage: { messageFocusRequest = UUID() })
+    }
+
+    private func generateMessage() {
+        messageUndoController.finishEditing()
+        messageFocusRequest = UUID()
+        let controller = messageUndoController
+        viewModel.generateCommitMessage { replacement in
+            controller.applyGenerated(replacement)
+        }
     }
 
     private func requestCommit() {
-        guard canCommit else { return }
+        messageUndoController.finishEditing()
+        guard viewModel.canCommit else { return }
         if amendRewritesPushedCommit {
             showingAmendPushedConfirmation = true
         } else {
@@ -122,6 +126,7 @@ struct ChangesView: View {
                 selectionModel.select(updated, in: viewModel)
             }
         }
+        .focusedSceneObject(messageUndoController.state.isFocused ? messageUndoController : nil)
         .focusedSceneValue(\.changesActions,
                            windowState.isPresentingSheet
                            || showingStashSheet || showingAmendPushedConfirmation || fileToDiscard != nil
@@ -234,6 +239,7 @@ struct ChangesView: View {
                     } onDiscard: {
                         fileToDiscard = file
                     }
+                    .id(ChangeRowID(path: file.path, isStaged: true))
                     .tag(ChangeRowID(path: file.path, isStaged: true))
                 }
             } header: {
@@ -264,6 +270,7 @@ struct ChangesView: View {
                     } onDiscard: {
                         fileToDiscard = file
                     }
+                    .id(ChangeRowID(path: file.path, isStaged: false))
                     .tag(ChangeRowID(path: file.path, isStaged: false))
                 }
             } header: {
@@ -318,18 +325,10 @@ struct ChangesView: View {
     private var commitBox: some View {
         VStack(alignment: .leading, spacing: 8) {
             ZStack(alignment: .topLeading) {
-                TextEditor(text: $viewModel.draftCommitMessage)
-                    .font(.body)
-                    .focused($messageFocused)
-                    .accessibilityLabel("Commit message")
-                    .onKeyPress(.tab, phases: .down) { press in
-                        if press.modifiers.contains(.shift) {
-                            NSApp.keyWindow?.selectPreviousKeyView(nil)
-                        } else {
-                            NSApp.keyWindow?.selectNextKeyView(nil)
-                        }
-                        return .handled
-                    }
+                CommitMessageEditor(text: $viewModel.draftCommitMessage,
+                                    focusRequest: messageFocusRequest,
+                                    controller: messageUndoController,
+                                    onEditingBegan: { viewModel.beginCommitMessageEditing() })
                     .frame(height: 76)
                     .padding(2)
                     .overlay(
@@ -361,7 +360,7 @@ struct ChangesView: View {
 
             HStack(spacing: 8) {
                 Button {
-                    viewModel.generateCommitMessage()
+                    generateMessage()
                 } label: {
                     if viewModel.isGeneratingMessage {
                         ProgressView()
@@ -370,8 +369,7 @@ struct ChangesView: View {
                         Label("Generate", systemImage: "sparkles")
                     }
                 }
-                .disabled(viewModel.isGeneratingMessage || viewModel.isBusy
-                    || viewModel.status.staged.isEmpty)
+                .disabled(!viewModel.canGenerateCommitMessage)
                 .help("Write the commit message with the configured LLM (Settings → AI)")
 
                 if !viewModel.draftCommitMessage.isEmpty {
@@ -399,7 +397,10 @@ struct ChangesView: View {
                 Button("Commit", action: requestCommit)
                 .help("Commit staged changes (⌘↩)")
                 .buttonStyle(.borderedProminent)
-                .disabled(!canCommit)
+                // The predicate itself lives on the view model, so the GTK
+                // commit box cannot describe this button differently — which
+                // it did, and in both directions.
+                .disabled(!viewModel.canCommit)
             }
         }
         .padding(10)

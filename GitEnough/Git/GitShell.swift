@@ -241,10 +241,13 @@ public final class GitShell {
     // MARK: - Running
 
     /// Runs git with `args` in `directory` and returns the raw result without
-    /// throwing on non-zero exit. Throws only when git can't be executed at all.
+    /// throwing on non-zero exit. Throws when git can't be executed or the
+    /// optional cancellation token is cancelled.
     @discardableResult
     public func run(_ args: [String], in directory: URL?,
-             environmentOverrides: [String: String] = [:]) throws -> GitResult {
+             environmentOverrides: [String: String] = [:],
+             cancellation: GitCancellationToken? = nil) throws -> GitResult {
+        try cancellation?.checkCancellation()
         _ = Self.ignoreSIGPIPE
         guard let gitURL else {
             throw GitError(message: GitShell.installHint, exitCode: -1)
@@ -282,8 +285,11 @@ public final class GitShell {
         do {
             try process.run()
         } catch {
+            try cancellation?.checkCancellation()
             throw GitError(message: "Failed to launch git: \(error.localizedDescription)", exitCode: -1)
         }
+        let endCancellation = registerCancellation(cancellation, for: process)
+        defer { endCancellation?() }
 
         // Drain both pipes concurrently: a full pipe buffer would otherwise block
         // the child mid-write and deadlock waitUntilExit().
@@ -303,6 +309,7 @@ public final class GitShell {
 
         process.waitUntilExit()
         group.wait()
+        try cancellation?.checkCancellation()
 
         let stdout = String(data: outData, encoding: .utf8)
             ?? String(decoding: outData, as: UTF8.self)
@@ -316,15 +323,17 @@ public final class GitShell {
     public func runChecked(_ args: [String],
                     in directory: URL?,
                     stdin: String? = nil,
-                    environmentOverrides: [String: String] = [:]) throws -> GitResult {
+                    environmentOverrides: [String: String] = [:],
+                    cancellation: GitCancellationToken? = nil) throws -> GitResult {
         let result: GitResult
         if let stdin {
             result = try runWithStdin(
                 args, in: directory, stdin: stdin,
-                environmentOverrides: environmentOverrides)
+                environmentOverrides: environmentOverrides, cancellation: cancellation)
         } else {
             result = try run(
-                args, in: directory, environmentOverrides: environmentOverrides)
+                args, in: directory, environmentOverrides: environmentOverrides,
+                cancellation: cancellation)
         }
         guard result.exitCode == 0 else {
             let message = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -359,9 +368,22 @@ public final class GitShell {
         return argv.first ?? ""
     }
 
+    private func registerCancellation(_ cancellation: GitCancellationToken?,
+                                      for process: Process) -> (() -> Void)? {
+        guard let cancellation else { return nil }
+        let handle = GitProcessCancellation(process: process)
+        let id = cancellation.register { handle.cancel() }
+        return {
+            handle.finish()
+            cancellation.unregister(id)
+        }
+    }
+
     /// Separate entry point because `standardInput` must be assigned before `run()`.
     private func runWithStdin(_ args: [String], in directory: URL?, stdin: String,
-                              environmentOverrides: [String: String]) throws -> GitResult {
+                              environmentOverrides: [String: String],
+                              cancellation: GitCancellationToken?) throws -> GitResult {
+        try cancellation?.checkCancellation()
         _ = Self.ignoreSIGPIPE
         guard let gitURL else {
             throw GitError(message: GitShell.installHint, exitCode: -1)
@@ -386,8 +408,11 @@ public final class GitShell {
         do {
             try process.run()
         } catch {
+            try cancellation?.checkCancellation()
             throw GitError(message: "Failed to launch git: \(error.localizedDescription)", exitCode: -1)
         }
+        let endCancellation = registerCancellation(cancellation, for: process)
+        defer { endCancellation?() }
 
         var outData = Data()
         var errData = Data()
@@ -437,6 +462,7 @@ public final class GitShell {
 
         process.waitUntilExit()
         group.wait()
+        try cancellation?.checkCancellation()
 
         // A failed stdin write with a still-living child means git read a
         // truncated message and may happily commit it — a success the user

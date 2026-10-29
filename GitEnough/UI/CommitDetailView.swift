@@ -62,7 +62,6 @@ struct CommitDetailView: View {
                         .padding(14)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .fixedSize(horizontal: false, vertical: true)
                 .frame(maxHeight: 280)
                 Divider()
                 List(selection: Binding(get: { selectedFile }, set: {
