@@ -3101,8 +3101,11 @@ time and produces nothing.*
 
 ## Suggested next pickups (highest value first)
 
-*The list below is wave 5's ranking, merged with the standing one. Wave 5's top
-five have shipped (PRs #96–#101); what remains starts at the sixth.*
+*The list below is wave 5's ranking, merged with the standing one. Shipped items
+are struck from it rather than marked, so **the first entry is always the next
+pickup** — don't go looking for an ordinal. The numbering has gaps where shipped
+items were removed and the rest were left in place; a gap means something
+landed, not that an entry is missing.*
 
 ### Broken things, in order of what they cost the user
 
