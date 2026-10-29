@@ -78,6 +78,24 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertEqual(Set(commits.map(\.hash)).count, 4)
     }
 
+    func testLogClassifiesSlashNamedLocalAndRemoteRefsExactly() throws {
+        // A local branch can even share the displayed name of a remote ref.
+        try run(["branch", "topic/one"])
+        try run(["branch", "origin/topic"])
+        try run(["update-ref", "refs/remotes/origin/topic", "HEAD"])
+        try run(["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/topic"])
+        try run(["tag", "release/one"])
+
+        let head = try XCTUnwrap(client.log(limit: 50).first { $0.isHead })
+
+        XCTAssertTrue(head.decorations.contains(RefDecoration(kind: .localBranch, name: "topic/one")))
+        XCTAssertTrue(head.decorations.contains(RefDecoration(kind: .localBranch, name: "origin/topic")))
+        XCTAssertTrue(head.decorations.contains(RefDecoration(kind: .remoteBranch, name: "origin/topic")))
+        XCTAssertTrue(head.decorations.contains(RefDecoration(kind: .tag, name: "release/one")))
+        XCTAssertFalse(head.decorations.contains { $0.name == "origin/HEAD" })
+        XCTAssertFalse(head.decorations.contains(RefDecoration(kind: .remoteBranch, name: "topic/one")))
+    }
+
     func testGraphLayoutOfMergeShape() throws {
         let commits = try client.log(limit: 50)
         let layout = GraphLayout.layout(commits: commits)
@@ -1891,6 +1909,51 @@ final class GitIntegrationTests: XCTestCase {
 
     func testCommitAtInteractiveRebaseEditStopCanAmend() throws {
         try assertCanAmendAtEditStop(in: repoURL)
+    }
+
+    private enum RebaseExit {
+        case finish, abort
+    }
+
+    private func assertAmendRejectsMovedHead(after exit: RebaseExit) throws {
+        try write("first\n", to: "edit-first.txt")
+        try client.stage(paths: ["edit-first.txt"])
+        try client.commit(message: "Commit to edit")
+        try write("next\n", to: "edit-next.txt")
+        try client.stage(paths: ["edit-next.txt"])
+        try client.commit(message: "Next commit")
+        _ = try GitShell.shared.runChecked(
+            ["rebase", "--interactive", "HEAD~2"], in: repoURL,
+            environmentOverrides: ["GIT_SEQUENCE_EDITOR": "sed -i.bak '1s/^pick /edit /'"])
+        let viewModel = makeViewModel()
+        XCTAssertTrue(viewModel.mergeState.allowsManualCommit)
+        XCTAssertEqual(try client.commitDetail("HEAD")?.subject, "Commit to edit")
+        viewModel.amendLastCommit = true
+        viewModel.draftCommitMessage = "Keep this draft"
+
+        switch exit {
+        case .finish: try client.rebaseContinue()
+        case .abort: try client.rebaseAbort()
+        }
+        XCTAssertNil(client.inProgressOperation())
+        let tip = try XCTUnwrap(client.commitDetail("HEAD"))
+        XCTAssertEqual(tip.subject, "Next commit")
+        XCTAssertNotEqual(tip.hash, viewModel.status.headHash)
+
+        viewModel.commit()
+        waitForOperations(on: viewModel)
+
+        XCTAssertEqual(try client.commitDetail("HEAD")?.hash, tip.hash)
+        XCTAssertEqual(viewModel.draftCommitMessage, "Keep this draft")
+        XCTAssertTrue(viewModel.errorMessage?.contains("amend") ?? false)
+    }
+
+    func testAmendRejectsMovedHeadAfterRebaseFinishes() throws {
+        try assertAmendRejectsMovedHead(after: .finish)
+    }
+
+    func testAmendRejectsMovedHeadAfterRebaseAborts() throws {
+        try assertAmendRejectsMovedHead(after: .abort)
     }
 
     func testLinkedWorktreeEditStopUsesItsPrivateGitDirectory() throws {
