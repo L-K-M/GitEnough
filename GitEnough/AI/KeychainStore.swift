@@ -15,6 +15,22 @@ public enum KeychainStore {
 
     public static let service = Bundle.main.bundleIdentifier ?? "ch.lkmc.GitEnough"
 
+    /// Whether this machine can store a secret at all.
+    ///
+    /// Settings asks before offering an API-key field it might not be able to
+    /// honour: the macOS Keychain is always there, but a Linux desktop without
+    /// libsecret-tools has nowhere to put a secret, and GitEnough will not fall
+    /// back to a file. Which of those applies is the `Platform` seam's business,
+    /// not a front end's — hence the question lives here rather than on
+    /// `SecretService`.
+    public static var isAvailable: Bool {
+        #if canImport(Security)
+        return true
+        #else
+        return SecretService.isAvailable
+        #endif
+    }
+
     public static func save(secret: String, account: String) throws {
         #if canImport(Security)
         let data = Data(secret.utf8)

@@ -55,6 +55,53 @@ final class ProcessRunnerTests: XCTestCase {
             try ProcessRunner.run(URL(fileURLWithPath: "/nonexistent/tool"), []))
     }
 
+    // MARK: - Timeout
+
+    /// Without a bound, a helper that never exits never returns — which is not
+    /// hypothetical: `secret-tool` blocks for the life of the process when the
+    /// item it is asked for lives in a locked keyring and the session has no
+    /// prompter to unlock it. `sleep` stands in for that here because it is the
+    /// same shape and needs no desktop.
+    func testATimeoutEndsTheWaitOnAChildThatNeverExits() {
+        let start = Date()
+        XCTAssertThrowsError(
+            try ProcessRunner.run(URL(fileURLWithPath: "/bin/sh"),
+                                  ["-c", "sleep 60"], timeout: 0.5)
+        ) { error in
+            guard case ProcessRunner.RunError.timedOut(let name, let seconds) = error else {
+                return XCTFail("expected a timeout, got \(error)")
+            }
+            XCTAssertEqual(name, "sh")
+            XCTAssertEqual(seconds, 0.5)
+        }
+        // The point is the promptness, not just the throw: a call that threw
+        // after the child finished anyway would pass the check above.
+        XCTAssertLessThan(Date().timeIntervalSince(start), 10,
+                          "the timeout returned, but only after the child was done")
+    }
+
+    func testATimeoutKillsTheChildRatherThanLeavingItRunning() throws {
+        let marker = FileManager.default.temporaryDirectory
+            .appendingPathComponent("gitenough-timeout-\(UUID().uuidString)")
+        // The child writes the marker only if it survives its sleep.
+        XCTAssertThrowsError(
+            try ProcessRunner.run(URL(fileURLWithPath: "/bin/sh"),
+                                  ["-c", "sleep 2; touch '\(marker.path)'"],
+                                  timeout: 0.3))
+
+        Thread.sleep(forTimeInterval: 3)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: marker.path),
+                       "the timed-out child outlived the call that gave up on it")
+    }
+
+    func testAChildThatBeatsItsTimeoutIsUnaffected() throws {
+        let result = try ProcessRunner.run(URL(fileURLWithPath: "/bin/echo"),
+                                           ["quick"], timeout: 30)
+        XCTAssertEqual(result.standardOutput, "quick\n")
+        XCTAssertEqual(result.exitCode, 0)
+    }
+
     // MARK: - PATH lookup
 
     func testFindsACommandOnTheSearchPath() {

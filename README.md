@@ -122,10 +122,14 @@ CI job that only wants the tests:
 GITENOUGH_NO_GTK=1 swift test    # drops the front end from the package
 ```
 
-Not yet ported from the macOS UI: Settings (configure the LLM endpoint on macOS,
-or by hand), the watch folder, drag-and-drop reordering, cherry-pick/revert/
-reset context menus, and merge-conflict resolution. The core supports all of
-them — they just have no GTK surface yet.
+Settings has a GTK surface for the AI provider — the gear in the header bar
+configures the endpoint, model and API key, and the key goes to the system
+keyring like it does on macOS. The General and Merge Tools tabs have not been
+ported.
+
+Not yet ported from the macOS UI: the watch folder, drag-and-drop reordering,
+cherry-pick/revert/reset context menus, and merge-conflict resolution. The core
+supports all of them — they just have no GTK surface yet.
 
 ## Releasing
 

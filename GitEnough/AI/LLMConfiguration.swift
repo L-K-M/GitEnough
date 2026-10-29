@@ -37,6 +37,16 @@ public struct LLMConfiguration: Equatable {
     public var baseURL: String
     public var model: String
 
+    /// Spelled out rather than left to the memberwise initializer, which is
+    /// internal: on macOS the Settings pane is in the same module and never
+    /// noticed, but a front end in its own module — the GTK one — cannot build
+    /// a configuration to save without it.
+    public init(provider: Provider, baseURL: String, model: String) {
+        self.provider = provider
+        self.baseURL = baseURL
+        self.model = model
+    }
+
     public static let `default` = LLMConfiguration(provider: .zai,
                                             baseURL: Provider.zai.defaultBaseURL,
                                             model: Provider.zai.defaultModel)
