@@ -287,6 +287,70 @@ final class GraphLayoutTests: XCTestCase {
         XCTAssertEqual(GraphMetrics.graphWidth(for: 0), GraphMetrics.laneWidth)
     }
 
+    // MARK: - Duplicate parents
+
+    /// A commit that names the same parent twice must not strand a lane.
+    ///
+    /// `git commit-tree` refuses to write such an object — measured on 2.43,
+    /// it prints "error: duplicate parent … ignored" and writes one parent —
+    /// but `git fast-import` writes both without complaint, `git fsck` passes
+    /// them, and `%P` prints the hash twice. Verified end to end: a
+    /// `from X` / `merge X` import stream produces a commit whose
+    /// `git log --format=%P` is the same hash repeated, which is exactly the
+    /// array `GitParsers.parseLog` builds. So this is what an imported history
+    /// from cvs2git, hg-fast-export or git-filter-repo can hand the graph.
+    ///
+    /// The stranded lane is permanent: no later commit can claim it, so it
+    /// draws a vertical segment on every remaining row of the history.
+    func testDuplicateFirstParentDoesNotStrandALane() {
+        let layout = GraphLayout.layout(commits: [
+            commit("M", parents: ["a", "a"]),
+            commit("a", parents: ["b"]),
+            commit("b"),
+        ])
+
+        XCTAssertEqual(layout.columnCount, 1, "two edges to one commit are one lane")
+        XCTAssertEqual(layout.nodes.map(\.column), [0, 0, 0])
+        XCTAssertEqual(layout.segments.count, 2, "one vertical per row, nothing extra")
+        XCTAssertTrue(hasSegment(layout, fromRow: 0, fromColumn: 0,
+                                 toRow: 1, toColumn: 0, kind: .vertical))
+        XCTAssertTrue(hasSegment(layout, fromRow: 1, fromColumn: 0,
+                                 toRow: 2, toColumn: 0, kind: .vertical))
+    }
+
+    /// The same defect inside an octopus, with a real second parent in
+    /// between — so the fix is pinned against the narrower reading that only
+    /// an adjacent repeat matters.
+    ///
+    /// What strands a lane is a repeat of the **first** parent, wherever it
+    /// sits in the list. Measured against the unfixed algorithm, for a merge
+    /// over parents `a`, `b` and root `r`:
+    ///
+    ///     [a, a]     repeat of first      → columnCount 3, 1 segment past the root
+    ///     [a, b, a]  repeat of first      → columnCount 3, 1 segment past the root
+    ///     [a, b, b]  repeat of non-first  → columnCount 2, 0 segments past the root
+    ///
+    /// The last row is the tell: a repeated non-first parent folds into the
+    /// lane that already expects it and merely draws a duplicate edge over the
+    /// branch-out, which is invisible. A repeated first parent cannot, because
+    /// the lookup excludes the node's own column.
+    func testDuplicateParentInOctopusDrawsOneEdge() {
+        let layout = GraphLayout.layout(commits: [
+            commit("M", parents: ["a", "b", "a"]),
+            commit("a", parents: ["r"]),
+            commit("b", parents: ["r"]),
+            commit("r"),
+        ])
+
+        XCTAssertEqual(layout.columnCount, 2)
+        XCTAssertEqual(layout.segments.filter { $0.kind == .branchOut }.count, 1)
+        // The root consumes every lane, so nothing may start on the last row.
+        // This is the assertion that catches an immortal lane rather than
+        // merely a miscounted column.
+        XCTAssertTrue(layout.segmentsByRow[3].isEmpty,
+                      "no lane may outlive the commit that closes the history")
+    }
+
     // MARK: - Colors
 
     func testLaneColorsAreStableAlongALaneAndDistinctAcrossLanes() {
@@ -304,5 +368,28 @@ final class GraphLayoutTests: XCTestCase {
         // The branch-out segment takes the new lane's color.
         let branchOut = layout.segments.first { $0.kind == .branchOut }
         XCTAssertEqual(branchOut?.colorIndex, sideColor)
+    }
+
+    // MARK: - Determinism
+
+    /// The same commits always lay out the same way.
+    ///
+    /// Load-bearing outside this file: the GTK history pane skips rebuilding
+    /// its rows when the loaded commits hash unchanged, on the strength of the
+    /// layout being a function of those commits alone. A layout that varied
+    /// per call — a dictionary iteration order leaking into lane assignment,
+    /// say — would make the graph disagree with the rows it is drawn beside,
+    /// and nothing else would notice.
+    func testTheSameCommitsAlwaysLayOutTheSameWay() {
+        let commits = [
+            commit("M", parents: ["c1", "c2"]),
+            commit("c1", parents: ["c0"]),
+            commit("c2", parents: ["c0"]),
+            commit("c0"),
+        ]
+        let first = GraphLayout.layout(commits: commits)
+        for _ in 0..<20 {
+            XCTAssertEqual(GraphLayout.layout(commits: commits), first)
+        }
     }
 }

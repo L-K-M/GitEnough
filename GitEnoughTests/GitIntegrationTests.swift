@@ -1316,6 +1316,111 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertTrue(try client.status().staged.contains { $0.path == "new.txt" })
     }
 
+    // MARK: - History pagination across the queue boundary
+
+    /// `historyLimit` and the "is there more?" answer are read by
+    /// `collectSnapshot`, which runs on the repo's serial queue — and the
+    /// watcher calls it there directly. Growing the page from the main thread
+    /// was therefore an unsynchronized write against every poll tick, and a
+    /// history-less refresh read the published flag off-thread to carry it
+    /// forward. Both now belong to the queue; this drives the user-visible
+    /// contract they exist for.
+    func testLoadMoreHistoryGrowsThePageAndKeepsTheFlagAcrossAHistorylessRefresh() throws {
+        // setUp builds four commits: c1, c2 on feature, c3, and the merge.
+        let viewModel = RepoViewModel(repo: Repository(url: repoURL),
+                                      historyLimit: 2,
+                                      defaults: isolatedDefaults())
+
+        awaitSnapshot(from: viewModel,
+                      satisfying: { viewModel.commits.count == 2 }) {
+            viewModel.refresh(includeHistory: true)
+        }
+        XCTAssertTrue(viewModel.canLoadMoreHistory, "the first page, with more behind it")
+
+        awaitSnapshot(from: viewModel) { viewModel.refresh(includeHistory: false) }
+        XCTAssertTrue(viewModel.canLoadMoreHistory,
+                      "a status-only refresh must carry the last answer forward")
+        XCTAssertEqual(viewModel.commits.count, 2, "and must not disturb the page")
+
+        awaitSnapshot(from: viewModel,
+                      satisfying: { viewModel.commits.count == 4 }) {
+            viewModel.loadMoreHistory()
+        }
+        XCTAssertFalse(viewModel.canLoadMoreHistory, "nothing left to load")
+    }
+
+    /// Runs `trigger` and returns once an applied snapshot satisfies
+    /// `isSatisfied`.
+    ///
+    /// Waiting on the *outcome* rather than on the next event is deliberate.
+    /// `onStatusChange` fires for every applied snapshot, so a snapshot already
+    /// in flight — or a watcher tick, in a test that starts one — could satisfy
+    /// a wait meant for the one `trigger` causes, and the assertions after it
+    /// would run against the state before the change. The default condition is
+    /// for the steps that have no state change to wait for.
+    private func awaitSnapshot(from viewModel: RepoViewModel,
+                               satisfying isSatisfied: @escaping () -> Bool = { true },
+                               _ trigger: () -> Void) {
+        let applied = expectation(description: "snapshot applied")
+        applied.assertForOverFulfill = false
+        viewModel.onStatusChange = { _ in
+            if isSatisfied() { applied.fulfill() }
+        }
+        trigger()
+        wait(for: [applied], timeout: 10)
+        viewModel.onStatusChange = nil
+    }
+
+    /// A per-test suite, so a view model's draft persistence never touches the
+    /// developer's real `UserDefaults`.
+    private func isolatedDefaults() -> UserDefaults {
+        let name = "GitEnoughTests-\(UUID().uuidString)"
+        // Force-unwrapped on purpose: falling back to `.standard` would read
+        // and write the developer's real defaults, which is the one thing this
+        // helper exists to prevent.
+        let defaults = UserDefaults(suiteName: name)!
+        addTeardownBlock { defaults.removePersistentDomain(forName: name) }
+        return defaults
+    }
+
+    /// A checkout that moves no commits still changes the loaded history's
+    /// hash, because `Commit`'s synthesized `Hashable` covers its decorations.
+    ///
+    /// The GTK history pane leans on exactly this: it skips rebuilding its rows
+    /// when the hash of the loaded commits is unchanged, and the ref chips and
+    /// the HEAD ring are drawn from `decorations`. A future `Commit` keyed only
+    /// on its SHA — a natural-looking optimization — would make that cache skip
+    /// a checkout and leave the ring on the branch the user just left. Pinned
+    /// here rather than in the front end because it is a fact about the model.
+    func testCheckoutThatMovesNoCommitsStillChangesTheLoadedHistorysHash() throws {
+        func signature(_ commits: [Commit]) -> Int {
+            var hasher = Hasher()
+            for commit in commits { hasher.combine(commit) }
+            return hasher.finalize()
+        }
+
+        // `client.log` passes `--all`, which is what makes the checkout below
+        // leave the commit set alone — without it the precondition fails.
+        let before = try client.log(limit: 50)
+        try run(["checkout", "feature"])
+        let after = try client.log(limit: 50)
+
+        XCTAssertEqual(before.map(\.hash), after.map(\.hash),
+                       "precondition: --all already loaded both branches, so the "
+                       + "commit set and its order are unchanged")
+        XCTAssertNotEqual(before.filter(\.isHead).map(\.hash),
+                          after.filter(\.isHead).map(\.hash),
+                          "precondition: HEAD moved")
+        XCTAssertNotEqual(signature(before), signature(after))
+
+        // The other direction, which the cache depends on just as much: two
+        // loads of an unchanged repository must hash the same. A stored
+        // property on `Commit` that varied per load — a fetch timestamp, a
+        // cached stat — would hash differently every time and quietly turn the
+        // skip into "rebuild every publish", with nothing failing.
+        XCTAssertEqual(signature(after), signature(try client.log(limit: 50)))
+    }
+
     /// At most one loaded commit is HEAD, whatever else decorates the history.
     ///
     /// The history list leans on this: a row asks its own commit whether it is
@@ -1718,7 +1823,36 @@ final class GitIntegrationTests: XCTestCase {
 
         try write("Title\n=======\nnot an angle marker\n", to: "setext.md")
         XCTAssertFalse(try client.fileHasConflictMarkers("setext.md", chunkSize: 2))
-        XCTAssertThrowsError(try client.fileHasConflictMarkers("missing.txt"))
+
+        // An open failure that is not absence still throws: the point of the
+        // scan is that a failure is never mistaken for "resolved". `a.txt` is a
+        // regular file from `setUp`, so a path *below* it is `ENOTDIR` — which
+        // both platforms report as a read error rather than as a missing file.
+        //
+        // Deliberately not a directory, which is the obvious choice and is not
+        // portable: measured, Linux's Foundation throws `NSCocoaErrorDomain`
+        // 256 opening one, while Darwin's opens it and reads happily, so the
+        // scan simply finds no markers there. That divergence predates the
+        // absence check this test guards, and is not what it is about.
+        XCTAssertThrowsError(try client.fileHasConflictMarkers("a.txt/nested.txt"))
+    }
+
+    /// A file that is not there has no markers — it is how a modify/delete
+    /// conflict is resolved in favour of the deletion. Absence is the one case
+    /// the scan must *not* report as a failure, and it is recognised by the
+    /// open error's own code rather than by a second look at the filesystem:
+    /// `fileExists` answers false for more than absence, so keying off it would
+    /// forgive the very failures the scan exists to surface.
+    func testConflictMarkerScanTreatsAMissingFileAsUnmarked() throws {
+        XCTAssertFalse(try client.fileHasConflictMarkers("missing.txt"))
+
+        // A dangling symlink reports the same ENOENT, which is the right
+        // answer: `open` follows the link and finds nothing, and a symlink
+        // holds no markers either way.
+        try FileManager.default.createSymbolicLink(
+            atPath: repoURL.appendingPathComponent("dangling.txt").path,
+            withDestinationPath: "nowhere.txt")
+        XCTAssertFalse(try client.fileHasConflictMarkers("dangling.txt"))
     }
 
     func testMarkResolvedRefusesAFileThatStillHasMarkers() throws {
@@ -1729,6 +1863,35 @@ final class GitIntegrationTests: XCTestCase {
             XCTAssertTrue(error.localizedDescription.contains("still contains conflict markers"))
         }
         XCTAssertEqual(try client.conflictedPaths(), ["a.txt"])
+    }
+
+    /// Accepting the deletion is one of the two ways a modify/delete conflict
+    /// ends, and it leaves no file for the marker scan to open. "Mark Resolved"
+    /// used to report "no such file" there, so the conflict could not be
+    /// cleared from either front end — the same dead end an external merge tool
+    /// that resolves by deleting reached automatically, since `openMergeTool`
+    /// finishes through `markResolved`.
+    func testMarkResolvedAcceptsADeletionAsTheResolution() throws {
+        try run(["checkout", "-b", "deleting", "main"])
+        try run(["rm", "-q", "a.txt"])
+        try run(["commit", "-m", "Delete a.txt"])
+        try run(["checkout", "main"])
+        try write("one\nedited\n", to: "a.txt")
+        try run(["commit", "-am", "Edit a.txt"])
+        _ = try GitShell.shared.run(["-C", repoURL.path, "merge", "deleting"], in: nil)
+        XCTAssertEqual(try client.conflictedPaths(), ["a.txt"],
+                       "precondition: a modify/delete conflict")
+
+        // The user (or a merge tool) resolves it by accepting the deletion.
+        try FileManager.default.removeItem(at: repoURL.appendingPathComponent("a.txt"))
+
+        try client.markResolved(path: "a.txt")
+
+        XCTAssertTrue(try client.conflictedPaths().isEmpty,
+                      "the unmerged entry is cleared")
+        let status = try client.status()
+        XCTAssertEqual(status.staged.first { $0.path == "a.txt" }?.stagedStatus, .deleted,
+                       "and the deletion is staged, which is what git does here")
     }
 
     private func makeViewModel(at url: URL? = nil) -> RepoViewModel {
@@ -1759,6 +1922,12 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertFalse(viewModel.status.staged.isEmpty)
         let head = try client.commitDetail("HEAD")?.hash
         viewModel.draftCommitMessage = "Keep this draft"
+        // The refusal below is the backstop. `canCommit` is what both front
+        // ends draw from, so the button has to be dark before the click, not
+        // merely harmless after it — every other term of `canCommit` is
+        // satisfied here, so only the rebase can be holding it.
+        XCTAssertFalse(viewModel.canCommit,
+                       "Commit is offered during a rebase it would be refused for")
 
         viewModel.commit()
         waitForOperations(on: viewModel)
@@ -2026,6 +2195,37 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertNil(editingClient.inProgressOperation())
     }
 
+    /// A merge stops with unmerged entries, and committing then is something
+    /// git refuses. The macOS view checked for that locally while the GTK box
+    /// did not, so the two front ends disagreed about whether Commit is on
+    /// offer; `canCommit` is where that question is settled for both.
+    ///
+    /// Note this is the one state `allowsManualCommit` does not cover: a merge
+    /// is not a rebase, so that term is true here and only the conflict term
+    /// holds the button.
+    func testCommitIsNotOfferedWhileFilesAreUnmerged() throws {
+        try makeConflictingBranch("conflicter")
+        XCTAssertThrowsError(try client.merge("conflicter"))
+        // Something unrelated staged alongside the conflict, so the staged-list
+        // term is satisfied and cannot be what holds the button. Without this
+        // the assertion below passes for the wrong reason: a conflicted merge
+        // of one file stages nothing.
+        try write("unrelated\n", to: "b.txt")
+        try run(["add", "b.txt"])
+
+        let viewModel = makeViewModel()
+        viewModel.draftCommitMessage = "Commit over a conflict"
+
+        XCTAssertFalse(viewModel.status.conflicted.isEmpty, "precondition")
+        XCTAssertFalse(viewModel.status.staged.isEmpty, "precondition")
+        XCTAssertTrue(viewModel.mergeState.allowsManualCommit,
+                      "a merge is not a rebase, so that term cannot be the one holding it")
+        XCTAssertFalse(viewModel.isBusy, "precondition")
+
+        XCTAssertFalse(viewModel.canCommit,
+                       "Commit is offered while files are still unmerged")
+    }
+
     func testManualCommitStillCompletesResolvedMerge() throws {
         try makeConflictingBranch("conflicter")
         XCTAssertThrowsError(try client.merge("conflicter"))
@@ -2033,6 +2233,8 @@ final class GitIntegrationTests: XCTestCase {
         let viewModel = makeViewModel()
         XCTAssertTrue(viewModel.mergeState.allowsManualCommit)
         viewModel.draftCommitMessage = "Resolved merge"
+        XCTAssertTrue(viewModel.canCommit,
+                      "and is offered again once the conflict is resolved")
 
         viewModel.commit()
         waitForOperations(on: viewModel)

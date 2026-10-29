@@ -74,7 +74,7 @@ private struct DiffLineView: View {
             .textSelection(.enabled)
     }
 
-    /// The line as one (possibly concatenated) Text. Emphasized words — the
+    /// The line as one Text with styled inline segments. Emphasized words — the
     /// intraline changes computed by the parser — render bold + underlined.
     private var lineText: Text {
         let content = line.text.isEmpty ? " " : line.text
@@ -92,7 +92,9 @@ private struct DiffLineView: View {
         if cursor < content.endIndex {
             pieces.append(Text(content[cursor...]))
         }
-        return pieces.reduce(Text(""), +)
+        return pieces.reduce(Text("")) { combined, piece in
+            Text("\(combined)\(piece)")
+        }
     }
 
     private var foreground: Color {
