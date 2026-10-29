@@ -959,6 +959,7 @@ public final class RepoViewModel: ObservableObject, Identifiable {
         // the UI disables the toggle, but a stale true (orphan checkout) must
         // not reach the command line either.
         let amend = amendLastCommit && !status.isUnborn
+        let expectedHeadHash = status.headHash
         // Only clear the box on success — a rejected hook must not eat the message.
         perform("Committing…", onSuccess: {
             self.draftCommitMessage = ""
@@ -967,6 +968,13 @@ public final class RepoViewModel: ObservableObject, Identifiable {
             // A terminal may have started a rebase since the last UI snapshot.
             guard client.inProgressOperation() != .rebase || client.isEditingRebaseCommit() else {
                 throw GitError(message: Self.rebaseCommitRefusal, exitCode: -1)
+            }
+            if amend {
+                // An external Continue or Abort must not redirect a prepared amend.
+                guard let expectedHeadHash, try client.status().headHash == expectedHeadHash else {
+                    throw GitError(message: "Can't amend: HEAD changed. Refresh and review the current commit first.",
+                                   exitCode: -1)
+                }
             }
             try client.commit(message: message, amend: amend)
         }

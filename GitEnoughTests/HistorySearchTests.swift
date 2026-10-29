@@ -40,6 +40,7 @@ final class HistorySearchTests: XCTestCase {
         XCTAssertEqual(HistorySearch.filter(commits, query: "abcdef123456"), commits)
         XCTAssertTrue(HistorySearch.filter(commits, query: "bcdef1").isEmpty)
         XCTAssertTrue(HistorySearch.filter(commits, query: "abcdef9").isEmpty)
+        XCTAssertTrue(HistorySearch.filter(commits, query: "abcdef1234567").isEmpty)
     }
 
     func testMatchesLocalRemoteAndTagNames() {

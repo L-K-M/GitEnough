@@ -1911,6 +1911,51 @@ final class GitIntegrationTests: XCTestCase {
         try assertCanAmendAtEditStop(in: repoURL)
     }
 
+    private enum RebaseExit {
+        case finish, abort
+    }
+
+    private func assertAmendRejectsMovedHead(after exit: RebaseExit) throws {
+        try write("first\n", to: "edit-first.txt")
+        try client.stage(paths: ["edit-first.txt"])
+        try client.commit(message: "Commit to edit")
+        try write("next\n", to: "edit-next.txt")
+        try client.stage(paths: ["edit-next.txt"])
+        try client.commit(message: "Next commit")
+        _ = try GitShell.shared.runChecked(
+            ["rebase", "--interactive", "HEAD~2"], in: repoURL,
+            environmentOverrides: ["GIT_SEQUENCE_EDITOR": "sed -i.bak '1s/^pick /edit /'"])
+        let viewModel = makeViewModel()
+        XCTAssertTrue(viewModel.mergeState.allowsManualCommit)
+        XCTAssertEqual(try client.commitDetail("HEAD")?.subject, "Commit to edit")
+        viewModel.amendLastCommit = true
+        viewModel.draftCommitMessage = "Keep this draft"
+
+        switch exit {
+        case .finish: try client.rebaseContinue()
+        case .abort: try client.rebaseAbort()
+        }
+        XCTAssertNil(client.inProgressOperation())
+        let tip = try XCTUnwrap(client.commitDetail("HEAD"))
+        XCTAssertEqual(tip.subject, "Next commit")
+        XCTAssertNotEqual(tip.hash, viewModel.status.headHash)
+
+        viewModel.commit()
+        waitForOperations(on: viewModel)
+
+        XCTAssertEqual(try client.commitDetail("HEAD")?.hash, tip.hash)
+        XCTAssertEqual(viewModel.draftCommitMessage, "Keep this draft")
+        XCTAssertTrue(viewModel.errorMessage?.contains("amend") ?? false)
+    }
+
+    func testAmendRejectsMovedHeadAfterRebaseFinishes() throws {
+        try assertAmendRejectsMovedHead(after: .finish)
+    }
+
+    func testAmendRejectsMovedHeadAfterRebaseAborts() throws {
+        try assertAmendRejectsMovedHead(after: .abort)
+    }
+
     func testLinkedWorktreeEditStopUsesItsPrivateGitDirectory() throws {
         let linked = FileManager.default.temporaryDirectory
             .appendingPathComponent("GitEnoughLinked-\(UUID().uuidString)")
