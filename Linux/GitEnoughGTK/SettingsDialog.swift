@@ -41,25 +41,16 @@ final class SettingsDialog {
     /// nothing here writes the keyring behind the user's back.
     private var savedConfiguration = LLMConfiguration.default
     private var savedAPIKey = ""
-    private var isBusy = false
     /// Set once `savedAPIKey` is known to match the keyring, by either the
     /// opening read or a successful save. A save beats a slow read to it, and
     /// the read must then not overwrite what the save just established.
     private var keyIsKnown = false
-    /// Whether the user has typed in the key field since the dialog opened.
-    ///
-    /// This is what licenses a write to the keyring. Without it, Save on a
-    /// dialog whose opening read failed would send the empty field to
-    /// `saveAPIKey`, which deletes — destroying a key the user never touched
-    /// in order to save a model name. Clearing the field on purpose still
-    /// counts as editing, so an explicit "remove my key" keeps working.
-    private var userEditedKey = false
     /// Suppresses the dirty check while the dialog is filling its own fields.
     private var isPopulating = false
-    /// Bumped on every `present()`. An async result carrying an older value
-    /// describes a showing the user has already left, and must not be applied
-    /// to the fields in front of them.
-    private var presentation = 0
+    /// Which showing this is, whether the key was touched, and whether an
+    /// operation is out — every lifecycle question, in a type that can be
+    /// tested without a window. See `SettingsEditStateTests`.
+    private var edit = SettingsEditState()
 
     /// `secret-tool` is a process, and so is every `which` probe in front of it.
     /// One serial queue keeps a save and a re-read from interleaving, and keeps
@@ -124,7 +115,10 @@ final class SettingsDialog {
     /// with `secret-tool` and with any other GitEnough window, so what was in
     /// the fields last time is not evidence of what is stored now.
     func present() {
-        presentation += 1
+        edit.present()
+        // The state clears its own busy flag, but the controls an abandoned
+        // operation disabled are still disabled until something says so.
+        syncButtons()
         reload()
         gtk_window_present(window)
     }
@@ -221,7 +215,7 @@ final class SettingsDialog {
         }
         connect(apiKeyEntry, "changed") { [weak self] in
             guard let self, !isPopulating else { return }
-            userEditedKey = true
+            edit.editKey()
         }
 
         connect(modelChoices, "notify::selected") { [weak self] _ in
@@ -243,8 +237,8 @@ final class SettingsDialog {
         // whenever the opening read failed, and that deletes — losing a stored
         // key because someone changed the model. An explicit clear still
         // reaches here, because clearing the field is editing it.
-        let key = userEditedKey ? currentAPIKey() : nil
-        let showing = presentation
+        let key = edit.keyPayload(displayed: currentAPIKey())
+        let request = edit.request(for: configuration)
         // The non-secret half is UserDefaults and lands immediately; only the
         // key has to go out to a process.
         configuration.save()
@@ -262,9 +256,13 @@ final class SettingsDialog {
                 }
             }
             DispatchQueue.main.async { [weak self] in
-                guard let self, presentation == showing else { return }
+                // No presentation guard here: a write that landed must be
+                // recorded even if the user has reopened the dialog since, or
+                // the editor would show a stale saved state. `finish` reports
+                // against the live fields instead.
+                guard let self else { return }
                 setBusy(false)
-                finish(save: configuration, key: key, failure: failure)
+                finish(save: request, key: key, failure: failure)
             }
         }
     }
@@ -277,15 +275,17 @@ final class SettingsDialog {
     /// stored; `refreshStatus` then compares it against the live fields and
     /// says "Unsaved changes" on its own. Reporting a flat "Saved." here would
     /// claim the newer values had landed, and they would be gone on reopening.
-    private func finish(save configuration: LLMConfiguration, key: String?, failure: String?) {
-        savedConfiguration = configuration
+    private func finish(save request: SettingsRequest, key: String?, failure: String?) {
+        savedConfiguration = request.configuration
         if failure == nil, let key {
             savedAPIKey = key
             keyIsKnown = true
         }
 
-        let moved = currentConfiguration() != configuration
-            || (key.map { $0 != currentAPIKey() } ?? false)
+        // Asks the state, so the key side is checked even when this save
+        // carried no key: a key typed while the write was out was never
+        // stored, and a flat "Saved" would say otherwise.
+        let moved = edit.moved(since: request, configuration: currentConfiguration())
 
         if let failure {
             show(status: "Saved the provider settings. The API key was not stored: "
@@ -307,16 +307,15 @@ final class SettingsDialog {
     /// Uses the fields as typed rather than what is stored, so a key can be
     /// tried before it is committed to the keyring.
     private func loadModels() {
-        let asked = currentConfiguration()
+        let request = edit.request(for: currentConfiguration())
         let generator = currentGenerator()
-        let showing = presentation
         setBusy(true)
         show(status: "Loading models…", kind: .plain)
         Task { [weak self] in
             do {
                 let models = try await generator.fetchModels()
                 await MainActor.run { [weak self] in
-                    guard let self, accepts(asked, from: showing) else { return }
+                    guard let self, accepts(request) else { return }
                     setBusy(false)
                     // `fetchModels` turns an empty list into an error, so there
                     // is no empty-but-successful case to handle here.
@@ -325,7 +324,7 @@ final class SettingsDialog {
                 }
             } catch {
                 await MainActor.run { [weak self] in
-                    guard let self, accepts(asked, from: showing) else { return }
+                    guard let self, accepts(request) else { return }
                     setBusy(false)
                     show(status: "Couldn't load the model list (\(error.localizedDescription)) "
                              + "— type the model name instead.", kind: .failure)
@@ -334,7 +333,7 @@ final class SettingsDialog {
         }
     }
 
-    /// Whether a result for `asked`, requested during showing `showing`, still
+    /// Whether a result for `request` still
     /// describes what is on screen.
     ///
     /// A models list or a test verdict is only about the provider and endpoint
@@ -342,12 +341,17 @@ final class SettingsDialog {
     /// reopen the dialog, and applying it would label the new configuration
     /// with the old one's answer. The busy state is cleared either way so the
     /// buttons do not stay dead.
-    private func accepts(_ asked: LLMConfiguration, from showing: Int) -> Bool {
-        guard presentation == showing else { return false }
-        guard currentConfiguration() == asked else {
-            setBusy(false)
-            show(status: "The provider changed while that was loading, so the result "
-                     + "was discarded. Try again.", kind: .plain)
+    private func accepts(_ request: SettingsRequest) -> Bool {
+        guard edit.accepts(request, configuration: currentConfiguration()) else {
+            // A result from a previous showing is simply dropped: that dialog
+            // is gone and the new one has its own busy state. A result for
+            // settings the user has since changed is worth saying out loud,
+            // because they are looking at the fields that invalidated it.
+            if edit.isFromCurrentPresentation(request) {
+                setBusy(false)
+                show(status: "The provider or key changed while that was loading, so "
+                         + "the result was discarded. Try again.", kind: .plain)
+            }
             return false
         }
         return true
@@ -356,9 +360,8 @@ final class SettingsDialog {
     /// One real round trip proves endpoint, key and model together, which three
     /// separate validations could not.
     private func testConnection() {
-        let asked = currentConfiguration()
+        let request = edit.request(for: currentConfiguration())
         let generator = currentGenerator()
-        let showing = presentation
         setBusy(true)
         show(status: "Testing…", kind: .plain)
         Task { [weak self] in
@@ -369,14 +372,14 @@ final class SettingsDialog {
                     branch: "main")
                 let subject = message.components(separatedBy: "\n").first ?? ""
                 await MainActor.run { [weak self] in
-                    guard let self, accepts(asked, from: showing) else { return }
+                    guard let self, accepts(request) else { return }
                     setBusy(false)
                     show(status: "Connection works — sample message: “\(subject)”",
                          kind: .success)
                 }
             } catch {
                 await MainActor.run { [weak self] in
-                    guard let self, accepts(asked, from: showing) else { return }
+                    guard let self, accepts(request) else { return }
                     setBusy(false)
                     show(status: error.localizedDescription, kind: .failure)
                 }
@@ -406,14 +409,13 @@ final class SettingsDialog {
         // live because it writes the key only when the user has edited it —
         // see `userEditedKey`.
         keyIsKnown = false
-        userEditedKey = false
-        let showing = presentation
+        let request = edit.request(for: configuration)
         show(status: "Reading the keyring…", kind: .plain)
         Self.keyring.async { [weak self] in
             let lookup = LLMConfiguration.apiKeyLookup
             let available = KeychainStore.isAvailable
             DispatchQueue.main.async { [weak self] in
-                guard let self, presentation == showing else { return }
+                guard let self, edit.isFromCurrentPresentation(request) else { return }
                 // Said before a save fails rather than after, since the remedy
                 // is to install a package and the field looks ordinary.
                 UI.setVisible(keyringWarning, !available)
@@ -446,7 +448,7 @@ final class SettingsDialog {
             savedAPIKey = key
             // Anything the user typed while the read was out is theirs, and the
             // stored value must not land on top of it.
-            if !userEditedKey {
+            if !edit.userEditedKey {
                 isPopulating = true
                 setText(apiKeyEntry, key)
                 isPopulating = false
@@ -536,14 +538,22 @@ final class SettingsDialog {
     /// dialog whose Test button succeeded and whose Save button was never
     /// pressed should not look like it is configured.
     private func refreshStatus() {
-        guard !isBusy else { return }
+        guard !edit.isBusy else { return }
         let dirty = currentConfiguration() != savedConfiguration
             || currentAPIKey() != savedAPIKey
         show(status: dirty ? "Unsaved changes." : "", kind: .plain)
     }
 
     private func setBusy(_ busy: Bool) {
-        isBusy = busy
+        if busy { edit.beginOperation() } else { edit.endOperation() }
+        syncButtons()
+    }
+
+    /// Mirrors the busy flag onto the controls. Separate from `setBusy` so a
+    /// new presentation, which clears the flag itself, can re-enable buttons
+    /// that an abandoned operation left disabled.
+    private func syncButtons() {
+        let busy = edit.isBusy
         for button in [saveButton, loadModelsButton, testButton] {
             gtk_widget_set_sensitive(button, busy ? 0 : 1)
         }
