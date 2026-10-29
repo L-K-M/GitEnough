@@ -21,6 +21,11 @@ Desktop never gave you: a proper **IntelliJ-style branch/merge graph** and
   into the sidebar to add it; clone straight from a URL. Star the repos you
   care about — they pin to the top of the list in every sort order. Filter the
   list as you type, and sort it manually, by name, or by recently opened.
+- **Repository groups.** Choose View → Group Repositories by, or use the
+  sidebar's Repository Options menu, to group by forge, account, first letter,
+  or your own named groups. One group opens at a time in each window. Create
+  and manage manual groups from the sidebar menus; Move to Group assigns a
+  repository without moving its files.
 - **Watch folder.** Point Settings → General at a folder (say `~/code`) and
   GitEnough scans it about once a minute, automatically adding every repository
   it finds — directly inside, or one folder deep. Removing a repo from the
@@ -38,6 +43,11 @@ Desktop never gave you: a proper **IntelliJ-style branch/merge graph** and
   message for you. The model picker loads the provider's model list itself
   (with a manual text field as fallback), and the API key lives in the
   **Keychain**, never in plain text.
+  Generated text participates in the native editor's named Undo/Redo history.
+- **Cancellable clones.** Cancel or Escape stops the clone and its transport.
+  New destinations use private staging so cancellation allows a clean retry;
+  existing empty destination folders retain their identity and any contents
+  added while cloning.
 - **Merge conflicts.** A merge banner, per-file resolution (ours/theirs), and
   one click into your **external merge tool** — FileMerge, Kaleidoscope, Beyond
   Compare, Araxis, P4Merge, Meld, DeltaWalker, Sublime Merge and KDiff3 are
@@ -89,9 +99,13 @@ before building. From a fresh checkout:
 To verify the app and core tests:
 
 ```bash
-xcodebuild -project GitEnough.xcodeproj -scheme GitEnough -destination 'platform=macOS' -derivedDataPath build/DerivedData CODE_SIGN_IDENTITY=- test
+xcodebuild -project GitEnough.xcodeproj -scheme GitEnough -destination 'platform=macOS' -derivedDataPath build/TestDerivedData PRODUCT_BUNDLE_IDENTIFIER=ch.lkmc.GitEnough.TestHost CODE_SIGN_IDENTITY=- test
 swift test
 ```
+
+The hosted test command uses a separate app identity and build folder, so the
+test app does not load the normal app's preferences, Keychain service or activity
+history. The normal app keeps its existing data locations.
 
 The optional `scripts/build.sh` wrapper still supports Release packaging and installation;
 it requires [release-tool](https://github.com/L-K-M/release-tool)'s `lkm-build` on `PATH`.

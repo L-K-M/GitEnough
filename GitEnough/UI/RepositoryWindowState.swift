@@ -7,6 +7,7 @@ import SwiftUI
 /// through two competing queues for the same working copy.
 final class RepositoryWindowState: ObservableObject {
     let appState: AppState
+    private let recentRepositories: RecentRepositoryStore
     weak var window: NSWindow?
 
     @Published var selectedRepoPath: String? {
@@ -18,6 +19,10 @@ final class RepositoryWindowState: ObservableObject {
     @Published var selectedTab: DetailTab = .history
     @Published var inspectorVisible = true
     @Published var sidebarSearchRequest = UUID()
+    @Published var expandedSidebarGroupID: String?
+    /// A stored empty group ID means intentionally collapsed. A new scene has
+    /// no saved value and should reveal its selected repository's group.
+    var hasSavedSidebarGroupState = false
     @Published var showingAddRepository = false
     @Published var showingNewBranch = false
     @Published private(set) var isOpeningRepository = false
@@ -29,8 +34,9 @@ final class RepositoryWindowState: ObservableObject {
     private var repositoryObservation: AnyCancellable?
     private var storeObservation: AnyCancellable?
 
-    init(appState: AppState) {
+    init(appState: AppState, recentRepositories: RecentRepositoryStore) {
         self.appState = appState
+        self.recentRepositories = recentRepositories
         selectedRepoPath = appState.selectedRepoPath
         storeObservation = appState.store.objectWillChange
             .receive(on: DispatchQueue.main)
@@ -89,6 +95,7 @@ final class RepositoryWindowState: ObservableObject {
                 self.select(repo)
                 self.lastAddedRepoPath = repo.path
                 self.addRepositoryError = nil
+                self.recentRepositories.noteOpened(repo.url)
                 NSDocumentController.shared.noteNewRecentDocumentURL(repo.url)
             } else {
                 self.addRepositoryError = "“\(url.lastPathComponent)” is not inside a git repository."

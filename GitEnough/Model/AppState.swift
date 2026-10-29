@@ -184,7 +184,7 @@ public final class AppState: ObservableObject {
     /// the registered repository, or nil when `url` isn't inside a git repository
     /// (in which case `addRepositoryError` is set for the sheet to show).
     public func addRepository(at url: URL, completion: ((Repository?) -> Void)? = nil) {
-        DispatchQueue.global(qos: .userInitiated).async {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let validated = GitClient.isRepository(at: url) ? GitClient.topLevel(of: url) : nil
             DispatchQueue.main.async { [weak self] in
                 guard let self else {
@@ -242,7 +242,8 @@ public final class AppState: ObservableObject {
         guard !repos.isEmpty else { return }
         Task.detached(priority: .utility) { [weak self] in
             let result = await Self.summaries(for: repos)
-            await MainActor.run { self?.store.summaries = result }
+            guard let owner = self else { return }
+            await MainActor.run { owner.store.summaries = result }
         }
     }
 
@@ -272,11 +273,13 @@ public final class AppState: ObservableObject {
     /// an invalid summary rather than an error — the sidebar shows the warning
     /// triangle instead of pretending everything is fine.
     private static func summary(for repo: Repository) -> RepoSummary {
-        let invalid = RepoSummary(branch: nil, isDirty: false, ahead: 0, behind: 0, isValid: false)
-        guard FileManager.default.fileExists(atPath: repo.path) else { return invalid }
-        let client = GitClient(worktree: repo.url)
-        guard let status = try? client.status() else { return invalid }
-        return RepoSummary(status: status)
+        RepositoryOperationQueues.shared.queue(for: repo).sync {
+            let invalid = RepoSummary(branch: nil, isDirty: false, ahead: 0, behind: 0, isValid: false)
+            guard FileManager.default.fileExists(atPath: repo.path) else { return invalid }
+            let client = GitClient(worktree: repo.url)
+            guard let status = try? client.status() else { return invalid }
+            return RepoSummary(status: status, remotes: (try? client.remotes()) ?? [])
+        }
     }
 
     // MARK: - Auto-fetch

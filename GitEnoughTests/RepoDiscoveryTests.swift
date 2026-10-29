@@ -80,7 +80,7 @@ final class RepoDiscoveryTests: XCTestCase {
 
     func testVisitedDirectoryCapIsRespected() throws {
         for index in 0..<50 {
-            try makeDir("dir\(index)")
+            _ = try makeDir("dir\(index)")
         }
         // An absurdly small cap must not blow up or spin; it just finds little.
         let found = RepoDiscovery.findRepositories(in: root, maxDepth: 2, maxVisitedDirectories: 3)
