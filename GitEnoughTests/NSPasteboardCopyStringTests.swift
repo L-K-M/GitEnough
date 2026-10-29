@@ -1,6 +1,6 @@
 // NSPasteboard is AppKit: this exercises the macOS copy primitive, which the
 // SwiftPM library doesn't contain. Compiled by the Xcode project only.
-#if canImport(AppKit)
+#if canImport(AppKit) && !SWIFT_PACKAGE
 import AppKit
 import XCTest
 @testable import GitEnough

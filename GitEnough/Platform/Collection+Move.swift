@@ -1,9 +1,9 @@
-#if !canImport(Darwin)
+#if !canImport(Darwin) || SWIFT_PACKAGE
 import Foundation
 
-/// `move(fromOffsets:toOffset:)` — the reordering primitive a drag in the
-/// sidebar produces — ships with Apple's SDKs but not with
-/// swift-corelibs-foundation, so Linux needs its own.
+/// The app gets `move(fromOffsets:toOffset:)` from SwiftUI. The headless
+/// SwiftPM library and Linux front end use this Foundation-only implementation,
+/// keeping repository ordering independent of the UI framework.
 ///
 /// The offsets are interpreted exactly as Apple's version does: `destination`
 /// indexes the collection *before* anything is removed, so a drag onto row 3

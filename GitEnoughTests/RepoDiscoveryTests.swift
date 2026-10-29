@@ -146,7 +146,8 @@ final class RepoDiscoveryTests: XCTestCase {
 }
 
 /// Tests the sidebar store's discovery bookkeeping: dedupe, and the "removal
-/// sticks" exclusion list.
+/// sticks" exclusion list. Every persistence operation uses a fresh test suite;
+/// hosted tests must never clear or overwrite the running app's preferences.
 final class RepoStoreTests: XCTestCase {
 
     private let repositoryKey = "repositories.v1"
@@ -154,22 +155,49 @@ final class RepoStoreTests: XCTestCase {
     private let lastOpenedKey = "repoLastOpened.v1"
     private let starredKey = "starredRepositories.v1"
 
+    private var suiteName: String!
+    private var defaults: UserDefaults!
+
     override func setUpWithError() throws {
-        UserDefaults.standard.removeObject(forKey: repositoryKey)
-        UserDefaults.standard.removeObject(forKey: excludedKey)
-        UserDefaults.standard.removeObject(forKey: lastOpenedKey)
-        UserDefaults.standard.removeObject(forKey: starredKey)
+        suiteName = "GitEnough.RepoStoreTests.\(UUID().uuidString)"
+        defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
     }
 
     override func tearDownWithError() throws {
-        UserDefaults.standard.removeObject(forKey: repositoryKey)
-        UserDefaults.standard.removeObject(forKey: excludedKey)
-        UserDefaults.standard.removeObject(forKey: lastOpenedKey)
-        UserDefaults.standard.removeObject(forKey: starredKey)
+        if let suiteName { defaults?.removePersistentDomain(forName: suiteName) }
+        defaults = nil
+        suiteName = nil
+    }
+
+    func testInjectedDefaultsKeepOtherRepositoryPreferencesUnchanged() throws {
+        let otherSuite = "GitEnough.RepoStoreSentinel.\(UUID().uuidString)"
+        let otherDefaults = try XCTUnwrap(UserDefaults(suiteName: otherSuite))
+        defer { otherDefaults.removePersistentDomain(forName: otherSuite) }
+        let savedRepo = Repository(path: "/sentinel/saved-repository", name: "Saved Repository")
+        otherDefaults.set(try JSONEncoder().encode([savedRepo]), forKey: repositoryKey)
+        otherDefaults.set(["/sentinel/excluded-repository"], forKey: excludedKey)
+        otherDefaults.set(try JSONEncoder().encode([savedRepo.path: 123.0]), forKey: lastOpenedKey)
+        otherDefaults.set([savedRepo.path], forKey: starredKey)
+        let before = try XCTUnwrap(otherDefaults.persistentDomain(forName: otherSuite))
+
+        let store = RepoStore(defaults: defaults)
+        let repo = store.register(Repository(path: "/tmp/isolated-repository", name: "Isolated"))
+        store.markOpened(repo)
+        store.toggleStar(repo)
+        XCTAssertTrue(RepoStore(defaults: defaults).isStarred(repo))
+        store.remove(repo)
+        XCTAssertEqual(RepoStore(defaults: defaults).addDiscovered([repo.url]), 0)
+
+        let after = try XCTUnwrap(otherDefaults.persistentDomain(forName: otherSuite))
+        XCTAssertEqual(NSDictionary(dictionary: after), NSDictionary(dictionary: before))
+        let untouched = RepoStore(defaults: otherDefaults)
+        XCTAssertEqual(untouched.repositories, [savedRepo])
+        XCTAssertTrue(untouched.isStarred(savedRepo))
+        XCTAssertEqual(untouched.lastOpenedAt[savedRepo.path], 123.0)
     }
 
     func testDiscoveryAddsEachRepositoryOnlyOnce() {
-        let store = RepoStore()
+        let store = RepoStore(defaults: defaults)
         let url = URL(fileURLWithPath: "/tmp/some/repo")
         XCTAssertEqual(store.addDiscovered([url]), 1)
         XCTAssertEqual(store.repositories.map(\.path), [url.path])
@@ -177,12 +205,12 @@ final class RepoStoreTests: XCTestCase {
         XCTAssertEqual(store.addDiscovered([url]), 0)
         XCTAssertEqual(store.repositories.count, 1)
         // And it survives a store reload.
-        let reloaded = RepoStore()
+        let reloaded = RepoStore(defaults: defaults)
         XCTAssertEqual(reloaded.repositories.map(\.path), [url.path])
     }
 
     func testRemovalSticksForDiscoveredRepositories() {
-        let store = RepoStore()
+        let store = RepoStore(defaults: defaults)
         let url = URL(fileURLWithPath: "/tmp/some/repo")
         _ = store.addDiscovered([url])
         store.remove(store.repositories[0])
@@ -193,8 +221,8 @@ final class RepoStoreTests: XCTestCase {
         XCTAssertTrue(store.repositories.isEmpty)
 
         // …not even for a reloaded store.
-        XCTAssertTrue(RepoStore().repositories.isEmpty)
-        XCTAssertEqual(RepoStore().addDiscovered([url]), 0)
+        XCTAssertTrue(RepoStore(defaults: defaults).repositories.isEmpty)
+        XCTAssertEqual(RepoStore(defaults: defaults).addDiscovered([url]), 0)
     }
 
     func testManualAddOverridesRemovalExclusion() throws {
@@ -208,7 +236,7 @@ final class RepoStoreTests: XCTestCase {
         _ = try GitShell.shared.runChecked(["init", "-b", "main"], in: repoURL)
 
         // Removed once (so discovery won't touch it)…
-        let store = RepoStore()
+        let store = RepoStore(defaults: defaults)
         store.addDiscovered([repoURL])
         store.remove(store.repositories[0])
 
@@ -223,17 +251,17 @@ final class RepoStoreTests: XCTestCase {
     }
 
     func testMarkOpenedPersistsTimestamps() throws {
-        let store = RepoStore()
+        let store = RepoStore(defaults: defaults)
         let repo = Repository(path: "/tmp/repo", name: "repo")
         XCTAssertNil(store.lastOpenedAt[repo.path])
         store.markOpened(repo)
         XCTAssertNotNil(store.lastOpenedAt[repo.path])
         // Survives a store reload.
-        XCTAssertNotNil(RepoStore().lastOpenedAt[repo.path])
+        XCTAssertNotNil(RepoStore(defaults: defaults).lastOpenedAt[repo.path])
     }
 
     func testManualAddInsertsAtTopOfUnstarredBlock() {
-        let store = RepoStore()
+        let store = RepoStore(defaults: defaults)
         _ = store.register(Repository(path: "/tmp/a", name: "a"))
         _ = store.register(Repository(path: "/tmp/b", name: "b"))
         // Newest first — a manual add is something the user just did and is
@@ -249,22 +277,22 @@ final class RepoStoreTests: XCTestCase {
     }
 
     func testStarringPersistsAcrossReload() {
-        let store = RepoStore()
+        let store = RepoStore(defaults: defaults)
         let repo = Repository(path: "/tmp/repo", name: "repo")
         _ = store.register(repo)
         XCTAssertFalse(store.isStarred(repo))
 
         store.toggleStar(repo)
         XCTAssertTrue(store.isStarred(repo))
-        XCTAssertTrue(RepoStore().isStarred(repo))   // survives a store reload
+        XCTAssertTrue(RepoStore(defaults: defaults).isStarred(repo))   // survives a store reload
 
         store.toggleStar(repo)
         XCTAssertFalse(store.isStarred(repo))
-        XCTAssertFalse(RepoStore().isStarred(repo))
+        XCTAssertFalse(RepoStore(defaults: defaults).isStarred(repo))
     }
 
     func testStarringNeverReordersStoredManualOrder() {
-        let store = RepoStore()
+        let store = RepoStore(defaults: defaults)
         _ = store.register(Repository(path: "/tmp/a", name: "a"))
         _ = store.register(Repository(path: "/tmp/b", name: "b"))
         _ = store.register(Repository(path: "/tmp/c", name: "c"))
@@ -294,14 +322,14 @@ final class RepoStoreTests: XCTestCase {
     }
 
     func testRemoveDropsStar() {
-        let store = RepoStore()
+        let store = RepoStore(defaults: defaults)
         let repo = Repository(path: "/tmp/repo", name: "repo")
         _ = store.register(repo)
         store.toggleStar(repo)
 
         store.remove(repo)
         XCTAssertFalse(store.isStarred(repo))
-        XCTAssertFalse(RepoStore().isStarred(repo))   // no stale paths survive
+        XCTAssertFalse(RepoStore(defaults: defaults).isStarred(repo))   // no stale paths survive
 
         // Re-adding starts unstarred — a removed repo must not silently re-pin.
         _ = store.register(repo)
@@ -309,17 +337,17 @@ final class RepoStoreTests: XCTestCase {
     }
 
     func testToggleStarIgnoresUnregisteredRepo() {
-        let store = RepoStore()
+        let store = RepoStore(defaults: defaults)
         let repo = Repository(path: "/tmp/repo", name: "repo")
         store.toggleStar(repo)
         XCTAssertFalse(store.isStarred(repo))
         // starredPaths must only ever hold registered paths — nothing leaked
         // into the persisted set either.
-        XCTAssertFalse(RepoStore().isStarred(repo))
+        XCTAssertFalse(RepoStore(defaults: defaults).isStarred(repo))
     }
 
     func testMoveVisibleAppliesDragAndKeepsStarredFirst() {
-        let store = RepoStore()
+        let store = RepoStore(defaults: defaults)
         _ = store.register(Repository(path: "/tmp/a", name: "a"))
         _ = store.register(Repository(path: "/tmp/b", name: "b"))
         _ = store.register(Repository(path: "/tmp/c", name: "c"))
@@ -337,11 +365,11 @@ final class RepoStoreTests: XCTestCase {
         XCTAssertEqual(store.repositories.map(\.name), ["a", "b", "c"])
 
         // The reordered list survives a reload.
-        XCTAssertEqual(RepoStore().repositories.map(\.name), ["a", "b", "c"])
+        XCTAssertEqual(RepoStore(defaults: defaults).repositories.map(\.name), ["a", "b", "c"])
     }
 
     func testMoveVisibleIgnoresMismatchedVisibleList() {
-        let store = RepoStore()
+        let store = RepoStore(defaults: defaults)
         _ = store.register(Repository(path: "/tmp/a", name: "a"))
         _ = store.register(Repository(path: "/tmp/b", name: "b"))
         // Wrong count must not corrupt the manual order — the sidebar only
@@ -361,7 +389,7 @@ final class RepoStoreTests: XCTestCase {
     // MARK: - Path identity
 
     func testRegisterDedupesRespelledPaths() {
-        let store = RepoStore()
+        let store = RepoStore(defaults: defaults)
         _ = store.register(Repository(path: "/tmp/some/repo", name: "repo"))
         // The same folder spelled with a "/./" component (or a symlink, a "~",
         // a different mount point) is the same repository — registering the
@@ -372,7 +400,7 @@ final class RepoStoreTests: XCTestCase {
     }
 
     func testAddDiscoveredSkipsRespelledPaths() {
-        let store = RepoStore()
+        let store = RepoStore(defaults: defaults)
         _ = store.register(Repository(path: "/tmp/some/repo", name: "repo"))
         XCTAssertEqual(store.addDiscovered([URL(fileURLWithPath: "/tmp/./some/repo")]), 0)
         XCTAssertEqual(store.repositories.count, 1)
@@ -382,9 +410,9 @@ final class RepoStoreTests: XCTestCase {
         let repos = [Repository(path: "/tmp/some/repo", name: "repo"),
                      Repository(path: "/tmp/./some/repo", name: "repo"),
                      Repository(path: "/tmp/other", name: "other")]
-        UserDefaults.standard.set(try! JSONEncoder().encode(repos), forKey: repositoryKey)
-        defer { UserDefaults.standard.removeObject(forKey: repositoryKey) }
-        let store = RepoStore()
+        defaults.set(try! JSONEncoder().encode(repos), forKey: repositoryKey)
+        defer { defaults.removeObject(forKey: repositoryKey) }
+        let store = RepoStore(defaults: defaults)
         XCTAssertEqual(store.repositories.map(\.path), ["/tmp/some/repo", "/tmp/other"])
     }
 }

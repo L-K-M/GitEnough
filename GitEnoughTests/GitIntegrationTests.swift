@@ -814,7 +814,11 @@ final class GitIntegrationTests: XCTestCase {
         try run(["init", "--bare", upURL.path])
         try run(["init", "--bare", upStreamURL.path])
         try run(["remote", "add", "up", upURL.path])
-        try run(["remote", "add", "up/stream", upStreamURL.path])
+        // Newer Git refuses adding a remote nested under another remote's
+        // name. Existing configurations can still contain one, so construct
+        // that legacy configuration directly and exercise the same operations.
+        try run(["config", "remote.up/stream.url", upStreamURL.path])
+        try run(["config", "remote.up/stream.fetch", "+refs/heads/*:refs/remotes/up/stream/*"])
 
         try run(["checkout", "-b", "port"])
         try client.push(remote: "up/stream", localBranch: "port", remoteBranch: "port",

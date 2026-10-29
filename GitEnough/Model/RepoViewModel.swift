@@ -960,9 +960,14 @@ public final class RepoViewModel: ObservableObject, Identifiable {
         // not reach the command line either.
         let amend = amendLastCommit && !status.isUnborn
         let expectedHeadHash = status.headHash
+        let committedDraftRevision = draftCommitMessageRevision
         // Only clear the box on success — a rejected hook must not eat the message.
         perform("Committing…", onSuccess: {
-            self.draftCommitMessage = ""
+            // Typing can continue while a hook runs, including in another
+            // window on this repository. That newer draft belongs to the user.
+            if self.draftCommitMessageRevision == committedDraftRevision {
+                self.draftCommitMessage = ""
+            }
             self.amendLastCommit = false
         }) { client in
             // A terminal may have started a rebase since the last UI snapshot.
@@ -987,12 +992,12 @@ public final class RepoViewModel: ObservableObject, Identifiable {
     }
 
     public func stashApply(_ entry: StashEntry, pop: Bool) {
-        perform(pop ? "Popping stash…" : "Applying stash…") { try $0.stashApply(index: entry.index, pop: pop) }
+        perform(pop ? "Popping stash…" : "Applying stash…") { try $0.stashApply(entry, pop: pop) }
     }
 
     public func stashDrop(_ entry: StashEntry) {
         perform("Dropping stash…", invalidatesMessageGeneration: false) {
-            try $0.stashDrop(index: entry.index)
+            try $0.stashDrop(entry)
         }
     }
 
