@@ -86,6 +86,43 @@ final class RepositoryWindowStateTests: XCTestCase {
         backing.viewModel(for: secondRepo).queue.sync {}
     }
 
+    func testOnlyExplicitSelectionRequestsRevealingTheRepositoryGroup() throws {
+        let suite = "GitEnough.WindowRevealTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(suite)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let firstRepo = try repository(named: "first", under: root)
+        let secondRepo = try repository(named: "second", under: root)
+        let activity = GitActivityStore(fileURL: root.appendingPathComponent("activity.jsonl"))
+        let backing = AppState(defaults: defaults, activityStore: activity)
+        defer { activity.loadFromDisk() }
+        backing.store.register(firstRepo)
+        backing.store.register(secondRepo)
+        let recents = RecentRepositoryStore(defaults: defaults)
+        let window = RepositoryWindowState(appState: backing, recentRepositories: recents)
+        let otherWindow = RepositoryWindowState(appState: backing, recentRepositories: recents)
+        window.expandedSidebarGroupID = "manual:browsing-another-group"
+        let initialRequest = window.repositorySelectionRequest
+
+        window.restore(path: secondRepo.path, tab: DetailTab.history.rawValue, inspectorVisible: true)
+        window.activate()
+        otherWindow.select(firstRepo)
+        XCTAssertEqual(window.selectedRepository, secondRepo)
+        XCTAssertEqual(window.expandedSidebarGroupID, "manual:browsing-another-group")
+        XCTAssertEqual(window.repositorySelectionRequest, initialRequest,
+                       "Restoring, activating, and navigating another window must preserve the browsed group")
+
+        window.select(secondRepo)
+        let repeatedSelectionRequest = window.repositorySelectionRequest
+        XCTAssertNotEqual(repeatedSelectionRequest, initialRequest,
+                          "Explicitly choosing the current repository must still request its group")
+        window.select(firstRepo)
+        XCTAssertNotEqual(window.repositorySelectionRequest, repeatedSelectionRequest)
+        backing.viewModel(for: firstRepo).queue.sync {}
+        backing.viewModel(for: secondRepo).queue.sync {}
+    }
+
     private func repository(named name: String, under root: URL) throws -> Repository {
         guard GitShell.shared.isAvailable else { throw XCTSkip("git is not installed") }
         let url = root.appendingPathComponent(name)
