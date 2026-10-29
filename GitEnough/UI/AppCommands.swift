@@ -7,15 +7,15 @@ struct AppCommands: Commands {
 
     @ObservedObject var appState: AppState
     let appDelegate: AppDelegate
+    @ObservedObject var recentRepositories: RecentRepositoryStore
     @FocusedObject private var windowState: RepositoryWindowState?
     @AppStorage("pullRebase") private var pullRebase = false
+    @AppStorage("sidebarGroupingMode") private var sidebarGroupingRaw = SidebarGroupingMode.none.rawValue
     @Environment(\.openWindow) private var openWindow
-    @State private var recentRevision = 0
 
     private var active: RepoViewModel? { sheetPresented ? nil : windowState?.activeViewModel }
     private var recentURLs: [URL] {
-        _ = recentRevision
-        return NSDocumentController.shared.recentDocumentURLs
+        recentRepositories.urls
     }
     private var sheetPresented: Bool {
         windowState?.isPresentingSheet == true
@@ -33,7 +33,7 @@ struct AppCommands: Commands {
                 .disabled(sheetPresented)
             Menu("Open Recent") {
                 ForEach(recentURLs, id: \.self) { url in
-                    Button(url.lastPathComponent) {
+                    Button(recentMenuTitle(for: url)) {
                         appDelegate.application(NSApplication.shared, open: [url])
                     }
                     .help(url.path)
@@ -41,7 +41,7 @@ struct AppCommands: Commands {
                 Divider()
                 Button("Clear Menu") {
                     NSDocumentController.shared.clearRecentDocuments(nil)
-                    recentRevision += 1
+                    recentRepositories.clear()
                 }
                 .disabled(recentURLs.isEmpty)
             }
@@ -109,6 +109,12 @@ struct AppCommands: Commands {
             Button("Branches") { windowState?.selectedTab = .branches }
                 .keyboardShortcut("3", modifiers: .command)
                 .disabled(windowState?.selectedRepository == nil || sheetPresented)
+            Picker("Group Repositories by", selection: $sidebarGroupingRaw) {
+                ForEach(SidebarGroupingMode.allCases) { mode in
+                    Text(mode.displayName).tag(mode.rawValue)
+                }
+            }
+            .disabled(windowState == nil || sheetPresented)
             Button("Find Repository") { windowState?.sidebarSearchRequest = UUID() }
                 .keyboardShortcut("f", modifiers: [.shift, .command])
                 .disabled(windowState == nil || sheetPresented)
@@ -122,5 +128,12 @@ struct AppCommands: Commands {
             Button("Git Activity History") { openWindow(id: "git-activity") }
                 .keyboardShortcut("a", modifiers: [.shift, .command])
         }
+    }
+
+    private func recentMenuTitle(for url: URL) -> String {
+        let name = url.lastPathComponent
+        guard recentURLs.filter({ $0.lastPathComponent == name }).count > 1 else { return name }
+        let parent = (url.deletingLastPathComponent().path as NSString).abbreviatingWithTildeInPath
+        return "\(name) (\(parent))"
     }
 }

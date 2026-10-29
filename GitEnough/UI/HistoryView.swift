@@ -191,24 +191,30 @@ struct HistoryView: View {
                 } else {
                     filterBar(matchCount: visible.count)
                     Divider()
-                    List(selection: Binding(get: { selectedHash }, set: {
-                        selectedHash = $0
-                        listFocusRequest = UUID()
-                    })) {
-                        commitRows(visible)
-                        if viewModel.canLoadMoreHistory {
-                            Button("Load Older Commits…") { viewModel.loadMoreHistory() }
-                                .buttonStyle(.link)
-                                .padding(.vertical, 8)
-                                .frame(maxWidth: .infinity)
-                                .listRowSeparator(.hidden)
-                                .disabled(viewModel.isBusy)
+                    GeometryReader { geometry in
+                        let graphWidth = isFiltering ? 0
+                            : GraphMetrics.graphWidth(for: viewModel.layout.columnCount)
+                        // Match the explicit trailing inset shared by every row.
+                        let textWidth = max(0, geometry.size.width - graphWidth - 8)
+                        List(selection: Binding(get: { selectedHash }, set: {
+                            selectedHash = $0
+                            listFocusRequest = UUID()
+                        })) {
+                            commitRows(visible, textWidth: textWidth)
+                            if viewModel.canLoadMoreHistory {
+                                Button("Load Older Commits…") { viewModel.loadMoreHistory() }
+                                    .buttonStyle(.link)
+                                    .padding(.vertical, 8)
+                                    .frame(maxWidth: .infinity)
+                                    .listRowSeparator(.hidden)
+                                    .disabled(viewModel.isBusy)
+                            }
                         }
+                        .listStyle(.plain)
+                        .environment(\.defaultMinListRowHeight, GraphMetrics.rowHeight)
+                        .accessibilityLabel("Commit history")
+                        .id(activeFilter)
                     }
-                    .listStyle(.plain)
-                    .environment(\.defaultMinListRowHeight, GraphMetrics.rowHeight)
-                    .accessibilityLabel("Commit history")
-                    .id(activeFilter)
 
                 }
             }
@@ -234,9 +240,9 @@ struct HistoryView: View {
     // Kept as small, separate @ViewBuilder pieces: one giant builder
     // expression here sent the type-checker past its time limit.
     @ViewBuilder
-    private func commitRows(_ visible: [Commit]) -> some View {
+    private func commitRows(_ visible: [Commit], textWidth: CGFloat) -> some View {
         ForEach(Array(visible.enumerated()), id: \.element.id) { row, commit in
-            historyRow(row: row, commit: commit)
+            historyRow(row: row, commit: commit, textWidth: textWidth)
                 .tag(commit.hash)
                 .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 8))
                 .listRowSeparator(.hidden)
@@ -248,7 +254,7 @@ struct HistoryView: View {
     }
 
     @ViewBuilder
-    private func historyRow(row: Int, commit: Commit) -> some View {
+    private func historyRow(row: Int, commit: Commit, textWidth: CGFloat) -> some View {
         HStack(spacing: 0) {
             // The graph only aligns with the full, unfiltered row sequence —
             // hide it while filtering.
@@ -259,7 +265,7 @@ struct HistoryView: View {
                                isUnpushedRow: viewModel.unpushedHashes.contains(commit.hash),
                                clipsTail: row == viewModel.commits.count - 1)
             }
-            CommitRowView(commit: commit, isHead: commit.isHead)
+            CommitRowView(commit: commit, isHead: commit.isHead, availableWidth: textWidth)
         }
         .frame(height: GraphMetrics.rowHeight)
         .contentShape(Rectangle())
@@ -450,54 +456,53 @@ private struct CommitRowView: View {
 
     let commit: Commit
     let isHead: Bool
+    let availableWidth: CGFloat
 
     var body: some View {
-        GeometryReader { geometry in
-            let compact = geometry.size.width < 600
-            let refLimit = compact ? 1 : 3
-            let refWidth = compact ? min(120, max(44, geometry.size.width * 0.25)) : 180
+        let compact = availableWidth < 600
+        let refLimit = compact ? 1 : 3
+        let refWidth = compact ? min(120, max(44, availableWidth * 0.25)) : 180
 
-            HStack(spacing: 8) {
-                Text(commit.subject.isEmpty ? "(no message)" : commit.subject)
-                    .fontWeight(isHead ? .semibold : .regular)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .layoutPriority(1)
+        HStack(spacing: 8) {
+            Text(commit.subject.isEmpty ? "(no message)" : commit.subject)
+                .fontWeight(isHead ? .semibold : .regular)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .layoutPriority(1)
 
-                if !commit.decorations.isEmpty {
-                    HStack(spacing: 4) {
-                        ForEach(commit.decorations.prefix(refLimit)) { decoration in
-                            RefChip(decoration: decoration)
-                        }
-                        if commit.decorations.count > refLimit {
-                            Text("+\(commit.decorations.count - refLimit)")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                                .fixedSize()
-                        }
+            if !commit.decorations.isEmpty {
+                HStack(spacing: 4) {
+                    ForEach(commit.decorations.prefix(refLimit)) { decoration in
+                        RefChip(decoration: decoration)
                     }
-                    .frame(maxWidth: refWidth, alignment: .trailing)
-                    .fixedSize(horizontal: true, vertical: false)
+                    if commit.decorations.count > refLimit {
+                        Text("+\(commit.decorations.count - refLimit)")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .fixedSize()
+                    }
                 }
-
-                if !compact {
-                    Text(commit.author)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .frame(maxWidth: 100, alignment: .trailing)
-                        .fixedSize(horizontal: true, vertical: false)
-
-                    RelativeDateText(date: commit.date)
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                        .frame(width: 110, alignment: .trailing)
-                }
+                .frame(maxWidth: refWidth, alignment: .trailing)
+                .fixedSize(horizontal: true, vertical: false)
             }
-            .padding(.leading, 8)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            if !compact {
+                Text(commit.author)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .frame(maxWidth: 100, alignment: .trailing)
+                    .fixedSize(horizontal: true, vertical: false)
+
+                RelativeDateText(date: commit.date)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .frame(width: 110, alignment: .trailing)
+            }
         }
+        .padding(.leading, 8)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .help(metadataDescription)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(metadataDescription)

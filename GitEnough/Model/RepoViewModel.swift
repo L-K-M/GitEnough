@@ -150,7 +150,7 @@ public final class RepoViewModel: ObservableObject, Identifiable {
          defaults: UserDefaults = .standard) {
         self.repo = repo
         self.client = GitClient(worktree: repo.url)
-        self.queue = DispatchQueue(label: "gitenough.repo.\(repo.name)", qos: .userInitiated)
+        self.queue = RepositoryOperationQueues.shared.queue(for: repo)
         self.historyLimit = historyLimit
         self.defaults = defaults
         // Restore via the backing storage: a plain assignment could re-run
@@ -196,7 +196,8 @@ public final class RepoViewModel: ObservableObject, Identifiable {
         refresh(includeHistory: true)
         queue.async { [weak self] in
             guard let self, let gitDir = self.client.gitDir() else { return }
-            DispatchQueue.main.async {
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
                 self.watcher = RepoWatcher(gitDir: gitDir, worktree: self.repo.url,
                                            queue: self.queue) { [weak self] in
                     self?.collectAndApply(includeHistory: true)
@@ -278,7 +279,7 @@ public final class RepoViewModel: ObservableObject, Identifiable {
         // the commit just made). commit() guards independently; this clears
         // the flag regardless of which tab is mounted.
         if snapshot.status.isUnborn, amendLastCommit { amendLastCommit = false }
-        onStatusChange?(RepoSummary(status: snapshot.status))
+        onStatusChange?(RepoSummary(status: snapshot.status, remotes: snapshot.remotes))
     }
 
     /// Runs a snapshot load on the queue and applies it on main.
@@ -1199,7 +1200,8 @@ public final class RepoViewModel: ObservableObject, Identifiable {
         _ message: String,
         context: CommitMessageGenerationContext,
         generatedFrom stagedDiff: String,
-        currentStagedDiff: String
+        currentStagedDiff: String,
+        onReplacement: ((CommitMessageReplacement) -> Void)?
     ) {
         guard activeMessageGenerationToken == context.token else { return }
         let accepted = context.accepts(
@@ -1217,7 +1219,20 @@ public final class RepoViewModel: ObservableObject, Identifiable {
             messageGenerationError = "Staged changes changed while the message was being generated. Generate again to use the latest changes."
             return
         }
-        draftCommitMessage = message
+        let replacement = CommitMessageReplacement(previousMessage: draftCommitMessage, message: message)
+        if replacement.previousMessage != message { onReplacement?(replacement) }
+        // The initiating native editor can apply the edit through its text
+        // system first, registering undo. If it is gone, update the model here.
+        // A callback that edits the draft again must not lose that newer text.
+        if let message = replacement.replacing(draftCommitMessage) {
+            draftCommitMessage = message
+        }
+    }
+
+    /// An input method can begin editing marked text before it commits a new
+    /// shared draft value. A pending suggestion no longer owns that input.
+    func beginCommitMessageEditing() {
+        invalidateCommitMessageGeneration()
     }
 
     /// Hop back through the main-thread-owned view model before scheduling the
@@ -1226,7 +1241,8 @@ public final class RepoViewModel: ObservableObject, Identifiable {
     private func verifyGeneratedCommitMessage(
         _ message: String,
         context: CommitMessageGenerationContext,
-        generatedFrom stagedDiff: String
+        generatedFrom stagedDiff: String,
+        onReplacement: ((CommitMessageReplacement) -> Void)?
     ) {
         queue.async { [weak self] in
             guard let self else { return }
@@ -1237,7 +1253,8 @@ public final class RepoViewModel: ObservableObject, Identifiable {
                         message,
                         context: context,
                         generatedFrom: stagedDiff,
-                        currentStagedDiff: currentDiff)
+                        currentStagedDiff: currentDiff,
+                        onReplacement: onReplacement)
                 }
             } catch {
                 let failure = "Couldn’t read staged changes: \(error.localizedDescription)"
@@ -1248,7 +1265,13 @@ public final class RepoViewModel: ObservableObject, Identifiable {
         }
     }
 
-    public func generateCommitMessage() {
+    /// Offers an accepted edit to the initiating UI on main before updating
+    /// the draft itself, so a native editor can register text undo. The model
+    /// still applies the edit when that editor has closed or no callback exists.
+    public func generateCommitMessage(
+        using generator: CommitMessageGenerator? = nil,
+        onReplacement: ((CommitMessageReplacement) -> Void)? = nil
+    ) {
         guard !isGeneratingMessage, !isBusy else { return }
         nextMessageGenerationToken &+= 1
         let context = CommitMessageGenerationContext(
@@ -1280,7 +1303,7 @@ public final class RepoViewModel: ObservableObject, Identifiable {
                         activeToken: self.activeMessageGenerationToken,
                         currentDraftRevision: self.draftCommitMessageRevision,
                         currentStagedRevision: self.stagedContentRevision) else { return }
-                let generator = CommitMessageGenerator(configuration: LLMConfiguration.load())
+                let generator = generator ?? CommitMessageGenerator(configuration: LLMConfiguration.load())
                 Task { [weak self] in
                     guard let self else { return }
                     do {
@@ -1288,7 +1311,8 @@ public final class RepoViewModel: ObservableObject, Identifiable {
                             diffStat: stat, diff: diff, branch: branch)
                         await MainActor.run { [weak self] in
                             self?.verifyGeneratedCommitMessage(
-                                message, context: context, generatedFrom: diff)
+                                message, context: context, generatedFrom: diff,
+                                onReplacement: onReplacement)
                         }
                     } catch {
                         await MainActor.run { [weak self] in

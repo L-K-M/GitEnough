@@ -13,13 +13,16 @@ struct ContentView: View {
     @SceneStorage("repositoryTab") private var savedTab = DetailTab.history.rawValue
     @SceneStorage("repositoryInspectorVisible") private var savedInspectorVisible = true
     @SceneStorage("repositorySidebarVisible") private var savedSidebarVisible = true
+    @SceneStorage("repositoryExpandedSidebarGroup") private var savedSidebarGroupID: String?
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var gitAlertDismissed = false
     @State private var restored = false
     private let appDelegate: AppDelegate
 
-    init(appState: AppState, appDelegate: AppDelegate) {
-        _windowState = StateObject(wrappedValue: RepositoryWindowState(appState: appState))
+    init(appState: AppState, appDelegate: AppDelegate,
+         recentRepositories: RecentRepositoryStore) {
+        _windowState = StateObject(wrappedValue: RepositoryWindowState(
+            appState: appState, recentRepositories: recentRepositories))
         self.appDelegate = appDelegate
     }
 
@@ -54,6 +57,10 @@ struct ContentView: View {
             if !restored {
                 windowState.restore(path: savedRepositoryPath, tab: savedTab,
                                     inspectorVisible: savedInspectorVisible)
+                if let savedSidebarGroupID {
+                    windowState.hasSavedSidebarGroupState = true
+                    windowState.expandedSidebarGroupID = savedSidebarGroupID.isEmpty ? nil : savedSidebarGroupID
+                }
                 columnVisibility = savedSidebarVisible ? .all : .detailOnly
                 restored = true
             }
@@ -68,9 +75,13 @@ struct ContentView: View {
         .onChange(of: columnVisibility) { _, visibility in
             savedSidebarVisible = visibility != .detailOnly
         }
+        .onChange(of: windowState.expandedSidebarGroupID) { _, groupID in
+            windowState.hasSavedSidebarGroupState = true
+            savedSidebarGroupID = groupID ?? ""
+        }
         .alert("git is not installed", isPresented: gitUnavailable) {
             Button("Install Command Line Tools") {
-                try? Process.run(URL(fileURLWithPath: "/usr/bin/xcode-select"),
+                _ = try? Process.run(URL(fileURLWithPath: "/usr/bin/xcode-select"),
                                  arguments: ["--install"])
             }
             Button("Later", role: .cancel) {}

@@ -45,6 +45,9 @@ public struct RepoSummary: Equatable {
     public var ahead: Int
     public var behind: Int
     public var isValid: Bool
+    /// Stable grouping source: origin, or the first configured remote when
+    /// origin is absent. It does not change with the checked-out branch.
+    public var groupingRemoteURL: String? = nil
 
     public static let unknown = RepoSummary(branch: nil, isDirty: false, ahead: 0, behind: 0, isValid: true)
 }
@@ -53,10 +56,11 @@ extension RepoSummary {
     /// Builds the sidebar summary from a fresh `git status` snapshot. Kept in an
     /// extension so the memberwise initializer (used by `.unknown` and the
     /// "invalid repo" placeholder) stays synthesized.
-    public init(status: RepoStatus) {
+    public init(status: RepoStatus, remotes: [Remote] = []) {
         self.init(branch: status.head ?? status.headHash.map { String($0.prefix(7)) },
                   isDirty: status.isDirty, ahead: status.ahead, behind: status.behind,
-                  isValid: true)
+                  isValid: true,
+                  groupingRemoteURL: (remotes.first { $0.name == "origin" } ?? remotes.first)?.url)
     }
 }
 
@@ -117,6 +121,11 @@ public final class RepoStore: ObservableObject {
     /// sidebar sort order.
     @Published public private(set) var starredPaths: Set<String> = []
 
+    @Published public private(set) var manualGroups: [ManualRepositoryGroup] = []
+    @Published public private(set) var manualGroupAssignments: [String: UUID] = [:]
+
+    private static let manualGroupsKey = "sidebarManualGroups.v1"
+    private static let manualGroupAssignmentsKey = "sidebarManualGroupAssignments.v1"
     private static let repositoriesKey = "repositories.v1"
     private static let excludedKey = "excludedRepositories.v1"
     private static let lastOpenedKey = "repoLastOpened.v1"
@@ -136,6 +145,7 @@ public final class RepoStore: ObservableObject {
            let decoded = try? JSONDecoder().decode([String: TimeInterval].self, from: data) {
             lastOpenedAt = decoded
         }
+        loadManualGroups()
     }
 
     private func load() {
@@ -230,6 +240,11 @@ public final class RepoStore: ObservableObject {
         // registered paths, or its count could never again be used as an index
         // basis — and a removed repo re-added later shouldn't silently re-pin.
         starredPaths.remove(repo.path)
+        let assignedPaths = manualGroupAssignments.keys.filter {
+            Repository.normalizedPath($0) == repo.normalizedPath
+        }
+        for path in assignedPaths { manualGroupAssignments.removeValue(forKey: path) }
+        if !assignedPaths.isEmpty { persistManualGroups() }
         persistStars()
         persistExclusions()
         persist()
@@ -248,6 +263,98 @@ public final class RepoStore: ObservableObject {
         moved.move(fromOffsets: fromOffsets, toOffset: toOffset)
         repositories = Self.starredFirst(moved, starred: starredPaths)
         persist()
+    }
+
+    // MARK: - Manual groups
+
+    private func loadManualGroups() {
+        if let data = defaults.data(forKey: Self.manualGroupsKey),
+           let decoded = try? JSONDecoder().decode([ManualRepositoryGroup].self, from: data) {
+            var seen: Set<UUID> = []
+            manualGroups = decoded.filter {
+                !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    && seen.insert($0.id).inserted
+            }
+        }
+        guard let data = defaults.data(forKey: Self.manualGroupAssignmentsKey),
+              let decoded = try? JSONDecoder().decode([String: UUID].self, from: data) else { return }
+        let groupIDs = Set(manualGroups.map(\.id))
+        for repository in repositories {
+            if let exact = decoded[repository.path], groupIDs.contains(exact) {
+                manualGroupAssignments[repository.path] = exact
+            } else if let path = decoded.keys.sorted().first(where: {
+                Repository.normalizedPath($0) == repository.normalizedPath
+                    && decoded[$0].map(groupIDs.contains) == true
+            }) {
+                manualGroupAssignments[repository.path] = decoded[path]
+            }
+        }
+    }
+
+    private func persistManualGroups() {
+        if let data = try? JSONEncoder().encode(manualGroups) {
+            defaults.set(data, forKey: Self.manualGroupsKey)
+        }
+        if let data = try? JSONEncoder().encode(manualGroupAssignments) {
+            defaults.set(data, forKey: Self.manualGroupAssignmentsKey)
+        }
+    }
+
+    private func validatedGroupName(_ name: String, excluding id: UUID? = nil) throws -> String {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw RepositoryGroupError.emptyName }
+        guard !manualGroups.contains(where: {
+            $0.id != id && $0.name.localizedCaseInsensitiveCompare(trimmed) == .orderedSame
+        }) else { throw RepositoryGroupError.duplicateName }
+        return trimmed
+    }
+
+    @discardableResult
+    public func createGroup(named name: String, including repository: Repository? = nil) throws -> ManualRepositoryGroup {
+        let validatedName = try validatedGroupName(name)
+        let registered = repository.flatMap { candidate in
+            repositories.first { $0.normalizedPath == candidate.normalizedPath }
+        }
+        if repository != nil && registered == nil { throw RepositoryGroupError.unregisteredRepository }
+        let group = ManualRepositoryGroup(name: validatedName)
+        manualGroups.append(group)
+        if let registered { manualGroupAssignments[registered.path] = group.id }
+        persistManualGroups()
+        return group
+    }
+
+    public func renameGroup(_ group: ManualRepositoryGroup, to name: String) throws {
+        guard let index = manualGroups.firstIndex(where: { $0.id == group.id }) else {
+            throw RepositoryGroupError.missingGroup
+        }
+        let validatedName = try validatedGroupName(name, excluding: group.id)
+        manualGroups[index].name = validatedName
+        persistManualGroups()
+    }
+
+    public func deleteGroup(_ group: ManualRepositoryGroup) {
+        guard manualGroups.contains(where: { $0.id == group.id }) else { return }
+        manualGroups.removeAll { $0.id == group.id }
+        manualGroupAssignments = manualGroupAssignments.filter { $0.value != group.id }
+        persistManualGroups()
+    }
+
+    public func move(_ repository: Repository, toGroup group: ManualRepositoryGroup?) throws {
+        guard let registered = repositories.first(where: {
+            $0.normalizedPath == repository.normalizedPath
+        }) else { throw RepositoryGroupError.unregisteredRepository }
+        if let group, !manualGroups.contains(where: { $0.id == group.id }) {
+            throw RepositoryGroupError.missingGroup
+        }
+        manualGroupAssignments[registered.path] = group?.id
+        persistManualGroups()
+    }
+
+    public func manualGroup(for repository: Repository) -> ManualRepositoryGroup? {
+        guard let registered = repositories.first(where: {
+            $0.normalizedPath == repository.normalizedPath
+        }), let id = manualGroupAssignments[registered.path] else { return nil }
+        return manualGroups.first { $0.id == id }
     }
 
     // MARK: - Starring

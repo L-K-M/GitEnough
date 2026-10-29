@@ -1513,7 +1513,82 @@ public final class GitClient {
     // MARK: - Clone
 
     /// Clones `url` into `destination`. Progress goes to stderr (which we surface).
-    public static func clone(_ url: String, into destination: URL) throws {
-        try GitShell.shared.runChecked(["clone", "--", url, destination.path], in: nil)
+    /// New cancellable destinations are published only after git succeeds.
+    /// Existing empty directories are cloned in place without replacing them.
+    public static func clone(_ url: String, into destination: URL,
+                             cancellation: GitCancellationToken? = nil,
+                             environmentOverrides: [String: String] = [:]) throws {
+        guard let cancellation else {
+            _ = try GitShell.shared.runChecked(["clone", "--", url, destination.path], in: nil,
+                                              environmentOverrides: environmentOverrides)
+            return
+        }
+        try cancellation.checkCancellation()
+        let files = FileManager.default
+        var isDirectory: ObjCBool = false
+        if files.fileExists(atPath: destination.path, isDirectory: &isDirectory) {
+            guard isDirectory.boolValue,
+                  try files.contentsOfDirectory(atPath: destination.path).isEmpty else {
+                throw GitError(message: "A file or nonempty folder already exists at \(destination.path). Choose another destination.",
+                               exitCode: -1)
+            }
+            try cloneIntoExistingDirectory(url, destination: destination,
+                                           cancellation: cancellation,
+                                           environmentOverrides: environmentOverrides)
+            return
+        }
+        // A sibling keeps publication on the same volume. Only this private,
+        // newly created directory is ever cleaned up after failure/cancellation;
+        // an existing destination or a folder created there meanwhile is safe.
+        let temporary = destination.deletingLastPathComponent()
+            .appendingPathComponent(".GitEnough-Clone-\(UUID().uuidString)", isDirectory: true)
+        try files.createDirectory(at: temporary, withIntermediateDirectories: false,
+                                  attributes: [.posixPermissions: 0o700])
+        let workingCopy = temporary.appendingPathComponent(destination.lastPathComponent, isDirectory: true)
+        do {
+            _ = try GitShell.shared.runChecked(["clone", "--", url, workingCopy.path], in: nil,
+                                              environmentOverrides: environmentOverrides,
+                                              cancellation: cancellation)
+            try cancellation.beginCompletion()
+            try files.moveItem(at: workingCopy, to: destination)
+        } catch {
+            do {
+                try files.removeItem(at: temporary)
+            } catch let cleanupError {
+                if error is GitCancellationError {
+                    throw GitCancellationError(retainedDirectory: temporary)
+                }
+                throw GitError(message: "\(error.localizedDescription) A temporary clone remains at \(temporary.path): \(cleanupError.localizedDescription)",
+                               exitCode: (error as? GitError)?.exitCode ?? -1)
+            }
+            throw error
+        }
+        do {
+            try files.removeItem(at: temporary)
+        } catch {
+            // The working copy is already published. An empty staging folder
+            // must not turn that successful clone into a reported failure.
+            NSLog("[GitEnough] Could not remove empty clone staging directory: %@", error.localizedDescription)
+        }
+    }
+
+    private static func cloneIntoExistingDirectory(_ url: String, destination: URL,
+                                                   cancellation: GitCancellationToken,
+                                                   environmentOverrides: [String: String]) throws {
+        do {
+            _ = try GitShell.shared.runChecked(["clone", "--", url, destination.path], in: nil,
+                                              environmentOverrides: environmentOverrides,
+                                              cancellation: cancellation)
+            try cancellation.beginCompletion()
+        } catch is GitCancellationError {
+            // The caller owns this directory, its inode/ACLs, and anything
+            // added during cloning. Never remove or recreate it on cancellation.
+            let files = FileManager.default
+            let remaining = try? files.contentsOfDirectory(atPath: destination.path)
+            if files.fileExists(atPath: destination.path), remaining?.isEmpty != true {
+                throw GitCancellationError(preservingExistingDirectory: destination)
+            }
+            throw GitCancellationError()
+        }
     }
 }
