@@ -34,6 +34,8 @@ only displayed.
 
 - Open an existing repository using Command-O, the attached folder panel and
   Go to Folder; open a second working copy in a new Command-N window.
+- Open Foldover through the folder panel, then choose it from File > Open
+  Recent in the same running build; verify its repository and history open.
 - Keep Atlas in Changes while Harbor is in Branches; closing one window keeps
   the other window's repository and mode. Repository menu commands disable
   while Settings is the active window.
@@ -73,6 +75,41 @@ only displayed.
   the app creates a workspace. The standard Settings tabs fit their forms;
   visiting AI Settings makes no provider request.
 
+## Context-menu regression
+
+The original inconsistency was reproduced before the fix. These checks then
+passed in the corrected running build using a disposable conflicted repository.
+
+1. Use a disposable repository with two local branches, a remote branch without
+   a matching local branch, and an existing stash entry.
+2. Start a conflicting merge and leave it in progress. Open Branches and inspect
+   the local and remote branch context menus: Check Out and Merge remain visible
+   but disabled, matching the Branch menu and selected-branch footer.
+3. Double-click another local branch. Verify the current branch and in-progress
+   merge are unchanged.
+4. Inspect the stash context menu: Apply, Pop and Drop remain visible but
+   disabled, matching the Branch menu and selected-stash footer.
+5. Abort the fixture merge. Verify the applicable branch and stash actions are
+   enabled again and the stash contents remain unchanged.
+
+The current branch, HEAD, merge head and stash patch were compared after the
+double-click check; none changed. Aborting through the app restored the clean
+working tree and preserved the stash. The review fixture was removed from the
+sidebar afterward.
+
+## Review decisions
+
+The first completed automated review found no confirmed important defects.
+The context-menu consistency issue and stale Xcode version in the CI guide
+were corrected. Restoration uses the synchronously loaded repository list;
+repository-add completions and window subscriptions already run on main.
+Opening Clone and inspecting File verified that Open and Clone are disabled
+while its sheet is key. Native NSSearchField clearing and native List selection
+replace the removed custom controls. The suggestion to restore fixed 11-point
+diff text conflicts with the requested readable system typography, so the
+semantic monospaced style is retained. Other minor defensive and naming
+suggestions are deferred.
+
 ## Capability and data preservation
 
 All existing commands retain a surface: local open/clone/drop/discovery;
@@ -108,6 +145,9 @@ lifecycle for a repository folder; commit drafts autosave separately.
 - SceneStorage restores window state when macOS restores a scene; a new window
   otherwise opens the last-used repository. Global Close windows when quitting
   preferences remain under the user's control.
+- macOS clears its Open Recent shared-file list when switching between these
+  ad-hoc development builds because their code-signature hashes differ. Recent
+  registration and opening are verified within one unchanged running build.
 - VoiceOver speech and the full matrix of increased contrast, reduced
   transparency and reduced motion settings were not manually exercised.
 

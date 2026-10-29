@@ -9,7 +9,7 @@ sibling apps (Zap, Jetty, TopDrawer):
 | [`release.yml`](workflows/release.yml) | pushing a `v*` tag | Release build **without Developer ID signing**, ad-hoc signed so it launches on Apple Silicon, packaged as **DMG + zip**, published as a GitHub Release, then **byte-verified** by re-downloading the assets |
 | [`zai-code-review.yml`](workflows/zai-code-review.yml) | PR opened/synchronized | Reviews the diff with **Z.AI GLM** (`L-K-M/zai-code-review`, needs the `ZAI_API_KEY` repo secret; no-op without it) |
 
-Both macOS jobs run on `macos-26` with a **pinned Xcode** (`16.2`), the Linux
+Both macOS jobs run on `macos-26` with a **pinned Xcode** (`26.0.1`), the Linux
 job runs in a **pinned official Swift image**, and every third-party action is
 **pinned to a commit SHA**. There are no third-party Swift dependencies, so
 there's nothing to cache.

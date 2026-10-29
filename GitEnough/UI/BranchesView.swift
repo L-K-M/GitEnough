@@ -88,7 +88,9 @@ struct BranchesView: View {
                         .contextMenu {
                             if !branch.isHead {
                                 Button("Check Out") { viewModel.checkout(branch: branch) }
+                                    .disabled(viewModel.isBusy || viewModel.mergeState.isInProgress)
                                 Button("Merge into Current Branch…") { branchToMerge = branch }
+                                    .disabled(viewModel.isBusy || viewModel.mergeState.isInProgress)
                             }
                             Button("Rename…") {
                                 renameText = branch.name
@@ -101,7 +103,9 @@ struct BranchesView: View {
                             }
                         }
                         .onTapGesture(count: 2) {
-                            if !branch.isHead { viewModel.checkout(branch: branch) }
+                            guard !branch.isHead, !viewModel.isBusy,
+                                  !viewModel.mergeState.isInProgress else { return }
+                            viewModel.checkout(branch: branch)
                         }
                 }
             } header: {
@@ -144,8 +148,10 @@ struct BranchesView: View {
                             if let local = branch.localNameForRemote,
                                !localBranches.contains(where: { $0.name == local }) {
                                 Button("Check Out as \(local)") { viewModel.checkout(branch: branch) }
+                                    .disabled(viewModel.isBusy || viewModel.mergeState.isInProgress)
                             }
                             Button("Merge into Current Branch…") { branchToMerge = branch }
+                                .disabled(viewModel.isBusy || viewModel.mergeState.isInProgress)
                             Button("Copy Name") { NSPasteboard.general.copyString(branch.name) }
                             Divider()
                             Button("Delete Remote Branch…", role: .destructive) {
@@ -187,9 +193,12 @@ struct BranchesView: View {
                     .nativeListRowFocus(isSelected: selection == .stash(entry.index), focusRequest: listFocusRequest)
                     .contextMenu {
                         Button("Apply") { viewModel.stashApply(entry, pop: false) }
+                            .disabled(viewModel.isBusy || viewModel.mergeState.isInProgress)
                         Button("Pop") { viewModel.stashApply(entry, pop: true) }
+                            .disabled(viewModel.isBusy || viewModel.mergeState.isInProgress)
                         Divider()
                         Button("Drop…", role: .destructive) { stashToDrop = entry }
+                            .disabled(viewModel.isBusy || viewModel.mergeState.isInProgress)
                     }
                 }
             } header: {
