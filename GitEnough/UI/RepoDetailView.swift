@@ -8,15 +8,18 @@ struct RepoDetailView: View {
 
     let repo: Repository
     @ObservedObject var viewModel: RepoViewModel
-    @EnvironmentObject var appState: AppState
+    @EnvironmentObject var windowState: RepositoryWindowState
     @AppStorage("pullRebase") private var pullRebase = false
 
     @State private var newBranchName = ""
+    @FocusState private var branchNameFocused: Bool
     @State private var checkoutNewBranch = true
     @State private var showingActivityLog = false
     /// Confirms aborting an in-progress merge/rebase/cherry-pick/revert —
     /// the single most destructive unguarded action in the banner.
     @State private var confirmingAbort = false
+    @State private var confirmingRebaseSkip = false
+    @State private var pendingRebaseSkip: RebaseSkipTarget?
     @State private var showingForcePushConfirmation = false
     /// The exact command the open confirmation dialog is showing. Compared
     /// against a freshly resolved one when the user confirms, so a refresh
@@ -49,7 +52,7 @@ struct RepoDetailView: View {
             }
 
             Group {
-                switch appState.selectedTab {
+                switch windowState.selectedTab {
                 case .history:
                     HistoryView(viewModel: viewModel)
                 case .changes:
@@ -72,27 +75,22 @@ struct RepoDetailView: View {
             statusBar
         }
         .navigationTitle(repo.name)
+        .navigationSubtitle(viewModel.status.isUnborn ? "No commits yet" : (repo.url.deletingLastPathComponent().path as NSString).abbreviatingWithTildeInPath)
         .toolbar {
             ToolbarItemGroup(placement: .navigation) {
                 branchPicker
-                    .padding(.leading, 6)
-                Button {
-                    newBranchName = ""
-                    appState.showingNewBranch = true
-                } label: {
-                    Image(systemName: "plus.rectangle.on.rectangle")
-                }
-                .help("New branch (⇧⌘B)")
             }
-            ToolbarItem(placement: .principal) {
-                Picker("View", selection: $appState.selectedTab) {
+            ToolbarItem(placement: .navigation) {
+                Picker("View", selection: $windowState.selectedTab) {
                     ForEach(DetailTab.allCases) { tab in
                         Text(tab.rawValue).tag(tab)
                     }
                 }
                 .pickerStyle(.segmented)
-                .frame(width: 280)
+                .frame(width: 260)
             }
+            .sharedBackgroundVisibility(.hidden)
+            ToolbarSpacer(.fixed, placement: .primaryAction)
             ToolbarItemGroup(placement: .primaryAction) {
                 if viewModel.isBusy || viewModel.mergeToolActivity != nil
                     || viewModel.isResolvingPullRequest {
@@ -186,6 +184,9 @@ struct RepoDetailView: View {
                       ? "Finish or abort the in-progress operation first"
                       : viewModel.pushCapability.help)
 
+            }
+            ToolbarSpacer(.fixed, placement: .primaryAction)
+            ToolbarItem(placement: .primaryAction) {
                 Button {
                     viewModel.openPullRequest()
                 } label: {
@@ -196,9 +197,24 @@ struct RepoDetailView: View {
                           || viewModel.remotes.isEmpty || viewModel.status.head == nil)
                 .help("Open the current branch's pull request on the forge website (GitHub, Forgejo/Gitea, GitLab), or the page to create one (⌥⌘P)")
             }
+            ToolbarSpacer(.fixed, placement: .primaryAction)
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    windowState.inspectorVisible.toggle()
+                } label: {
+                    Label(windowState.inspectorVisible ? "Hide Inspector" : "Show Inspector",
+                          systemImage: "sidebar.trailing")
+                }
+                .disabled(windowState.selectedTab != .history)
+                .help("Show or hide commit details (⌥⌘I)")
+            }
         }
-        .sheet(isPresented: $appState.showingNewBranch) {
+        .sheet(isPresented: $windowState.showingNewBranch) {
             newBranchSheet
+                .onAppear {
+                    newBranchName = ""
+                    branchNameFocused = true
+                }
         }
         .confirmationDialog("Abort this \(inProgressNoun)?",
                             isPresented: $confirmingAbort,
@@ -209,6 +225,18 @@ struct RepoDetailView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Aborting returns the repository to the state before the \(inProgressNoun) started. Any conflict resolutions you haven't committed will be lost.")
+        }
+
+        .confirmationDialog("Skip the current rebase commit?",
+                            isPresented: $confirmingRebaseSkip,
+                            titleVisibility: .visible,
+                            presenting: pendingRebaseSkip) { target in
+            Button("Skip Commit", role: .destructive) {
+                viewModel.skipRebaseCommit(target)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
+            Text("This drops the replayed commit and discards uncommitted changes, then continues the rebase.")
         }
 
         // `presenting:` rather than reading `pendingForcePush` inside the
@@ -318,6 +346,9 @@ struct RepoDetailView: View {
 
     private var branchPicker: some View {
         Menu {
+            Button("New Branch…") { windowState.showingNewBranch = true }
+                .disabled(viewModel.isBusy)
+            Divider()
             ForEach(localBranches) { branch in
                 Button {
                     viewModel.checkout(branch: branch)
@@ -336,8 +367,11 @@ struct RepoDetailView: View {
         } label: {
             Label(viewModel.status.head ?? "Detached HEAD",
                   systemImage: "arrow.triangle.branch")
-                .font(.headline)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(maxWidth: 180)
         }
+        .labelStyle(.titleAndIcon)
         .menuStyle(.borderlessButton)
         .fixedSize()
         .help("Current branch — click to switch")
@@ -365,15 +399,22 @@ struct RepoDetailView: View {
             }
             Spacer()
             if !state.conflictedFiles.isEmpty,
-               appState.selectedTab != .changes {
+               windowState.selectedTab != .changes {
                 Button("Resolve Conflicts") {
-                    appState.selectedTab = .changes
+                    windowState.selectedTab = .changes
                 }
             }
             Button("Abort \(noun)") {
                 confirmingAbort = true
             }
             .disabled(viewModel.isBusy)
+            if let target = state.rebaseSkipTarget {
+                Button("Skip Commit…") {
+                    pendingRebaseSkip = target
+                    confirmingRebaseSkip = true
+                }
+                .disabled(viewModel.isBusy)
+            }
             if state.conflictedFiles.isEmpty {
                 Button(state.operation == .merge ? "Commit Merge" : "Continue \(noun)") {
                     viewModel.continueOperation()
@@ -459,6 +500,7 @@ struct RepoDetailView: View {
             TextField("Branch name", text: $newBranchName)
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 320)
+                .focused($branchNameFocused)
             Text("Based on \(viewModel.status.head ?? "the current commit")")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -466,13 +508,13 @@ struct RepoDetailView: View {
             HStack {
                 Spacer()
                 Button("Cancel") {
-                    appState.showingNewBranch = false
+                    windowState.showingNewBranch = false
                 }
                 .keyboardShortcut(.cancelAction)
                 Button("Create Branch") {
                     viewModel.createBranch(named: newBranchName.trimmingCharacters(in: .whitespaces),
                                            checkout: checkoutNewBranch)
-                    appState.showingNewBranch = false
+                    windowState.showingNewBranch = false
                 }
                 .keyboardShortcut(.defaultAction)
                 .disabled(newBranchName.trimmingCharacters(in: .whitespaces).isEmpty)

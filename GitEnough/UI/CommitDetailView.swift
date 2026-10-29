@@ -5,50 +5,77 @@ import SwiftUI
 struct CommitDetailView: View {
 
     @ObservedObject var viewModel: RepoViewModel
+    @ObservedObject var selectionModel: HistorySelectionModel
     let selectedHash: String?
     /// Selects another commit in the history list (parent-chip navigation).
     var onSelectCommit: ((String) -> Void)? = nil
 
+    @State private var fileFocusRequest = UUID()
     @State private var selectedFile: CommitFile?
     @State private var bodyExpanded = false
 
     private static let collapsedBodyLineLimit = 6
 
     var body: some View {
-        if let hash = selectedHash, let detail = viewModel.selectedCommitDetail,
-           detail.hash == hash {
-            detailView(detail)
-        } else if selectedHash != nil, viewModel.selectedCommitDetailFailed {
-            // A failed `git show` used to leave this pane spinning forever —
-            // the load will never arrive, so say so, with git's actual error
-            // when there is one.
-            EmptyPane(systemImage: "exclamationmark.triangle",
-                      title: "Couldn't load this commit",
-                      subtitle: viewModel.selectedCommitDetailErrorMessage
-                          ?? "Couldn't read this commit's details. Refresh (⌘R) and select it again.")
-        } else if selectedHash != nil {
-            ProgressView()
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else {
-            EmptyPane(systemImage: "clock.arrow.circlepath",
-                      title: "No commit selected",
-                      subtitle: "Select a commit in the history to see its details.")
+        Group {
+            if let hash = selectedHash, let detail = selectionModel.detail,
+               detail.hash == hash {
+                detailView(detail)
+            } else if let error = selectionModel.errorMessage {
+                VStack(spacing: 12) {
+                    EmptyPane(systemImage: "exclamationmark.triangle",
+                              title: "Couldn't Load Commit", subtitle: error)
+                    Button("Try Again") {
+                        selectionModel.selectCommit(selectedHash, in: viewModel)
+                    }
+                }
+                .padding()
+            } else if selectedHash != nil {
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                EmptyPane(systemImage: "clock.arrow.circlepath",
+                          title: "No Commit Selected",
+                          subtitle: "Select a commit in the history to see its details.")
+            }
+        }
+        .onAppear {
+            if selectedFile == nil { selectedFile = selectionModel.detail?.files.first }
+        }
+        .onChange(of: selectedHash) { _, _ in
+            selectedFile = nil
+            bodyExpanded = false
+        }
+        .onChange(of: selectionModel.detail?.hash) { _, _ in
+            selectedFile = selectionModel.detail?.files.first
+        }
+        .onChange(of: selectedFile) { _, file in
+            selectionModel.selectFile(file?.path, hash: selectedHash, in: viewModel)
         }
     }
 
     private func detailView(_ detail: CommitDetail) -> some View {
         VSplitView {
             VStack(alignment: .leading, spacing: 0) {
-                header(detail)
-                    .padding(12)
+                ScrollView {
+                    header(detail)
+                        .padding(14)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 280)
                 Divider()
-                List(selection: $selectedFile) {
+                List(selection: Binding(get: { selectedFile }, set: {
+                    selectedFile = $0
+                    fileFocusRequest = UUID()
+                })) {
                     ForEach(detail.files) { file in
                         HStack(spacing: 6) {
                             FileStatusBadge(status: file.status)
                             FilePathText(path: file.path, originalPath: file.originalPath)
                                 .font(.callout)
                         }
+                        .contentShape(Rectangle())
+                        .nativeListRowFocus(isSelected: selectedFile == file, focusRequest: fileFocusRequest)
                         .contextMenu {
                             Button {
                                 NSPasteboard.general.copyString(file.path)
@@ -69,21 +96,19 @@ struct CommitDetailView: View {
                     }
                 }
                 .listStyle(.inset)
-                .frame(minHeight: 120)
+                .accessibilityLabel("Files changed in commit")
+                .frame(minHeight: 100)
             }
-            if viewModel.isLoadingCommitFileDiff {
+            if selectionModel.isLoadingFileDiff {
                 ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let error = selectionModel.fileDiffError {
+                EmptyPane(systemImage: "exclamationmark.triangle",
+                          title: "Couldn't Load Diff", subtitle: error)
             } else {
-                DiffView(diff: viewModel.selectedCommitFileDiff)
+                DiffView(diff: selectionModel.fileDiff)
+                    .frame(minHeight: 120)
             }
-        }
-        .onChange(of: selectedHash) { _, _ in
-            selectedFile = nil
-            bodyExpanded = false
-        }
-        .onChange(of: selectedFile) { _, file in
-            viewModel.selectCommitFile(hash: detail.hash, path: file?.path)
         }
     }
 

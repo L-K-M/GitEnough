@@ -21,6 +21,12 @@ Desktop never gave you: a proper **IntelliJ-style branch/merge graph** and
   into the sidebar to add it; clone straight from a URL. Star the repos you
   care about — they pin to the top of the list in every sort order. Filter the
   list as you type, and sort it manually, by name, or by recently opened.
+- **Repository groups.** Choose View → Group Repositories by, or use the
+  sidebar's Repository Options menu, to group by forge, account, first letter,
+  or your own named groups. One group opens at a time in each window; headers
+  stay visible while its repository list scrolls. Create
+  and manage manual groups from the sidebar menus; Move to Group assigns a
+  repository without moving its files.
 - **Watch folder.** Point Settings → General at a folder (say `~/code`) and
   GitEnough scans it about once a minute, automatically adding every repository
   it finds — directly inside, or one folder deep. Removing a repo from the
@@ -38,6 +44,11 @@ Desktop never gave you: a proper **IntelliJ-style branch/merge graph** and
   message for you. The model picker loads the provider's model list itself
   (with a manual text field as fallback), and the API key lives in the
   **Keychain**, never in plain text.
+  Generated text participates in the native editor's named Undo/Redo history.
+- **Cancellable clones.** Cancel or Escape stops the clone and its transport.
+  New destinations use private staging so cancellation allows a clean retry;
+  existing empty destination folders retain their identity and any contents
+  added while cloning.
 - **Merge conflicts.** A merge banner, per-file resolution (ours/theirs), and
   one click into your **external merge tool** — FileMerge, Kaleidoscope, Beyond
   Compare, Araxis, P4Merge, Meld, DeltaWalker, Sublime Merge and KDiff3 are
@@ -60,7 +71,7 @@ config, hooks and credential helpers, and adds zero third-party dependencies.
 
 ## Requirements
 
-- macOS 14 (Sonoma) or newer for the app itself. A Linux port is under way —
+- macOS 26 (Tahoe) or newer for the app itself. A Linux port is under way —
   see [Linux](#linux) below.
 - The **Xcode Command Line Tools** (`xcode-select --install`) — that's where
   `git` comes from. GitEnough offers to install them on first launch if missing.
@@ -77,13 +88,54 @@ or run `xattr -dr com.apple.quarantine /Applications/GitEnough.app`.
 
 ## Build from source
 
-Requires Xcode 16+ (the project uses file-system–synchronized groups).
+Requires **Xcode 26 or newer** (including its macOS SDK and command-line tools).
+There are no package dependencies. Select the installed Xcode in Xcode → Settings → Locations
+before building. From a fresh checkout:
+
+1. `git clone https://github.com/L-K-M/GitEnough.git`
+2. `cd GitEnough`
+3. `xcodebuild -project GitEnough.xcodeproj -scheme GitEnough -configuration Debug -derivedDataPath build/DerivedData CODE_SIGN_IDENTITY=- clean build`
+4. `open build/DerivedData/Build/Products/Debug/GitEnough.app`
+
+To verify the app and core tests:
 
 ```bash
-scripts/build.sh          # Release build, reveals GitEnough.app in Finder
-scripts/build.sh --debug --run
-xcodebuild -project GitEnough.xcodeproj -scheme GitEnough test   # run the tests
+xcodebuild -project GitEnough.xcodeproj -scheme GitEnough -destination 'platform=macOS' -derivedDataPath build/TestDerivedData PRODUCT_BUNDLE_IDENTIFIER=ch.lkmc.GitEnough.TestHost CODE_SIGN_IDENTITY=- test
+swift test
 ```
+
+The hosted test command uses a separate app identity and build folder, so the
+test app does not load the normal app's preferences, Keychain service or activity
+history. The normal app keeps its existing data locations.
+
+The optional `scripts/build.sh` wrapper still supports Release packaging and installation;
+it requires [release-tool](https://github.com/L-K-M/release-tool)'s `lkm-build` on `PATH`.
+The direct commands above do not require that helper.
+
+## Mac workspaces
+
+- Open a repository with **⌘O**, clone with **⇧⌘O**, or drop a folder into the sidebar.
+  File → Open Recent remembers working copies opened manually. Git repositories
+  remain ordinary folders, with no GitEnough document format or import step.
+- **⌘N** creates an independent window. Repository selection, current view,
+  search, selected commit/file, and inspector state belong to that window;
+  Git operations and the commit draft remain shared by working copy.
+- **⌘1 / ⌘2 / ⌘3** switch History, Changes, and Branches. **⌘F** searches history,
+  **⇧⌘F** finds a repository, and **⌥⌘I** toggles the resizable commit inspector.
+- Arrow keys select commits, changed files, branches, and stashes. The Changes,
+  Commit, and Branch menus expose the selected item's operations. **⌥⌘S** stages
+  the selected file, **⌥⌘U** unstages it, and **⌘↩** commits.
+- Commit messages autosave as you type and survive closing a window, quitting,
+  and a failed commit. Text editing uses the standard Edit menu and undo chain.
+  Git operations apply immediately; destructive commands ask for confirmation.
+- Closing the last window leaves GitEnough running. Click its Dock icon or use
+  File → New Window to return. macOS restores each workspace's repository,
+  view, and inspector visibility when it restores that window.
+- The standard Tahoe toolbar, sidebar, sheets, popovers, and inspector use
+  system appearances and accessibility behavior. Diffs retain an opaque reading
+  surface. No older macOS appearance or availability fallback is included.
+
+See [Mac verification](docs/mac-verification.md) for the workflow checks and limits.
 
 ## Linux
 

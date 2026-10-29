@@ -32,7 +32,17 @@ against 185 raised findings — because the reviewing session hit its limit
 mid-run. So the unquoted wave-5 entries are not *wrong*, they are *unconfirmed*,
 and the first task in picking one up is confirming it.
 
-Effort: **S** ≤ ~30 min · **M** half a day · **L** multi-day.
+Wave 6 (2026-10-28, Claude / Opus 5) is an independent review written before
+reading this document and reconciled against it afterwards. Its section sits
+directly below the status snapshot, in its own schema — `### Title` /
+`focus area — severity` / description / suggested fix — rather than converting
+3,000 lines of earlier waves into that shape, which would have lost the evidence
+those entries carry and conflicted with every concurrent edit. Everything it
+raised that is already implemented, or that it opened a PR for, has been deleted
+from here; what it *disproved* is in **"Verified non-issues"**.
+
+Effort: **S** ≤ ~30 min · **M** half a day · **L** multi-day. Wave 6 entries
+give a wall-clock estimate instead.
 
 ---
 
@@ -90,6 +100,140 @@ Verified non-issues, kept for the record (don't re-audit):
 - **#38's formatter change is correct.** `ISO8601DateFormatter`'s default
   `formatOptions` is exactly `[.withInternetDateTime]`, so dropping the
   per-call assignment (the actual data race) still parses `%aI`.
+
+---
+
+## Wave 6 (Claude / Opus 5, 2026-10-28)
+
+An independent from-scratch review of `c0e079f`, written before reading this
+backlog and reconciled against it afterwards. Entries use the schema
+`### Title` / `focus area — severity` / description / suggested fix, ordered by
+severity. No blocking findings: nothing in this wave corrupts a repository,
+destroys uncommitted work, or crashes the app.
+
+**Twelve PRs are open from this wave and their entries have been removed from
+this document** (`#109`–`#116`, `#119`–`#122`): the per-side status letter
+(`o-L2`), Mark Resolved accepting a deletion (`o-L7`), the GTK history signature
+(`o-L1`), the activity history's file mode (`C5b`), the HEAD-row rescan
+(`o-P2`), the GTK commit-box enablement and amend read-back (`o-X15`, `o-X16`),
+the history page's queue ownership (`o-L11`), the GTK diff pane rendering
+through `DiffParser`, the rename destination unquoted twice (`o-L10`), the
+duplicate-parent phantom lane (`o-H5`), the GTK front end reporting a failed
+✨ Generate, and the Settings surface itself (`o-PS9`), which `#122` builds
+along with the keyring timeout that case exposed. `o-X5` was removed as already
+shipped in `main`; `o-X13` was removed because it does not reproduce (see
+Verified non-issues).
+
+**How the evidence was gathered.** The container had no Swift toolchain and no
+gtk4, so both were installed to match the CI pins — Swift 6.2.1 on Ubuntu 24.04
+and gtk4 4.14.5 — after which `GITENOUGH_NO_GTK=1 swift test` (421 tests at the
+time, ~81 s), `swift build --product gitenough-gtk`, real git 2.43 experiments
+and small C probes against `GtkTextBuffer` all ran locally. `Xvfb` is installed
+too, so the GTK front end can be built *and run*: `xvfb-run` satisfies
+`gtk_init_check`, and a temporary `main.swift` that assembles a real pane over a
+real view model and then walks the live widget tree is how the GTK findings here
+were confirmed and their fixes shown to work. `GitEnough/UI/` is macOS-only and
+could not be compiled here; findings in it are read from source, and say so.
+
+### The HEAD ring is wider than the lane it sits in
+
+visual issues and layout problems — nice-to-have
+
+`UI/GraphStripView.swift:107` strokes the HEAD double ring at `radius + 3.5`
+with `lineWidth 2`, so its outer edge sits about 9 pt from the lane centre while
+a lane is 16 pt wide: in lane 0 it overflows the strip by roughly a point on each
+side. macOS gets away with it because the strip is unclipped — except on the last
+row, where `clipsTail` turns on `.clipped()` and flattens the ring horizontally
+as well as vertically. (`o-X10` records the GTK half, where every row clips.)
+
+Size the strip to `graphWidth` plus the ring overhang, or clip vertically only.
+About an hour, and it fixes both front ends at once.
+
+### Removing a repository leaves its auto-fetch timestamp behind
+
+general issues — nice-to-have
+
+`AppState.lastAutoFetchByRepo` (`Model/AppState.swift:76`) is written on every
+automatic fetch and pruned nowhere, so `AppState.remove(_:)` leaves an entry
+keyed by a path that is no longer registered. Remove a repository and add it
+back in the same session and it inherits the old timestamp, so its first
+auto-fetch is skipped until the interval elapses from a fetch that happened
+before the removal. Bounded by the number of repositories ever opened, so it is
+a wrong answer rather than a leak.
+
+Prune it in `remove(_:)`, beside the `removePersistedDraft` call that already
+does the equivalent for the commit draft. Twenty minutes.
+
+**Correction.** An earlier version of this entry claimed a second map leaks the
+same way — `summaries[repo.path]` deleted by exact spelling while repositories
+are removed by *normalized* spelling — and put that line in `AppState.remove`,
+where it is not. It is `RepoStore.swift:227`, and the orphan is unreachable:
+`addDiscovered` is the only code that appends to `repositories`, and it already
+refuses a folder whose normalized path is present, so two spellings never
+coexist for the mismatch to strand one. `starredPaths.remove(repo.path)` on the
+next line is exact-spelling for the same reason and equally safe.
+
+### Commit is disabled without saying why
+
+usability — nice-to-have
+
+`UI/ChangesView.swift:314`'s Commit button is gated by a four-term predicate —
+an empty message, nothing staged without an amend, a rebase in progress, or busy
+— and carries no `.help()` at all, so a user with a message typed and nothing
+staged sees a dead button and no reason. The Stage All button two sections up
+does this correctly: `stageAllBlockedHelp` names the conflicting files in its
+tooltip. The amend toggle is a softer version of the same thing — it is disabled
+on an unborn repo, but its tooltip describes the action rather than the refusal.
+
+Give the button a tooltip derived from whichever term is false, the way
+`stageAllBlockedHelp` does. Half an hour.
+
+Write this one *after* PR #116 lands: that PR replaces the inline predicate with
+a `canCommit` property on the view model, so the tooltip should read its terms
+rather than re-derive them — and written now it conflicts with #116 in the same
+expression.
+
+### An all-whitespace commit message is a silent no-op
+
+usability — nice-to-have
+
+`RepoViewModel.commit()` (`Model/RepoViewModel.swift:985`) trims the draft and
+returns on empty without setting `errorMessage`. The GTK front end reaches it
+today: its Commit button is gated on the staged list alone, so staging a file
+and clicking Commit with an empty box does nothing whatsoever, and says nothing.
+On macOS the only caller is a button that is disabled in exactly this state,
+`.keyboardShortcut(.return, modifiers: .command)` included, so it should never
+bite there — read from source, since `UI/` does not compile on Linux.
+
+PR #116 closes the reachable path by gating both front ends on one `canCommit`
+that includes the message term — but the silent `return` stays behind it, so the
+next caller finds the same dead end. Set the error instead of returning. Fifteen
+minutes.
+
+### Measuring the staged patch walks all of it to answer a bounded question
+
+performance problems, stuttering, and jank — nice-to-have
+
+`AI/CommitMessageGenerator.swift:59` asks `diff.count > maxDiffCharacters`.
+`String.count` counts grapheme clusters, so it walks the entire staged patch
+however large it is — to settle a question that is decided by the first
+`maxDiffCharacters + 1` of them. The walk runs on the repository's serial queue,
+so a huge staged refactor stalls every other repo operation behind ✨ Generate
+before the request is even built. Distinct from `o-A1`, which is about the
+request body being unbounded; this is the cost of computing the bound.
+
+Compare `diff.utf8.count` instead — a native Swift string stores its UTF-8
+length, so the test is O(1) — and truncate on that byte budget at a scalar
+boundary, which is the cap the request actually wants. Half an hour. Shares a
+fixture with `o-A1`.
+
+**Correction.** An earlier version of this entry said the patch is walked
+*twice*, counting `String(diff.prefix(maxDiffCharacters))` as a second full
+walk. It is not: `prefix(_:)` stops once it has the requested number of
+elements, so that half is bounded by the cap and costs nothing extra. The
+unbounded work sitting next to it is `diffStat`, interpolated into the prompt in
+full by design (`o-A1`) — so the two are worth one pass, but only the `count` is
+waste.
 
 ---
 
@@ -243,25 +387,6 @@ a provider/base change. Migrate without logging secrets. Tests cover every
 loopback spelling, lookalike hosts, ports, paths/spaces, userinfo/query/fragment,
 normalization collisions, and provider changes behind an injectable Keychain.
 
-### C5b · Create the activity history `0600` — S  ·  *rescoped: half shipped*
-
-**Redaction already shipped.** `GitActivityLog.redactCredentials` exists and is
-applied to argv (`GitActivityLog.swift:172`, `:200`) and to stderr tails
-(`:127`). The original entry asked for redaction *and* file permissions; only
-the second half remains, and it is three lines rather than the S/M implied.
-
-The JSONL is written with `Data.write(to:options:.atomic)` and no
-`.posixPermissions`, so it lands at `0644 & ~umask`. Because `.atomic` renames a
-fresh temp file over the old one, a user who chmods it to `600` has that undone
-by the next compaction. On macOS the containing directory is usually `0700`, so
-the exposure is limited; on Linux `~/.local/share` is `0755`, so the file is
-genuinely world-readable.
-
-Fix: pass `.posixPermissions: 0o600` on create, and re-apply the mode after
-every atomic compaction (the rename is what loses it). Test: assert mode `0600`
-after creation, after append, and after compaction — the third is the one that
-regresses.
-
 ### C5c · Detect Git and signing stalls honestly — M
 
 `/usr/bin/git` may be the Command Line Tools shim that opens an installer, so
@@ -357,50 +482,6 @@ in a row both reachable until dismissed.
 Its fuller reasoning and git experiments lived only on that branch, so once it is
 deleted the `file:line` citations below are the surviving record.*
 
-### o-L1 · The GTK history graph goes stale on checkout, push and branch creation — S
-
-`HistoryPane.historySignature()` (`Linux/GitEnoughGTK/HistoryPane.swift:73`) is
-`[head, tail, count, columnCount, canLoadMoreHistory].joined(separator: "/")`,
-and `rebuild()` skips `rebuildCommitRows()` when it is unchanged. Three things a
-row *draws* are absent from it: `commit.decorations` (the ref chips, and
-`Commit.isHead`, derived from them at `GitModels.swift:33`),
-`viewModel.unpushedHashes` (whether the dot is hollow), and therefore the HEAD
-double ring.
-
-So `git checkout other-branch` leaves every loaded hash, the count and the lane
-count identical — the list is not rebuilt, and the HEAD ring and branch chips
-stay on the branch you *left*, while the header bar and status line update
-correctly right beside them. Push and branch creation have the same shape.
-
-**Fix:** fold the decoration set and `unpushedHashes` into the signature (hash
-them rather than concatenating). **Test:** signature changes across a checkout
-that moves no commits.
-
-### o-L2 · The unstaged list shows each partially-staged file's *staged* status letter — S
-
-`FileChange.displayStatus` (`GitModels.swift:168`) is
-`stagedStatus ?? unstagedStatus ?? .modified`, and both lists render through it,
-so a file in both shows its **X** column in both. Porcelain v2 emits the two
-columns separately for exactly this reason:
-
-- `AM` — stage a new file, keep editing: the Changes row says *Added* though the
-  unstaged change is a modification.
-- `MD` — stage an edit, then delete: the row says *Modified* while the file is
-  gone from disk.
-- `AD` — the row says *Added* for a file that no longer exists.
-
-The badge is the row's only status signal (`UI/CommonViews.swift:100`) and is
-coloured by the same wrong value, so a **deletion renders green**.
-
-**Fix:** the row already knows its side — `FileRow` is built with
-`actionIcon: "minus.circle"` for staged and `"plus.circle"` for unstaged
-(`ChangesView.swift:137`, `:168`). Add
-`func displayStatus(staged: Bool) -> Status` returning
-`staged ? (stagedStatus ?? .modified) : (unstagedStatus ?? .modified)` and have
-both front ends call it. GTK already threads `staged: Bool` into `row(_:staged:)`
-(`ChangesPane.swift:134`), so only its call site changes. **Test:**
-`GitParsersTests` already parses `AM`/`MD`/`AD`; assert both sides of each.
-
 ### o-L3 · A failed git read publishes a healthy-looking summary over the sidebar's warning — M · *merge with C1*
 
 `collectSnapshot` launders every read failure into empty data, so a repository
@@ -446,51 +527,12 @@ in place instead of flashing a spinner every poll, while still bumping
 per applied snapshot, only while a file is selected. **Test:** select a modified
 file, rewrite it on disk, refresh, assert `selectedFileDiff` changed.
 
-### o-L7 · "Mark Resolved" cannot accept a deletion, so modify/delete conflicts dead-end — S
-
-For the everyday modify/delete conflict, all three in-app resolutions fail:
-
-- **Theirs** runs `git checkout --theirs` (`GitClient.swift:715`) → *"path 'f'
-  does not have their version"*. There is no their-version to take.
-- **Ours** has the mirror problem in the reverse case.
-- **Mark Resolved** reads the file before staging, so once the user deletes it by
-  hand — the *correct* resolution — it fails with *"The file 'f' couldn't be
-  opened because there is no such file."*
-
-The user is stuck in a conflicted merge with no way out but **Abort**, which
-throws away every other resolution they have made.
-
-**Fix:** `markResolved` should stage whatever the resolution *was* — if the path
-no longer exists on disk, `git rm --cached -- :(literal)<path>`, else `git add`.
-The conflict row should also offer **Delete the file** for unmerged entries whose
-stage-2 or stage-3 blob is absent; porcelain v2's `u` records already carry the
-three stage hashes (a zero OID means "absent on that side") and `GitParsers`
-currently discards them (`GitParsers.swift:165-172`).
-
-**Related, already shipped:** PR #100 stops `Stage All` from silently resolving
-this shape. That guard makes the dead-end *more* visible, not less — o-L7 is the
-way out of it.
-
 ### o-L9 · `localNameForRemote` splits at the first slash, so slash-named remotes produce wrong local branches — S
 
 `Branch.localNameForRemote` (`GitModels.swift:64`) takes everything after the
 first `/`. For a remote literally named `up/stream`, tracking `up/stream/feature`
 offers to create a local branch called `stream/feature`. `Remote.split` already
 solves this correctly by longest configured prefix; route this through it.
-
-### o-L10 · Rename destinations are C-unquoted twice — S
-
-A rename whose destination path needs C-quoting is unquoted once by the
-name-status parser and again downstream, so a path containing a literal
-backslash-escape sequence is corrupted. **Test:** a rename to a path containing
-`\t` as two literal characters.
-
-### o-L11 · A history-less snapshot can clobber `canLoadMoreHistory`, silently killing "Load older commits…" — S
-
-An empty history result overwrites the flag rather than leaving it alone, so one
-transient failure permanently disables pagination for that repository until
-relaunch. **Fix:** only update the flag from a snapshot that actually carried
-history.
 
 ### o-L13 · `discard` on a corrupt HEAD ref silently unstages instead of reporting the breakage — S
 
@@ -1098,14 +1140,6 @@ fold in a content signal *only* while the Changes tab is frontmost and the tree 
 already dirty (`git status --porcelain=v2 -z`, hashed) — one extra process per
 2.5 s for the visible repo only. The full FSEvents/inotify design stays the right
 destination; this makes the app honest in the meantime.
-
-### o-P2 · Every history row rescans the whole commit array to find HEAD — S
-
-`HistoryView.headRow` is a computed property — `commits.firstIndex { $0.isHead }`
-— and every materialized row evaluates it as `isHeadRow: row == headRow`. 300
-comparisons per row at the default page size, unbounded after "Load older
-commits…" (the page grows by 300 with no cap). **Fix:** compute it once per
-render pass.
 
 ### o-P3 · `onChange(of:)` rebuilds the whole hash array on every body pass — S
 
@@ -1781,14 +1815,6 @@ than a decoration that shuffles. **Test:** lay out a window, prepend a new branc
 tip, assert every pre-existing lane's `colorIndex` is unchanged. **That test
 fails today.** Unlocks **o-D3**.
 
-### o-H5 · A merge with a duplicate parent leaks an immortal phantom lane — S
-
-The algorithm rests on "at most one lane expects any given hash". `git commit-tree
--p X -p X` breaks it, and the duplicate lane is never closed — it runs to the
-bottom of every subsequent render. Rare but reachable, and cheap to guard:
-de-duplicate a commit's parent list at layout entry. **Test:** `GraphLayoutTests`
-with a duplicate-parent merge; assert `columnCount` returns to 1 below it.
-
 ### o-H6 · Typing in the filter yanks the commit list sideways — S
 
 Filtering changes `columnCount`, which changes the graph strip's width, which
@@ -1852,8 +1878,7 @@ none is keyboard-reachable or discoverable, and none can carry a shortcut.
 
 There is no way to see the conflict itself without an external merge tool — no
 diff, no three-way view, not even the file's text. **Fix:** show the conflicted
-file's worktree content in the diff pane, marker-aware. Pairs with **o-L7** and
-**o-X4**.
+file's worktree content in the diff pane, marker-aware. Pairs with **o-X4**.
 
 ---
 
@@ -2551,18 +2576,15 @@ selected repo's view model.
 renders only `status.unstaged` and `status.staged` (`ChangesPane.swift:104-117`).
 So mid-conflict the pane shows nothing at all, with no explanation. The macOS
 front end has a whole conflict section (Ours / Theirs / Mark Resolved / Merge
-Tool); GTK has none of it. **Fix:** port the conflict section. Note **o-L7**
-before doing so — the modify/delete dead-end is in the shared model layer, so
-porting the buttons as-is ports the dead-end too.
-
-### o-X5 · The Linux ✨ Generate button is a permanently silent no-op — M
-
-The button exists and does nothing. Either wire it to `CommitMessageGenerator` or
-remove it; a control that never responds is worse than an absent one.
+Tool); GTK has none of it. **Fix:** port the conflict section. The
+modify/delete dead-end that used to make porting the buttons as-is a bad idea is
+fixed in the shared model layer, so the port now carries a working Mark
+Resolved.
 
 ### o-X6 · Every history refresh rebuilds every row's widget tree — M
 
-Not the signature problem of **o-L1** — this is the opposite case: when the
+Not the signature problem fixed in the GTK history pane — this is the
+opposite case: when the
 signature *does* change, every row is destroyed and rebuilt rather than updated.
 **Fix:** a `GtkListBox` row recycle, or update in place.
 
@@ -2585,22 +2607,10 @@ hardcodes, so a dark theme shows a light strip behind the lanes.
 a pkg-config error that names no version. **Fix:** state it, and check it in the
 CGtk module's pkg-config requirement.
 
-### o-X13 · The diff view colours nothing for any CRLF file — S
-
-`DiffView.show` splits on the `"\n"` **Character**. In a CRLF diff, `"\r\n"` is a
-single grapheme cluster, so the split never matches and the whole diff arrives as
-one line — rendered monochrome, with no `+`/`−` colouring at all, for every
-Windows-authored file. **Fix:** split on the unicode scalar, or on
-`.newlines`. **Test:** a CRLF fixture through the GTK renderer.
-
 ### o-X14 · Removing a repository leaves its view model and watcher running forever — S
 
 The view-model cache is never pruned on removal, so the watcher keeps polling a
 repo the user removed — including one on a now-unmounted volume.
-
-### o-X15 · The GTK commit button ignores the message, the amend flag, and `isBusy` — S
-
-### o-X16 · The amend checkbox never reads back from the model — S
 
 ### o-X17 · GTK can amend an already-pushed commit with no confirmation — S
 
@@ -2614,14 +2624,24 @@ No error, no message, no row. The macOS front end reports it.
 ### o-X19 · Per-repository global CSS and settings handlers, never removed — S
 
 Leaks one `GtkCssProvider` and one handler per repository selected, for the life
-of the process.
+of the process. Two call sites on `main`, both in `HistoryPane.init`
+(`HistoryPane.swift:36` and `:57`): it installs the `.commit-list` stylesheet on
+the **display** and a `Theme.onChange` handler, so a session that opens ten
+repositories carries ten of each. PR #110 adds a third — one `Theme.onChange`
+per `DiffView.init`, for the theme-aware diff colours — which wants releasing by
+the same mechanism rather than one of its own. Bounded rather than
+unbounded — panes are cached per repository, not rebuilt per publish — but every
+theme change then iterates the whole list. **Fix:** give `Theme.onChange` and
+`UI.applyStyle` a cancellable handle and have the owners release it in `deinit`;
+the stylesheet itself should be installed once, statically, since it is not
+per-repository at all.
 
 ### o-X20 · The graph dot paints an opaque disc over the selection highlight — S
 
 ### o-X21 · README's "not yet ported" list understates the gap — S
 
-The list omits conflict resolution (**o-X4**), AI generation (**o-X5**),
-discovery and auto-fetch (**o-X1**), and sidebar summaries (**o-X2**). Someone
+The list omits conflict resolution (**o-X4**), discovery and auto-fetch
+(**o-X1**), and sidebar summaries (**o-X2**). Someone
 choosing the Linux build reads that list to decide. **Fix it with each port**,
 not as a batch.
 
@@ -2804,12 +2824,6 @@ Subscribers are stored in a dictionary and notified in its iteration order, whic
 is unspecified and varies per process. macOS delivers in subscription order.
 **Fix:** an ordered store, so the two platforms behave alike.
 
-### o-PS9 · The Linux keyring has no writer — M
-
-`SecretService` can read but the Settings UI has no path to *store* a key on
-Linux, so the AI feature cannot be configured there at all. Pairs with **o-X5**
-(the dead Generate button): both must land for the feature to exist on Linux.
-
 ### o-PS10 · `KeychainStore` imports `Security` from `AI/` — S
 
 Direct violation of the stated rule that nothing outside `Platform/` imports
@@ -2826,13 +2840,13 @@ The Linux job runs `swift build --build-tests`, `swift test`, and
 nothing runs it, and **there is not one test in `GitEnoughTests/` that references
 anything under `Linux/`**.
 
-That is exactly why **o-X1**, **o-X2**, **o-X5**, **o-X6**, **o-X7**, **o-X8** and
-**o-L1** could all ship: every one is a wiring defect in code that compiles
+That is exactly why **o-X1**, **o-X2**, **o-X6**, **o-X7** and **o-X8** could
+all ship: every one is a wiring defect in code that compiles
 perfectly.
 
 **Fix:** most of those defects live in logic that needs no display. Pull it out and
 test it — `historySignature(commits:layout:unpushed:canLoadMore:)` as a free
-function (**o-L1**), the selection-restoration rule (**o-X8**), the "should the
+function, the selection-restoration rule (**o-X8**), the "should the
 diff be rebuilt" predicate (**o-X7**). Each becomes a plain unit test in the shared
 suite. For the rest, `xvfb-run` in CI plus a smoke test that constructs the window
 and pumps the loop a few turns would have caught **o-X1** and **o-X2** immediately.
@@ -3042,12 +3056,56 @@ time and produces nothing.*
   the row-level Stage action cannot reach a conflicted path and why the guard in
   #100 belongs on `stageAll` rather than on `stage(paths:)`.
 
+**From wave 6 (Claude / Opus 5), all measured locally:**
+
+- **`GitClient.checkout(branch:)` passing the short name is safe.** `merge` uses
+  `refName` because a tag can shadow a branch, and `checkout` does not, which
+  looks like an inconsistency. It is not: on git 2.43, with both
+  `refs/heads/foo` and `refs/tags/foo` present, `git checkout foo` prints
+  `warning: refname 'foo' is ambiguous` and switches to the **branch**. A branch
+  sharing a name with a tracked file (`git checkout a.txt` with `a.txt` on disk)
+  also switches to the branch, exit 0.
+- **`GitClient.isIgnored` not using `:(literal)` is safe.** `git check-ignore`
+  takes pathnames, not pathspecs: `git check-ignore -q -- 'star*.txt'` exits 1
+  when no rule matches that literal name, so no globbing occurs and the missing
+  magic prefix changes nothing.
+- **`o-X13` does not reproduce** ("the GTK diff view colours nothing for any
+  CRLF file"). A `GtkTextBuffer` counts `\r\n` as a *single* separator, so the
+  line indices aligned and the colours applied. Measured on gtk 4.14: a
+  three-line diff with CRLF endings is 3 buffer lines, 4 only because of the
+  final bare `\r`. What was genuinely dangerous there is a different character —
+  an **interior** bare `\r` (classic Mac endings) or U+2029 splits a line in the
+  buffer that the parser counted as one, and U+2028 does not. Fixed by placing
+  tags at character offsets rather than line indices.
+- **`DiffParser.emphasizeIntralineChanges` cannot loop forever.** The `continue`
+  in the no-additions branch is reached only after `index` has advanced past at
+  least one deletion.
+- **`MergeTool.installed` is not a per-render filesystem scan.** It is a cached
+  `static var` warmed in `GitEnoughApp.init`; the `toolsGeneration` state in the
+  conflict rows and in Settings is an invalidation token, not a re-probe.
+- **`RepoStore.moveVisible`'s filtered-list refusal is unreachable from the UI.**
+  `SidebarView` attaches `.onMove` only when the sort is manual *and* both
+  filters are off, so a drag can never silently no-op.
+- **`GitActivityStore` compaction is bounded.** `loadFromDiskLocked` keeps
+  `suffix(capacity)` and `trim` compacts every 50 evictions, so the file settles
+  at roughly `capacity + 50` lines rather than growing without bound.
+- **`ModelObserver` does not render one change behind.** `objectWillChange` fires
+  *before* the write on both platforms, and the observer defers its refresh to
+  the next main-loop turn precisely for that reason.
+- **`RepoViewModel.commits` cannot contain a duplicate hash.** It is assigned
+  whole from a single `client.log(limit:)`; "Load older commits…" grows the limit
+  and re-runs one `git log` rather than appending a page, and one `git log`
+  cannot emit a commit twice.
+
 ---
 
 ## Suggested next pickups (highest value first)
 
-*The list below is wave 5's ranking, merged with the standing one. Wave 5's top
-five have shipped (PRs #96–#101); what remains starts at the sixth.*
+*The list below is wave 5's ranking, merged with the standing one. Shipped items
+are struck from it rather than marked, so **the first entry is always the next
+pickup** — don't go looking for an ordinal. The numbering has gaps where shipped
+items were removed and the rest were left in place; a gap means something
+landed, not that an entry is missing.*
 
 ### Broken things, in order of what they cost the user
 
@@ -3064,17 +3122,14 @@ five have shipped (PRs #96–#101); what remains starts at the sixth.*
    makes the sidebar show filesystem paths; no activation hook makes every watcher
    blind spot permanent. Three small fixes, one coherent change, and they are the
    difference between "the Linux port works" and "it compiles".
-5. **o-L1 · Make the GTK history signature describe what is drawn.** Checkout,
-   push and branch creation all leave the graph showing the previous state.
-6. **o-L5/o-L12 · Derive merge-tool names from `git mergetool --tool-help`.**
+5. **o-L5/o-L12 · Derive merge-tool names from `git mergetool --tool-help`.**
    Three of nine offered tools always fail, two with no error text.
-7. **o-L2 · Show the right status letter on the right side.** A deleted file
-   currently renders as a green "Added" row.
 8. **o-A1 + o-A2 + o-A3 (+ o-A7, o-A8) · Harden the LLM request.** Bound the
    stat, use a delimiter the payload cannot forge, set a real wall-clock
    deadline. All five are the same request path and share a fixture.
-9. **o-A6 + o-PS9 · Make local models usable**, on both platforms. The best
-   answer to the app's own privacy positioning.
+9. **o-A6 · Make local models usable**, on both platforms — `#122` gives Linux
+   the Settings surface this needed, so only the "no API key" half of `o-A6`
+   is left. The best answer to the app's own privacy positioning.
 
 ### The everyday loop
 
@@ -3083,9 +3138,9 @@ five have shipped (PRs #96–#101); what remains starts at the sixth.*
     edits at all. One bug from the user's side; fix as one change.
 11. **o-P5 · Stop running superseded loads.** Arrow-keying through history queues
     one `git show` per row and jams the repo queue behind them.
-12. **o-U5 + o-X4 + o-L7 · Let people see and resolve a conflict.** Conflicted
-    files cannot be inspected on macOS, are invisible on Linux, and modify/delete
-    dead-ends with Abort as the only exit.
+12. **o-U5 + o-X4 · Let people see and resolve a conflict.** Conflicted files
+    cannot be inspected on macOS and are invisible on Linux. (The modify/delete
+    dead-end that completed this trio is fixed — see the removed-entries note.)
 13. **o-P10 + o-P9 + o-P11 · Make discovery cheap and non-blocking.** A watch
     folder on an unresponsive mount currently freezes the app on every tick.
 
@@ -3120,12 +3175,11 @@ five have shipped (PRs #96–#101); what remains starts at the sixth.*
 
 ### The standing backlog, unchanged in priority
 
-23. **C5a/C5b** endpoint safety and the activity-history file mode (C5b is now
-    three lines — see its entry)
+23. **C5a** endpoint safety and credential scope
 24. **C6** honest selected-diff failure states
 25. **C5c** bounded Git detection plus cancellable signing stalls
-26. **P0**, then the contained perf fixes — **o-P6**, **o-P2**, **o-P8** — before
-    any coordinator rewrite
+26. **P0**, then the contained perf fixes — **o-P6**, **o-P8** — before any
+    coordinator rewrite
 27. **C2/C3** conflict semantics and merge-tool leases (highest mutation risk)
 28. **C5d/C5e** spoof-proof parser framing and per-command ref safety
 29. **P2** inactive-model lifecycle; **P1** proper event-driven watching *after*

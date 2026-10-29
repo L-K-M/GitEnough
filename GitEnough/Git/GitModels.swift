@@ -280,8 +280,23 @@ public struct FileChange: Identifiable, Hashable {
         return [path]
     }
 
-    /// The most relevant status for display.
-    public var displayStatus: Status { stagedStatus ?? unstagedStatus ?? .modified }
+    /// The status letter for the side being rendered.
+    ///
+    /// Porcelain v2 reports the index and the worktree as two separate columns,
+    /// and a partially staged path is present in *both* lists — so a row has to
+    /// show the column belonging to the list it is in. Collapsing them to
+    /// "staged first" made the unstaged row describe the staged change: `AM`
+    /// read *Added* while the unstaged change was a modification, and `MD` and
+    /// `AD` read *Modified*/*Added* for a file that is gone from disk. The badge
+    /// is the row's only status signal and it is coloured by this value, so a
+    /// deletion rendered green.
+    ///
+    /// `.modified` is the fallback for a column holding `.`, which only happens
+    /// when the caller asks for a side this change is not on — the lists never
+    /// do, since a path reaches a list precisely because its column is set.
+    public func displayStatus(staged: Bool) -> Status {
+        (staged ? stagedStatus : unstagedStatus) ?? .modified
+    }
 }
 
 /// Parsed `git status --porcelain=v2 --branch`.
@@ -319,6 +334,16 @@ public struct StashEntry: Identifiable, Hashable {
     public let index: Int          // stash@{n}
     public let branch: String      // branch the stash was taken on
     public let message: String
+    /// Stable identity; the reflog index changes when another stash is removed.
+    /// Nil only for legacy, two-field parser input.
+    public let objectID: String?
+
+    public init(index: Int, branch: String, message: String, objectID: String? = nil) {
+        self.index = index
+        self.branch = branch
+        self.message = message
+        self.objectID = objectID
+    }
 
     public var id: Int { index }
     public var ref: String { "stash@{\(index)}" }
@@ -370,7 +395,11 @@ public struct MergeState: Equatable {
     /// Human label, e.g. "Merge branch 'feature'" or "Rebasing main".
     public var operationLabel: String?
     public var conflictedFiles: [String]
+    var isEditingRebaseCommit = false
+    var rebaseSkipTarget: RebaseSkipTarget? = nil
 
     public var isInProgress: Bool { operation != nil }
     public var isResolvingConflicts: Bool { !conflictedFiles.isEmpty }
+    // Interactive edit stops need ordinary commits; conflict replay needs Continue.
+    public var allowsManualCommit: Bool { operation != .rebase || isEditingRebaseCommit }
 }

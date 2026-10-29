@@ -1,155 +1,167 @@
 import SwiftUI
 import AppKit
 
-/// Sheet for adding a repository: open a local folder, or clone from a URL.
+/// Cloning has its own sheet; opening an existing repository uses NSOpenPanel.
 struct AddRepositoryView: View {
 
-    @EnvironmentObject var appState: AppState
+    @EnvironmentObject var windowState: RepositoryWindowState
     @Environment(\.dismiss) private var dismiss
+    @FocusState private var urlFocused: Bool
 
-    @State private var localPath: String = ""
-    @State private var cloneURL: String = ""
-    @State private var cloneDestination: String = ""
+    @State private var cloneURL = ""
+    @State private var cloneDestination = ""
     @State private var isCloning = false
+    @State private var isCancelling = false
+    @State private var cancellation: GitCancellationToken?
     @State private var cloneError: String?
+    @State private var cloneStatus: String?
+
+    private var canClone: Bool {
+        !cloneURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !cloneDestination.isEmpty && !isCloning
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text("Add Repository")
-                .font(.title2)
-                .fontWeight(.semibold)
-                .padding(.bottom, 12)
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Clone Repository")
+                .font(.title2.weight(.semibold))
+            Text("Download a working copy from a Git remote.")
+                .foregroundStyle(.secondary)
 
-            GroupBox {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Open a local repository")
-                        .font(.headline)
+            Form {
+                TextField("Repository URL:", text: $cloneURL,
+                          prompt: Text("https://github.com/owner/repository.git"))
+                    .focused($urlFocused)
+                    .autocorrectionDisabled()
+                    .help("HTTPS, SSH, and git@host:owner/repository.git URLs are supported.")
+                LabeledContent("Clone into:") {
                     HStack {
-                        TextField("Path", text: $localPath)
-                            .textFieldStyle(.roundedBorder)
-                        Button("Browse…") { browseForLocalRepository() }
-                        Button("Add") { addLocal() }
-                            .disabled(localPath.isEmpty)
-                            .keyboardShortcut(.defaultAction)
-                    }
-                }
-                .padding(4)
-            }
-
-            GroupBox {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Clone from a URL")
-                        .font(.headline)
-                    TextField("https://github.com/owner/repo.git", text: $cloneURL)
-                        .textFieldStyle(.roundedBorder)
-                    HStack {
-                        TextField("Destination folder", text: $cloneDestination)
-                            .textFieldStyle(.roundedBorder)
-                        Button("Browse…") { browseForCloneDestination() }
-                    }
-                    HStack {
-                        if isCloning {
-                            ProgressView()
-                                .controlSize(.small)
-                            Text("Cloning…")
-                                .foregroundStyle(.secondary)
-                        }
+                        Text(cloneDestination.isEmpty ? "Choose a folder" : (cloneDestination as NSString).abbreviatingWithTildeInPath)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .foregroundStyle(cloneDestination.isEmpty ? .secondary : .primary)
+                            .help(cloneDestination)
                         Spacer()
-                        Button("Clone") { clone() }
-                            .disabled(cloneURL.isEmpty || cloneDestination.isEmpty || isCloning)
-                    }
-                    if let cloneError {
-                        Text(cloneError)
-                            .font(.caption)
-                            .foregroundStyle(.red)
-                            .lineLimit(4)
+                        Button("Choose…") { browseForCloneDestination() }
                     }
                 }
-                .padding(4)
             }
-            .padding(.top, 12)
+            .disabled(isCloning)
 
-            if let error = appState.addRepositoryError {
-                Text(error)
+            if let name = CloneURL(cloneURL.trimmingCharacters(in: .whitespacesAndNewlines)).suggestedFolderName,
+               !cloneDestination.isEmpty {
+                Text("A new folder named “\(name)” will be created inside the chosen folder.")
                     .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if let error = cloneError ?? windowState.addRepositoryError {
+                Text(error)
+                    .font(.callout)
                     .foregroundStyle(.red)
-                    .padding(.top, 12)
+                    .textSelection(.enabled)
+                    .lineLimit(5)
+            }
+            if let cloneStatus {
+                Text(cloneStatus)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
             }
 
             HStack {
+                if isCloning {
+                    ProgressView().controlSize(.small)
+                    Text(isCancelling ? "Cancelling clone…" : "Cloning repository…")
+                        .foregroundStyle(.secondary)
+                }
                 Spacer()
-                Button("Close") { dismiss() }
-            }
-            .padding(.top, 16)
-        }
-        .padding(20)
-        .frame(width: 480)
-    }
-
-    // MARK: - Local
-
-    private func browseForLocalRepository() {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.allowsMultipleSelection = false
-        panel.prompt = "Add"
-        if panel.runModal() == .OK, let url = panel.url {
-            localPath = url.path
-            appState.addRepository(at: url) { repo in
-                if repo != nil { dismiss() }
+                Button(isCloning ? "Cancel Clone" : "Cancel", action: cancel)
+                    .keyboardShortcut(.cancelAction)
+                    .disabled(isCancelling)
+                Button("Clone") { clone() }
+                    .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!canClone)
             }
         }
-    }
-
-    private func addLocal() {
-        let url = URL(fileURLWithPath: (localPath as NSString).expandingTildeInPath)
-        appState.addRepository(at: url) { repo in
-            if repo != nil { dismiss() }
+        .padding(24)
+        .frame(width: 500)
+        .interactiveDismissDisabled(isCloning)
+        .onAppear {
+            windowState.addRepositoryError = nil
+            urlFocused = true
         }
+        .onDisappear { cancellation?.cancel() }
     }
-
-    // MARK: - Clone
 
     private func browseForCloneDestination() {
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
-        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
         panel.prompt = "Choose"
-        if panel.runModal() == .OK, let url = panel.url {
-            cloneDestination = url.path
+        panel.message = "Choose the folder that will contain your new working copy."
+        let completion: (NSApplication.ModalResponse) -> Void = { response in
+            if response == .OK, let url = panel.url { cloneDestination = url.path }
+        }
+        if let window = NSApp.keyWindow {
+            panel.beginSheetModal(for: window, completionHandler: completion)
+        } else {
+            panel.begin(completionHandler: completion)
         }
     }
 
     private func clone() {
+        guard canClone else { return }
         let trimmedURL = cloneURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedURL.isEmpty else { return }
         let base = URL(fileURLWithPath: (cloneDestination as NSString).expandingTildeInPath)
-        // Derive the folder name from the URL, like `git clone` does (handles
-        // https://…, ssh://…, and scp-style git@host:owner/repo.git forms).
         guard let name = CloneURL(trimmedURL).suggestedFolderName else {
-            cloneError = "Could not derive a folder name from that URL."
+            cloneError = "Enter a Git URL with a repository name."
             return
         }
         let target = base.appendingPathComponent(name)
         isCloning = true
+        isCancelling = false
         cloneError = nil
+        cloneStatus = nil
+        windowState.addRepositoryError = nil
+        let request = GitCancellationToken()
+        cancellation = request
         DispatchQueue.global(qos: .userInitiated).async {
             do {
-                try GitClient.clone(trimmedURL, into: target)
+                try GitClient.clone(trimmedURL, into: target, cancellation: request)
                 DispatchQueue.main.async {
                     isCloning = false
-                    appState.addRepository(at: target) { repo in
+                    isCancelling = false
+                    cancellation = nil
+                    windowState.addRepository(at: target) { repo in
                         if repo != nil { dismiss() }
                     }
                 }
             } catch {
                 DispatchQueue.main.async {
                     isCloning = false
-                    cloneError = error.localizedDescription
+                    isCancelling = false
+                    cancellation = nil
+                    if let cancelled = error as? GitCancellationError {
+                        cloneStatus = cancelled.retainedDirectory == nil
+                            ? "Clone cancelled. You can try again."
+                            : cancelled.localizedDescription
+                    } else {
+                        cloneError = error.localizedDescription
+                    }
                 }
             }
+        }
+    }
+
+    private func cancel() {
+        if isCloning {
+            isCancelling = true
+            cancellation?.cancel()
+        } else {
+            dismiss()
         }
     }
 }

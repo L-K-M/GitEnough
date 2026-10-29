@@ -159,6 +159,36 @@ final class GitParsersTests: XCTestCase {
         XCTAssertEqual(status.changeCount, 5)
     }
 
+    /// Porcelain v2 reports the index and the worktree as two separate columns,
+    /// and every partially staged shape puts one path in both lists with a
+    /// *different* letter on each side. End-to-end from git's own output,
+    /// because the bug this pins was a display rule reading the wrong column
+    /// rather than a parse error.
+    func testPartiallyStagedShapesCarryBothColumns() {
+        let output = """
+        # branch.oid 1234567890abcdef
+        # branch.head main
+        1 AM N... 100644 100644 100644 abc def added-then-modified.txt
+        1 MD N... 100644 100644 000000 abc def modified-then-deleted.txt
+        1 AD N... 100644 100644 000000 abc def added-then-deleted.txt
+
+        """
+        let status = GitParsers.parseStatus(output)
+
+        func sides(_ path: String) -> (FileChange.Status?, FileChange.Status?) {
+            (status.staged.first { $0.path == path }?.displayStatus(staged: true),
+             status.unstaged.first { $0.path == path }?.displayStatus(staged: false))
+        }
+
+        XCTAssertEqual(sides("added-then-modified.txt").0, .added)
+        XCTAssertEqual(sides("added-then-modified.txt").1, .modified)
+        XCTAssertEqual(sides("modified-then-deleted.txt").0, .modified)
+        XCTAssertEqual(sides("modified-then-deleted.txt").1, .deleted)
+        XCTAssertEqual(sides("added-then-deleted.txt").0, .added)
+        // The one that used to render a green "A" over a file that is gone.
+        XCTAssertEqual(sides("added-then-deleted.txt").1, .deleted)
+    }
+
     /// The `staged`/`unstaged` assertions here are **load-bearing, not
     /// incidental**. `GitClient.stage(paths:)` is deliberately unguarded against
     /// conflicts — naming a path is the user resolving it, which is what
@@ -372,6 +402,17 @@ final class GitParsersTests: XCTestCase {
         XCTAssertEqual(entries[1].branch, "feature")
         XCTAssertEqual(entries[1].message, "experiments")
         XCTAssertEqual(entries[0].ref, "stash@{0}")
+        XCTAssertNil(entries[0].objectID)
+    }
+
+    func testParseStashPreservesStableIdentityAndMessageSeparators() {
+        let hash = String(repeating: "ab", count: 20)
+        let output = "stash@{1}\(f)On feature: first\(f)second\(f)\(hash)\n"
+        let entry = GitParsers.parseStash(output).first
+
+        XCTAssertEqual(entry?.objectID, hash)
+        XCTAssertEqual(entry?.message, "first\(f)second")
+        XCTAssertEqual(entry?.branch, "feature")
     }
 
     // MARK: - Name-status (commit files)
@@ -417,6 +458,56 @@ final class GitParsersTests: XCTestCase {
         XCTAssertEqual(GitParsers.unquoteGitPath("\"back\\\\slash.txt\""), "back\\slash.txt")
         // core.quotepath renders non-ASCII as octal UTF-8 bytes: “ü” = \303\274.
         XCTAssertEqual(GitParsers.unquoteGitPath("\"m\\303\\274nchen.txt\""), "münchen.txt")
+    }
+
+    /// `unquoteGitPath` is **not idempotent**, which is why every path may pass
+    /// through it exactly once. It strips the outer quotes of whatever it is
+    /// handed, so a name that itself begins and ends with `"` survives the
+    /// first pass still looking quoted and loses its real characters on a
+    /// second. Pinned here as a property of the function, next to the status
+    /// test that pins the one call path that used to run it twice.
+    func testUnquoteGitPathIsNotIdempotent() {
+        let once = GitParsers.unquoteGitPath("\"\\\"quoted\\\"\"")
+        XCTAssertEqual(once, "\"quoted\"")
+        XCTAssertEqual(GitParsers.unquoteGitPath(once), "quoted",
+                       "a second pass eats the name's own quotes")
+    }
+
+    /// A rename destination is C-unquoted exactly once.
+    ///
+    /// The status line is verbatim from git 2.43 after
+    /// `git mv plain.txt '"quoted"'`. The destination used to be unquoted at
+    /// the call site and again inside `makeChange`, so it came back as
+    /// `quoted` — a path not in the repository, which stage and unstage then
+    /// fail on and discard silently acts on.
+    func testStatusRenameDestinationIsUnquotedExactlyOnce() {
+        let output = """
+        # branch.oid 1234567890abcdef
+        # branch.head main
+        2 R. N... 100644 100644 100644 5626abf 5626abf R100 "\\"quoted\\""\tplain.txt
+
+        """
+        let status = GitParsers.parseStatus(output)
+
+        XCTAssertEqual(status.staged.map(\.path), ["\"quoted\""])
+        // The other direction of the same mistake: moving the unquote must not
+        // stop it running on the source half.
+        XCTAssertEqual(status.staged.first?.originalPath, "plain.txt")
+    }
+
+    /// Both halves of a rename are quoted independently, so both must be
+    /// unquoted — the source is not merely passed through.
+    func testStatusRenameUnquotesBothHalves() {
+        let output = """
+        # branch.oid 1234567890abcdef
+        # branch.head main
+        2 R. N... 100644 100644 100644 5626abf 5626abf R100 "n\\303\\244w.txt"\t"\\303\\244ld.txt"
+
+        """
+        let status = GitParsers.parseStatus(output)
+
+        XCTAssertEqual(status.staged.first?.path, "näw.txt")
+        XCTAssertEqual(status.staged.first?.originalPath, "äld.txt")
     }
 
     // MARK: - Diff parser

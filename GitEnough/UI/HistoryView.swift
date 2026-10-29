@@ -6,7 +6,12 @@ import AppKit
 struct HistoryView: View {
 
     @ObservedObject var viewModel: RepoViewModel
+    @EnvironmentObject private var windowState: RepositoryWindowState
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @StateObject private var selectionModel = HistorySelectionModel()
+    @State private var searchFocusRequest = 0
 
+    @State private var listFocusRequest = UUID()
     @State private var selectedHash: String?
     @State private var filterText = ""
     /// What actually drives the filter: trimmed, and debounced ~150 ms so a
@@ -26,7 +31,7 @@ struct HistoryView: View {
 
     private var isFiltering: Bool { !activeFilter.isEmpty }
 
-    /// Commits matching the filter (subject / author / hash prefix / ref
+    /// Commits matching the filter (subject / author / email / hash prefix / ref
     /// names). `localizedStandardContains` is Finder-style: case- *and*
     /// diacritic-insensitive, so "muller" finds "Müller". Only searches the
     /// loaded pages — "Load older commits…" widens the searchable set.
@@ -34,19 +39,7 @@ struct HistoryView: View {
     /// "feature-x" finds the commit(s) carrying that decoration (typically
     /// the branch tip), not just the ones whose subject happens to mention it.
     private var visibleCommits: [Commit] {
-        guard isFiltering else { return viewModel.commits }
-        let needle = activeFilter.lowercased()
-        return viewModel.commits.filter {
-            // Cheapest predicate first: the plain hash-prefix check runs for
-            // every commit before the localized folds (which are noticeably
-            // more expensive) get a chance to.
-            $0.hash.lowercased().hasPrefix(needle)
-                || $0.subject.localizedStandardContains(activeFilter)
-                || $0.author.localizedStandardContains(activeFilter)
-                || $0.decorations.contains {
-                    $0.name.localizedStandardContains(activeFilter)
-                }
-        }
+        HistorySearch.filter(viewModel.commits, query: activeFilter)
     }
 
     private var headRow: Int? {
@@ -92,43 +85,17 @@ struct HistoryView: View {
     }
 
     private var historyCore: some View {
-        // HStack + fixed-width detail, not HSplitView: an HSplitView inside a
-        // NavigationSplitView's detail column redistributes its panes when the
-        // detail content swaps between placeholder and commit (selecting a
-        // commit visibly resized both right-hand panels), and the fixed width
-        // keeps that divider from ever drifting.
-        HStack(spacing: 0) {
-            historyList
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            Divider()
-            CommitDetailView(viewModel: viewModel, selectedHash: selectedHash,
-                             onSelectCommit: { hash in
-                                 // Parent navigation must be able to reveal
-                                 // the target: a filter hiding it would leave
-                                 // a selection the list can't show. (Both
-                                 // fields: the debounce window can leave
-                                 // filterText set while activeFilter lags.)
-                                 if !filterText.isEmpty || !activeFilter.isEmpty {
-                                     filterText = ""
-                                     filterDebounceTask?.cancel()
-                                     activeFilter = ""
-                                 }
-                                 // Only scroll when there IS a row to land
-                                 // on — a parent beyond the loaded page still
-                                 // loads its detail (git show needs no list
-                                 // membership), but a scroll would silently
-                                 // no-op.
-                                 if viewModel.commits.contains(where: { $0.hash == hash }) {
-                                     scrollTarget = hash
-                                 }
-                                 selectedHash = hash
-                             })
-                .frame(maxHeight: .infinity)
-                .frame(width: 360)
-        }
-        .onChange(of: selectedHash) { _, newValue in
-            viewModel.selectCommit(newValue)
-        }
+        historyList
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .inspector(isPresented: $windowState.inspectorVisible) {
+                CommitDetailView(viewModel: viewModel, selectionModel: selectionModel,
+                                 selectedHash: selectedHash, onSelectCommit: selectParent)
+                    .inspectorColumnWidth(min: 300, ideal: 380, max: 680)
+            }
+            .focusedSceneValue(\.historyCommands, historyCommandContext)
+            .onChange(of: selectedHash) { _, newValue in
+                selectionModel.selectCommit(newValue, in: viewModel)
+            }
         .onChange(of: filterText) { _, newValue in
             filterDebounceTask?.cancel()
             let trimmed = newValue.trimmingCharacters(in: .whitespaces)
@@ -138,16 +105,60 @@ struct HistoryView: View {
                 activeFilter = trimmed
             }
         }
+        .onChange(of: activeFilter) { _, query in
+            let visible = visibleCommits
+            // Actions in the Commit menu must describe a row the search can
+            // show. Clearing a search still permits parent-chip navigation to
+            // an older commit beyond the currently loaded history page.
+            if query.isEmpty {
+                if selectedHash == nil { selectedHash = visible.first?.hash }
+            } else if !visible.contains(where: { $0.hash == selectedHash }) {
+                selectedHash = visible.first?.hash
+            }
+        }
+        .onAppear {
+            if selectedHash == nil { selectedHash = viewModel.commits.first?.hash }
+        }
         .onDisappear {
             filterDebounceTask?.cancel()
         }
         .onChange(of: viewModel.commits.map(\.hash)) { _, hashes in
-            // Keep the selection across refreshes; drop it if the commit vanished
-            // (e.g. after a reset --hard).
-            if let selectedHash, !hashes.contains(selectedHash) {
-                self.selectedHash = nil
+            // A first load selects the newest commit. If history is rewritten,
+            // move a vanished selection to the newest remaining row.
+            let visible = visibleCommits
+            if let selectedHash,
+               !hashes.contains(selectedHash)
+                || (isFiltering && !visible.contains(where: { $0.hash == selectedHash })) {
+                self.selectedHash = visible.first?.hash
+            } else if selectedHash == nil {
+                selectedHash = visible.first?.hash
             }
         }
+    }
+
+    private var historyCommandContext: HistoryCommandContext? {
+        guard commitForNewBranch == nil, commitToTag == nil,
+              commitToCheckout == nil, commitToReset == nil,
+              !windowState.isPresentingSheet else {
+            return nil
+        }
+        return HistoryCommandContext(
+            find: { searchFocusRequest &+= 1 },
+            selectedCommitCommands: selectedCommit.map { AnyView(commitContextMenu($0)) })
+    }
+
+    private var selectedCommit: Commit? {
+        viewModel.commits.first { $0.hash == selectedHash }
+    }
+
+    private func selectParent(_ hash: String) {
+        filterDebounceTask?.cancel()
+        filterText = ""
+        activeFilter = ""
+        if viewModel.commits.contains(where: { $0.hash == hash }) {
+            scrollTarget = hash
+        }
+        selectedHash = hash
     }
 
     private var checkoutConfirmationPresented: Binding<Bool> {
@@ -180,38 +191,45 @@ struct HistoryView: View {
                 } else {
                     filterBar(matchCount: visible.count)
                     Divider()
-                    ScrollView {
-                        VStack(spacing: 0) {
-                            commitRows(visible)
+                    GeometryReader { geometry in
+                        let graphWidth = isFiltering ? 0
+                            : GraphMetrics.graphWidth(for: viewModel.layout.columnCount)
+                        // Match the explicit trailing inset shared by every row.
+                        let textWidth = max(0, geometry.size.width - graphWidth - 8)
+                        List(selection: Binding(get: { selectedHash }, set: {
+                            selectedHash = $0
+                            listFocusRequest = UUID()
+                        })) {
+                            commitRows(visible, textWidth: textWidth)
                             if viewModel.canLoadMoreHistory {
-                                Button("Load older commits…") {
-                                    viewModel.loadMoreHistory()
-                                }
-                                .buttonStyle(.link)
-                                .padding(.vertical, 10)
-                                .frame(maxWidth: .infinity)
+                                Button("Load Older Commits…") { viewModel.loadMoreHistory() }
+                                    .buttonStyle(.link)
+                                    .padding(.vertical, 8)
+                                    .frame(maxWidth: .infinity)
+                                    .listRowSeparator(.hidden)
+                                    .disabled(viewModel.isBusy)
                             }
                         }
+                        .listStyle(.plain)
+                        .environment(\.defaultMinListRowHeight, GraphMetrics.rowHeight)
+                        .accessibilityLabel("Commit history")
+                        .id(activeFilter)
                     }
-                    .background(Color(nsColor: .textBackgroundColor))
-                    // Reset the scroll offset whenever the (debounced) filter changes —
-                    // otherwise a deep scroll position can land the shorter result
-                    // list in blank space. Constant ("") while unfiltered.
-                    .id(activeFilter)
+
                 }
             }
             .onChange(of: scrollTarget) { _, target in
                 guard let target else { return }
                 // A beat for the row set to settle (a just-cleared filter
                 // re-keys the ScrollView; the target row must exist first).
-                // The LazyVStack materializes rows on demand, so a far-off
-                // target may still be missing on the first pass — retry once
+                // A distant row may not exist on the first layout pass.
+                // Retry once
                 // after layout, then give up silently (the detail pane is
                 // already showing the commit either way).
                 DispatchQueue.main.async {
-                    withAnimation { proxy.scrollTo(target, anchor: .center) }
+                    withAnimation(reduceMotion ? nil : .default) { proxy.scrollTo(target, anchor: .center) }
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                        withAnimation { proxy.scrollTo(target, anchor: .center) }
+                        withAnimation(reduceMotion ? nil : .default) { proxy.scrollTo(target, anchor: .center) }
                         scrollTarget = nil
                     }
                 }
@@ -222,39 +240,36 @@ struct HistoryView: View {
     // Kept as small, separate @ViewBuilder pieces: one giant builder
     // expression here sent the type-checker past its time limit.
     @ViewBuilder
-    private func commitRows(_ visible: [Commit]) -> some View {
-        LazyVStack(spacing: 0) {
-            ForEach(Array(visible.enumerated()), id: \.element.id) { row, commit in
-                historyRow(row: row, commit: commit)
-            }
-            if isFiltering && visible.isEmpty {
-                emptyFilterState
-            }
+    private func commitRows(_ visible: [Commit], textWidth: CGFloat) -> some View {
+        ForEach(Array(visible.enumerated()), id: \.element.id) { row, commit in
+            historyRow(row: row, commit: commit, textWidth: textWidth)
+                .tag(commit.hash)
+                .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 8))
+                .listRowSeparator(.hidden)
         }
-        .padding(.trailing, 12)
+        if isFiltering && visible.isEmpty {
+            emptyFilterState
+                .listRowSeparator(.hidden)
+        }
     }
 
     @ViewBuilder
-    private func historyRow(row: Int, commit: Commit) -> some View {
+    private func historyRow(row: Int, commit: Commit, textWidth: CGFloat) -> some View {
         HStack(spacing: 0) {
             // The graph only aligns with the full, unfiltered row sequence —
             // hide it while filtering.
             if !isFiltering {
                 GraphStripView(layout: viewModel.layout, row: row,
                                isHeadRow: row == headRow,
-                               isSelected: commit.hash == selectedHash,
+                               isSelected: false,
                                isUnpushedRow: viewModel.unpushedHashes.contains(commit.hash),
                                clipsTail: row == viewModel.commits.count - 1)
             }
-            CommitRowView(commit: commit,
-                          isSelected: commit.hash == selectedHash,
-                          isHead: commit.isHead)
+            CommitRowView(commit: commit, isHead: commit.isHead, availableWidth: textWidth)
         }
         .frame(height: GraphMetrics.rowHeight)
         .contentShape(Rectangle())
-        .onTapGesture {
-            selectedHash = commit.hash
-        }
+        .nativeListRowFocus(isSelected: commit.hash == selectedHash, focusRequest: listFocusRequest)
         .contextMenu {
             commitContextMenu(commit)
         }
@@ -279,12 +294,9 @@ struct HistoryView: View {
     // MARK: - Filter bar
 
     private func filterBar(matchCount: Int) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: "line.3.horizontal.decrease.circle")
-                .foregroundStyle(.secondary)
-            TextField("Filter by subject, author, hash, or ref", text: $filterText)
-                .textFieldStyle(.plain)
-                .autocorrectionDisabled()
+        HStack(spacing: 8) {
+            HistorySearchField(text: $filterText, focusRequest: searchFocusRequest)
+                .frame(height: 24)
             if isFiltering {
                 Text("\(matchCount) of \(viewModel.commits.count)")
                     .font(.caption)
@@ -292,28 +304,10 @@ struct HistoryView: View {
                     .fixedSize()
                     .accessibilityLabel("\(matchCount) of \(viewModel.commits.count) commits shown")
             }
-            // Visible whenever there's text to clear — including
-            // whitespace-only input that doesn't (yet) activate filtering.
-            if !filterText.isEmpty {
-                Button {
-                    filterText = ""
-                    filterDebounceTask?.cancel()
-                    activeFilter = ""
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-                .help("Clear filter")
-                .accessibilityLabel("Clear filter")
-                // No Esc shortcut here: .cancelAction would capture Esc
-                // window-wide while a filter is active, fighting the sheets
-                // and confirmation dialogs this view also hosts.
-            }
         }
         .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(Color(nsColor: .textBackgroundColor))
+        .padding(.vertical, 7)
+        .background(.bar)
     }
 
     @ViewBuilder
@@ -344,47 +338,50 @@ struct HistoryView: View {
         }
         .disabled(cherryPickCommand == nil)
         Divider()
-        Button("Create Branch Here…") {
-            branchNameForNewBranch = ""
-            commitForNewBranch = commit
-        }
-        Button("Tag This Commit…") {
-            tagName = ""
-            tagMessage = ""
-            commitToTag = commit
-        }
-        Button("Check Out Commit…") {
-            commitToCheckout = commit
-        }
-        Divider()
-        if commit.isMerge {
-            // A merge replays differently depending on which parent is the
-            // baseline: -m 1 is "what the merge brought onto the branch it
-            // landed on", -m 2 the reverse (relevant for merge-back commits).
-            // One item per parent keeps the choice explicit — and covers
-            // octopus merges too.
-            ForEach(Array(commit.parents.enumerated()), id: \.offset) { index, parent in
-                Button("Cherry-pick Merge vs. Parent \(index + 1) (\(String(parent.prefix(7))))") {
-                    viewModel.cherryPick(commit.hash, mainline: index + 1)
+        Group {
+            Button("Create Branch Here…") {
+                branchNameForNewBranch = ""
+                commitForNewBranch = commit
+            }
+            Button("Tag This Commit…") {
+                tagName = ""
+                tagMessage = ""
+                commitToTag = commit
+            }
+            Button("Check Out Commit…") {
+                commitToCheckout = commit
+            }
+            Divider()
+            if commit.isMerge {
+                // A merge replays differently depending on which parent is the
+                // baseline: -m 1 is "what the merge brought onto the branch it
+                // landed on", -m 2 the reverse (relevant for merge-back commits).
+                // One item per parent keeps the choice explicit — and covers
+                // octopus merges too.
+                ForEach(Array(commit.parents.enumerated()), id: \.offset) { index, parent in
+                    Button("Cherry-pick Merge vs. Parent \(index + 1) (\(String(parent.prefix(7))))") {
+                        viewModel.cherryPick(commit.hash, mainline: index + 1)
+                    }
+                }
+                // Reverting keeps the canonical "undo what the merge brought onto
+                // this branch" semantic: always against the first parent.
+                Button("Revert Merge (vs. First Parent)") {
+                    viewModel.revert(commit.hash, mainline: 1)
+                }
+            } else {
+                Button("Cherry-pick onto Current Branch") {
+                    viewModel.cherryPick(commit.hash)
+                }
+                Button("Revert Commit") {
+                    viewModel.revert(commit.hash)
                 }
             }
-            // Reverting keeps the canonical "undo what the merge brought onto
-            // this branch" semantic: always against the first parent.
-            Button("Revert Merge (vs. First Parent)") {
-                viewModel.revert(commit.hash, mainline: 1)
-            }
-        } else {
-            Button("Cherry-pick onto Current Branch") {
-                viewModel.cherryPick(commit.hash)
-            }
-            Button("Revert Commit") {
-                viewModel.revert(commit.hash)
+            Divider()
+            Button("Reset Current Branch to Here…") {
+                commitToReset = commit
             }
         }
-        Divider()
-        Button("Reset Current Branch to Here…") {
-            commitToReset = commit
-        }
+        .disabled(viewModel.isBusy)
     }
 
     private func newBranchSheet(for commit: Commit) -> some View {
@@ -453,47 +450,72 @@ struct HistoryView: View {
     }
 }
 
-/// One row of the commit list, aligned with the graph: subject, ref chips,
-/// author, relative date.
+/// One row of the commit list, aligned with the graph. Secondary metadata gives
+/// way to the subject when the sidebar and inspector leave a narrow list.
 private struct CommitRowView: View {
 
     let commit: Commit
-    let isSelected: Bool
     let isHead: Bool
+    let availableWidth: CGFloat
 
     var body: some View {
+        let compact = availableWidth < 600
+        let refLimit = compact ? 1 : 3
+        let refWidth = compact ? min(120, max(44, availableWidth * 0.25)) : 180
+
         HStack(spacing: 8) {
             Text(commit.subject.isEmpty ? "(no message)" : commit.subject)
                 .fontWeight(isHead ? .semibold : .regular)
                 .lineLimit(1)
                 .truncationMode(.tail)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .layoutPriority(1)
 
-            ForEach(commit.decorations.prefix(3)) { decoration in
-                RefChip(decoration: decoration)
+            if !commit.decorations.isEmpty {
+                HStack(spacing: 4) {
+                    ForEach(commit.decorations.prefix(refLimit)) { decoration in
+                        RefChip(decoration: decoration)
+                    }
+                    if commit.decorations.count > refLimit {
+                        Text("+\(commit.decorations.count - refLimit)")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .fixedSize()
+                    }
+                }
+                .frame(maxWidth: refWidth, alignment: .trailing)
+                .fixedSize(horizontal: true, vertical: false)
             }
-            if commit.decorations.count > 3 {
-                Text("+\(commit.decorations.count - 3)")
-                    .font(.caption2)
+
+            if !compact {
+                Text(commit.author)
+                    .font(.caption)
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .frame(maxWidth: 100, alignment: .trailing)
+                    .fixedSize(horizontal: true, vertical: false)
+
+                RelativeDateText(date: commit.date)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .frame(width: 110, alignment: .trailing)
             }
-
-            Spacer(minLength: 8)
-
-            Text(commit.author)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-
-            RelativeDateText(date: commit.date)
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-                .frame(width: 110, alignment: .trailing)
         }
         .padding(.leading, 8)
-        // Fill the fixed-height row frame (applied by the caller) so the
-        // selection background is as tall as the graph strip next to it, not
-        // just as tall as the text.
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(isSelected ? Color.accentColor.opacity(0.20) : Color.clear)
+        .help(metadataDescription)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(metadataDescription)
+    }
+
+    private var metadataDescription: String {
+        var lines = [commit.subject.isEmpty ? "(no message)" : commit.subject,
+                     "\(commit.author) <\(commit.email)>",
+                     commit.date?.formatted(date: .abbreviated, time: .shortened) ?? "Date unavailable",
+                     commit.hash]
+        if !commit.decorations.isEmpty {
+            lines.append("Refs: " + commit.decorations.map(\.name).joined(separator: ", "))
+        }
+        return lines.joined(separator: "\n")
     }
 }
