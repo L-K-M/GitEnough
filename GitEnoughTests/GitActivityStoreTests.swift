@@ -8,6 +8,17 @@ final class GitActivityStoreTests: XCTestCase {
 
     private var fileURL: URL!
 
+    func testAlternateAppIdentitiesKeepDiagnosticsSeparateFromExistingHistory() {
+        let released = GitActivityStore.activityFileURL(bundleIdentifier: "ch.lkmc.GitEnough")
+        let headless = GitActivityStore.activityFileURL(bundleIdentifier: nil)
+        let fixture = GitActivityStore.activityFileURL(bundleIdentifier: "ch.lkmc.GitEnough.PolishReview")
+        XCTAssertEqual(released, headless)
+        XCTAssertEqual(released.deletingLastPathComponent().lastPathComponent, "GitEnough")
+        XCTAssertEqual(released.lastPathComponent, "git-activity.jsonl")
+        XCTAssertNotEqual(fixture.deletingLastPathComponent(), released.deletingLastPathComponent())
+        XCTAssertEqual(fixture.lastPathComponent, released.lastPathComponent)
+    }
+
     override func setUpWithError() throws {
         fileURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("GitEnoughStoreTests-\(UUID().uuidString)")

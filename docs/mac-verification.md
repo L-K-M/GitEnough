@@ -137,19 +137,33 @@ lifecycle for a repository folder; commit drafts autosave separately.
   to the macOS 26 CI job. No macOS 27 API is intentionally used.
 - Live AI generation and authenticated hosted remotes were not exercised in
   the GUI. Their existing core behavior and credential handling are retained.
-- Clone is asynchronous but the existing Git process runner has no cancellation
-  handle. Its sheet remains open until completion or an error.
-- Native text undo is verified. Git operations use explicit Git recovery
-  commands and confirmations; generated-message replacement has no separately
-  named Undo operation.
+- Clones now support Cancel/Escape and safe retry for new destinations. An
+  existing empty destination is cloned in place; cancellation preserves any
+  partial or concurrently added content and asks the user to review that folder.
+- Generated-message replacements now use the initiating native text editor's
+  named Undo/Redo history. Git operations continue to use explicit recovery
+  commands and confirmations.
 - SceneStorage restores window state when macOS restores a scene; a new window
   otherwise opens the last-used repository. Global Close windows when quitting
   preferences remain under the user's control.
-- macOS clears its Open Recent shared-file list when switching between these
-  ad-hoc development builds because their code-signature hashes differ. Recent
-  registration and opening are verified within one unchanged running build.
+- macOS can clear its shared-file list when development signatures change. The
+  app now maintains its own recent paths alongside the system list, and Clear
+  Menu clears both. Persistence, deduplication and clearing have isolated tests.
 - VoiceOver speech and the full matrix of increased contrast, reduced
   transparency and reduced motion settings were not manually exercised.
+
+## Follow-up checks
+
+The follow-up adds automatic and manual repository groups, clone cancellation,
+native generated-message undo, durable recent paths, one history-list width
+measurement and source-warning cleanup. The shared core suite passes 472 tests.
+Native editor tests exercise named undo/redo, standard key equivalents, later
+typing, separate editor stacks and marked input. Grouping/store tests use UUID
+preference suites; Git cancellation tests use disposable local transports.
+Running-app verification uses a separate bundle identifier, preferences,
+Keychain service and activity directory, with a loopback model stub. The normal
+app's activity directory and existing preferences retain their paths.
+Combined GUI verification and hosted-suite checks are in progress.
 
 ## Preference-test incident
 

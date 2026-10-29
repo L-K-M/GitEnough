@@ -10,10 +10,47 @@ struct SidebarView: View {
     @EnvironmentObject var store: RepoStore
     @AppStorage("sidebarSortOrder") private var sortOrderRaw = SidebarSortOrder.manual.rawValue
     @AppStorage("sidebarFilter") private var filterRaw = SidebarFilter.all.rawValue
+    @AppStorage("sidebarGroupingMode") private var groupingRaw = SidebarGroupingMode.none.rawValue
     @State private var filterText = ""
     @State private var listFocusRequest = UUID()
+    @State private var selectedGroupHeaderID: String?
     @FocusState private var searchFocused: Bool
+    @FocusState private var groupNameFocused: Bool
+    @State private var showingGroupEditor = false
+    @State private var groupToEdit: ManualRepositoryGroup?
+    @State private var repositoryForNewGroup: Repository?
+    @State private var groupName = ""
+    @State private var groupError: String?
+    @State private var groupToDelete: ManualRepositoryGroup?
+    @State private var groupingError: String?
+    @State private var pendingGroupRevealID: String?
+    @State private var searchExpansionSnapshot: SearchExpansionSnapshot?
+
+    private struct SearchExpansionSnapshot {
+        let expandedGroupID: String?
+        let selectedRepoPath: String?
+    }
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var groupingMode: SidebarGroupingMode {
+        SidebarGroupingMode(rawValue: groupingRaw) ?? .none
+    }
+
+    private var groups: [SidebarRepositoryGroup] {
+        let grouped = SidebarGrouping.groups(for: visibleRepositories, mode: groupingMode,
+                                              summaries: store.summaries,
+                                              manualGroups: store.manualGroups,
+                                              assignments: store.manualGroupAssignments)
+        // Empty manual groups remain manageable until a filter is applied.
+        if !filterText.isEmpty || sidebarFilter != .all {
+            return grouped.filter { !$0.repositories.isEmpty }
+        }
+        return grouped
+    }
+
+    private var selectedGroupID: String? {
+        groups.first { $0.repositories.contains { $0.path == windowState.selectedRepoPath } }?.id
+    }
 
     private var sortOrder: SidebarSortOrder {
         SidebarSortOrder(rawValue: sortOrderRaw) ?? .manual
@@ -23,12 +60,30 @@ struct SidebarView: View {
         SidebarFilter(rawValue: filterRaw) ?? .all
     }
 
+    private var searchText: Binding<String> {
+        Binding(get: { filterText }, set: { value in
+            if filterText.isEmpty, !value.isEmpty {
+                searchExpansionSnapshot = SearchExpansionSnapshot(
+                    expandedGroupID: windowState.expandedSidebarGroupID,
+                    selectedRepoPath: windowState.selectedRepoPath)
+            }
+            filterText = value
+        })
+    }
+
     private var selection: Binding<String?> {
         Binding(
-            get: { windowState.selectedRepoPath },
+            get: { selectedGroupHeaderID ?? windowState.selectedRepoPath },
             set: { path in
                 if let path, let repo = store.repositories.first(where: { $0.path == path }) {
+                    selectedGroupHeaderID = nil
                     windowState.select(repo)
+                    listFocusRequest = UUID()
+                } else if let path, groupingMode != .none,
+                          groups.contains(where: { $0.id == path }) {
+                    // Headers participate in native outline selection and key
+                    // navigation without changing the repository being viewed.
+                    selectedGroupHeaderID = path
                     listFocusRequest = UUID()
                 } else if path == nil, let current = windowState.selectedRepoPath,
                           !store.repositories.contains(where: { $0.path == current }) {
@@ -110,56 +165,276 @@ struct SidebarView: View {
     var body: some View {
         ScrollViewReader { proxy in
             List(selection: selection) {
-                Section {
-                    if sortOrder == .manual && filterText.isEmpty && sidebarFilter == .all {
-                        ForEach(visibleRepositories) { repo in
-                            rowContent(repo)
-                        }
-                        .onMove { offsets, destination in
-                            store.moveVisible(visibleRepositories,
-                                              fromOffsets: offsets, toOffset: destination)
-                        }
-                    } else {
-                        ForEach(visibleRepositories) { repo in
-                            rowContent(repo)
-                        }
+                if groupingMode == .none {
+                    flatRepositoryList
+                } else {
+                    ForEach(groups) { group in
+                        repositoryGroup(group)
                     }
-                } header: {
-                    Text("Repositories")
+                }
+                if visibleRepositories.isEmpty && !store.repositories.isEmpty {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("No repositories match")
+                            .foregroundStyle(.secondary)
+                        Button("Clear Filters") {
+                            filterText = ""
+                            filterRaw = SidebarFilter.all.rawValue
+                        }
+                        .buttonStyle(.link)
+                    }
+                    .padding(.vertical, 8)
                 }
             }
             .listStyle(.sidebar)
-            .searchable(text: $filterText, placement: .sidebar, prompt: "Filter repositories")
+            .searchable(text: searchText, placement: .sidebar, prompt: "Filter repositories")
             .searchFocused($searchFocused)
             .onChange(of: windowState.sidebarSearchRequest) { _, _ in searchFocused = true }
             .onDrop(of: [UTType.fileURL], isTargeted: nil, perform: handleDrop)
             .onChange(of: windowState.lastAddedRepoPath) { _, newPath in
                 reveal(newPath, with: proxy)
             }
-            .safeAreaInset(edge: .bottom) {
-                if !store.repositories.isEmpty {
-                    VStack(spacing: 6) {
-                        sidebarControls
-                        // Always-visible counterpart to the old list footer: a
-                        // repo that "vanished" is usually just filter-hidden,
-                        // and a hint below the fold of a long list explains
-                        // nothing. One click resets to the unfiltered list.
-                        if hiddenByFilterCount > 0 {
-                            Button("\(hiddenByFilterCount) hidden by the “\(sidebarFilter.displayName)” filter — show all") {
-                                filterRaw = SidebarFilter.all.rawValue
-                            }
-                            .buttonStyle(.link)
-                            .font(.caption)
-                        }
-                        Text("Drop a repository folder here")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 6)
-                    .background(.bar)
+            .onAppear { reconcileExpansion(openIfCollapsed: !windowState.hasSavedSidebarGroupState) }
+            .onChange(of: groupingRaw) { _, _ in
+                selectedGroupHeaderID = nil
+                if let pending = pendingGroupRevealID {
+                    windowState.expandedSidebarGroupID = pending
+                    pendingGroupRevealID = nil
+                } else {
+                    windowState.expandedSidebarGroupID = selectedGroupID ?? groups.first?.id
                 }
             }
+            .onChange(of: windowState.selectedRepoPath) { _, _ in
+                selectedGroupHeaderID = nil
+                if groupingMode != .none, let selectedGroupID {
+                    windowState.expandedSidebarGroupID = selectedGroupID
+                }
+            }
+            .onChange(of: groups.map(\.id)) { _, ids in
+                if let selectedGroupHeaderID, !ids.contains(selectedGroupHeaderID) {
+                    self.selectedGroupHeaderID = nil
+                }
+                reconcileExpansion()
+            }
+            .onChange(of: windowState.expandedSidebarGroupID) { _, id in
+                if id != nil { reconcileExpansion() }
+            }
+            .onChange(of: filterText) { previous, current in
+                guard groupingMode != .none else { return }
+                if !current.isEmpty {
+                    windowState.expandedSidebarGroupID = groups.first?.id
+                } else if !previous.isEmpty, let snapshot = searchExpansionSnapshot {
+                    searchExpansionSnapshot = nil
+                    if windowState.selectedRepoPath != snapshot.selectedRepoPath {
+                        windowState.expandedSidebarGroupID = selectedGroupID ?? groups.first?.id
+                    } else if let previousGroup = snapshot.expandedGroupID {
+                        windowState.expandedSidebarGroupID = groups.contains { $0.id == previousGroup }
+                            ? previousGroup : selectedGroupID ?? groups.first?.id
+                    } else {
+                        windowState.expandedSidebarGroupID = nil
+                    }
+                } else {
+                    reconcileExpansion(openIfCollapsed: true)
+                }
+            }
+            .onChange(of: filterRaw) { _, _ in reconcileExpansion(openIfCollapsed: true) }
+            .onChange(of: selectedGroupID) { previous, current in
+                if groupingMode != .none, previous != nil, let current,
+                   windowState.expandedSidebarGroupID == previous {
+                    windowState.expandedSidebarGroupID = current
+                }
+            }
+            .safeAreaInset(edge: .bottom) {
+                VStack(spacing: 6) {
+                    sidebarControls
+                    // Always-visible counterpart to the old list footer: a
+                    // repo that "vanished" is usually just filter-hidden,
+                    // and a hint below the fold of a long list explains
+                    // nothing. One click resets to the unfiltered list.
+                    if hiddenByFilterCount > 0 {
+                        Button("\(hiddenByFilterCount) hidden by the “\(sidebarFilter.displayName)” filter — show all") {
+                            filterRaw = SidebarFilter.all.rawValue
+                        }
+                        .buttonStyle(.link)
+                        .font(.caption)
+                    }
+                    Text("Drop a repository folder here")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 6)
+                .background(.bar)
+            }
+        }
+        .sheet(isPresented: $showingGroupEditor) { groupEditor }
+        .confirmationDialog("Delete group “\(groupToDelete?.name ?? "")”?",
+                            isPresented: Binding(get: { groupToDelete != nil },
+                                                 set: { if !$0 { groupToDelete = nil } }),
+                            titleVisibility: .visible,
+                            presenting: groupToDelete) { group in
+            Button("Delete Group", role: .destructive) { store.deleteGroup(group) }
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
+            Text("Repositories in this group will move to Ungrouped. Their files stay in place.")
+        }
+        .alert("Couldn't Move Repository",
+               isPresented: Binding(get: { groupingError != nil },
+                                    set: { if !$0 { groupingError = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: { Text(groupingError ?? "") }
+    }
+
+    @ViewBuilder
+    private var flatRepositoryList: some View {
+        Section("Repositories") {
+            if sortOrder == .manual && filterText.isEmpty && sidebarFilter == .all {
+                ForEach(visibleRepositories) { repo in rowContent(repo) }
+                    .onMove { offsets, destination in
+                        store.moveVisible(visibleRepositories, fromOffsets: offsets, toOffset: destination)
+                    }
+            } else {
+                ForEach(visibleRepositories) { repo in rowContent(repo) }
+            }
+        }
+    }
+
+    private func repositoryGroup(_ group: SidebarRepositoryGroup) -> some View {
+        DisclosureGroup(isExpanded: Binding(
+            get: { windowState.expandedSidebarGroupID == group.id },
+            set: { expanded in
+                if expanded {
+                    windowState.expandedSidebarGroupID = group.id
+                } else if windowState.expandedSidebarGroupID == group.id {
+                    windowState.expandedSidebarGroupID = nil
+                }
+            })) {
+                ForEach(group.repositories) { repo in rowContent(repo) }
+                if group.repositories.isEmpty {
+                    Text("No repositories in this group")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(group.title).lineLimit(1)
+                        if let subtitle = group.subtitle {
+                            Text(subtitle)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
+                    Spacer(minLength: 4)
+                    Text("\(group.repositories.count)")
+                        .font(.caption)
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                }
+                .help([group.title, group.subtitle].compactMap { $0 }.joined(separator: " · "))
+                .nativeListRowFocus(isSelected: selectedGroupHeaderID == group.id,
+                                    focusRequest: listFocusRequest)
+                .contextMenu {
+                    if let id = group.manualGroupID,
+                       let manualGroup = store.manualGroups.first(where: { $0.id == id }) {
+                        Button("Rename Group…") { editGroup(manualGroup) }
+                        Button("Delete Group…", role: .destructive) { groupToDelete = manualGroup }
+                    }
+                }
+            }
+        .tag(group.id)
+    }
+
+    private func reconcileExpansion(openIfCollapsed: Bool = false) {
+        guard groupingMode != .none else { return }
+        if let expanded = windowState.expandedSidebarGroupID {
+            if !groups.contains(where: { $0.id == expanded }) {
+                windowState.expandedSidebarGroupID = selectedGroupID ?? groups.first?.id
+            }
+        } else if let pending = pendingGroupRevealID {
+            windowState.expandedSidebarGroupID = pending
+            pendingGroupRevealID = nil
+        } else if openIfCollapsed {
+            windowState.expandedSidebarGroupID = selectedGroupID ?? groups.first?.id
+        }
+    }
+
+    private func newGroup(including repository: Repository? = nil) {
+        groupToEdit = nil
+        repositoryForNewGroup = repository
+        groupName = ""
+        groupError = nil
+        showingGroupEditor = true
+    }
+
+    private func editGroup(_ group: ManualRepositoryGroup) {
+        groupToEdit = group
+        repositoryForNewGroup = nil
+        groupName = group.name
+        groupError = nil
+        showingGroupEditor = true
+    }
+
+    private var groupEditor: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(groupToEdit == nil ? "New Repository Group" : "Rename Group")
+                .font(.headline)
+            TextField("Group name", text: $groupName)
+                .textFieldStyle(.roundedBorder)
+                .focused($groupNameFocused)
+                .frame(width: 320)
+            if let groupError {
+                Text(groupError)
+                    .font(.callout)
+                    .foregroundStyle(.red)
+            }
+            HStack {
+                Spacer()
+                Button("Cancel") { showingGroupEditor = false }
+                    .keyboardShortcut(.cancelAction)
+                Button(groupToEdit == nil ? "Create Group" : "Rename") { saveGroup() }
+                    .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(groupName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(20)
+        .onAppear { groupNameFocused = true }
+    }
+
+    private func saveGroup() {
+        do {
+            if let groupToEdit {
+                try store.renameGroup(groupToEdit, to: groupName)
+            } else {
+                let group = try store.createGroup(named: groupName, including: repositoryForNewGroup)
+                showManualGroup(group.sidebarID)
+            }
+            showingGroupEditor = false
+        } catch {
+            groupError = error.localizedDescription
+        }
+    }
+
+    private func showManualGroup(_ id: String) {
+        // An explicit destination should be visible even if an earlier filter
+        // would hide its repositories or a freshly created empty group.
+        searchExpansionSnapshot = nil
+        filterText = ""
+        filterRaw = SidebarFilter.all.rawValue
+        if groupingMode != .manual {
+            pendingGroupRevealID = id
+            groupingRaw = SidebarGroupingMode.manual.rawValue
+        }
+        windowState.expandedSidebarGroupID = id
+    }
+
+    private func move(_ repository: Repository, to group: ManualRepositoryGroup?) {
+        do {
+            try store.move(repository, toGroup: group)
+            showManualGroup(group?.sidebarID ?? SidebarGrouping.ungroupedID)
+        } catch {
+            groupingError = error.localizedDescription
         }
     }
 
@@ -168,13 +443,15 @@ struct SidebarView: View {
             Menu {
                 Button("Open Repository…") { windowState.openRepository() }
                 Button("Clone Repository…") { windowState.showingAddRepository = true }
+                Divider()
+                Button("New Group…") { newGroup() }
             } label: {
                 Image(systemName: "plus")
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
             .accessibilityLabel("Add Repository")
-            .help("Open or clone a repository")
+            .help("Open, clone, or group repositories")
 
             Spacer()
 
@@ -185,9 +462,27 @@ struct SidebarView: View {
                     }
                 }
                 Divider()
+                Picker("Group by", selection: $groupingRaw) {
+                    ForEach(SidebarGroupingMode.allCases) { mode in
+                        Text(mode.displayName).tag(mode.rawValue)
+                    }
+                }
+                Divider()
                 Picker("Sort by", selection: $sortOrderRaw) {
                     ForEach(SidebarSortOrder.allCases) { order in
                         Text(order.rawValue).tag(order.rawValue)
+                    }
+                }
+                Divider()
+                Button("New Group…") { newGroup() }
+                if !store.manualGroups.isEmpty {
+                    Menu("Manage Groups") {
+                        ForEach(store.manualGroups) { group in
+                            Menu(group.name) {
+                                Button("Rename…") { editGroup(group) }
+                                Button("Delete…", role: .destructive) { groupToDelete = group }
+                            }
+                        }
                     }
                 }
             } label: {
@@ -198,7 +493,7 @@ struct SidebarView: View {
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
-            .help("Filter and sort repositories")
+            .help("Filter, group, and sort repositories")
         }
         .padding(.horizontal, 14)
     }
@@ -208,6 +503,10 @@ struct SidebarView: View {
     /// clears the cue afterwards so re-adding the same repository re-reveals it.
     private func reveal(_ path: String?, with proxy: ScrollViewProxy) {
         guard let path else { return }
+        if groupingMode != .none,
+           let group = groups.first(where: { $0.repositories.contains { $0.path == path } }) {
+            windowState.expandedSidebarGroupID = group.id
+        }
         DispatchQueue.main.async {
             withAnimation(reduceMotion ? nil : .default) { proxy.scrollTo(path, anchor: .center) }
             windowState.lastAddedRepoPath = nil
@@ -222,11 +521,38 @@ struct SidebarView: View {
             store.toggleStar(repo)
         }
         .tag(repo.path)
-        .nativeListRowFocus(isSelected: windowState.selectedRepoPath == repo.path, focusRequest: listFocusRequest)
+        .nativeListRowFocus(isSelected: selectedGroupHeaderID == nil
+                            && windowState.selectedRepoPath == repo.path,
+                            focusRequest: listFocusRequest)
         .contextMenu {
             Button(store.isStarred(repo) ? "Unstar" : "Star") {
                 store.toggleStar(repo)
             }
+            Menu("Move to Group") {
+                Button {
+                    move(repo, to: nil)
+                } label: {
+                    if store.manualGroup(for: repo) == nil {
+                        Label("Ungrouped", systemImage: "checkmark")
+                    } else {
+                        Text("Ungrouped")
+                    }
+                }
+                ForEach(store.manualGroups) { group in
+                    Button {
+                        move(repo, to: group)
+                    } label: {
+                        if store.manualGroup(for: repo)?.id == group.id {
+                            Label(group.name, systemImage: "checkmark")
+                        } else {
+                            Text(group.name)
+                        }
+                    }
+                }
+                Divider()
+                Button("New Group…") { newGroup(including: repo) }
+            }
+            Divider()
             Button("Show in Finder") {
                 NSWorkspace.shared.activateFileViewerSelecting([repo.url])
             }

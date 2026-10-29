@@ -38,8 +38,22 @@ public final class GitActivityStore: ObservableObject {
     /// `~/Library/Application Support/GitEnough/git-activity.jsonl` on macOS,
     /// `~/.local/share/GitEnough/git-activity.jsonl` on Linux.
     public static var defaultFileURL: URL {
-        Platform.applicationSupportDirectory
-            .appendingPathComponent("GitEnough", isDirectory: true)
+        activityFileURL(bundleIdentifier: Bundle.main.bundleIdentifier)
+    }
+
+    /// Alternate app identities already have separate preferences and Keychain
+    /// services; keep their diagnostics separate too. The released app and GTK
+    /// keep the established directory, so existing history needs no migration.
+    static func activityFileURL(bundleIdentifier: String?) -> URL {
+        let directory: String
+        if let bundleIdentifier, !bundleIdentifier.isEmpty,
+           bundleIdentifier != "ch.lkmc.GitEnough" {
+            directory = "GitEnough-" + bundleIdentifier
+        } else {
+            directory = "GitEnough"
+        }
+        return Platform.applicationSupportDirectory
+            .appendingPathComponent(directory, isDirectory: true)
             .appendingPathComponent("git-activity.jsonl")
     }
 

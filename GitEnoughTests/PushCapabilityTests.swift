@@ -99,29 +99,15 @@ final class PushCapabilityTests: XCTestCase {
     /// Every reason is phrased for Push, and Force Push re-phrases rather than
     /// duplicating them — which only works while they all share the prefix.
     func testEveryUnavailableReasonCarriesThePushPrefix() {
-        // Compiler-enforced, because the list below is hand-maintained and the
-        // whole point is that no case escapes the contract. An eighth case
-        // breaks this switch rather than slipping past a still-green test.
-        // No `default:` — that would defeat it.
-        // The fixtures are built *inside* the exhaustive switch, not beside it.
-        // As two lists, the compiler forced an eighth case into the switch and
-        // nothing forced a value into the array — so the error could be silenced
-        // by adding the case to the pattern and the new reason's messages would
-        // never be asserted. The switch guaranteed compilation; it did not
-        // guarantee coverage, which is what this test claims to give.
-        var reasons: [PushCapability.UnavailableReason] = []
-        switch PushCapability.UnavailableReason.noCurrentBranch {
-        case .detachedHead: reasons.append(.detachedHead)
-        case .unbornHead: reasons.append(.unbornHead)
-        case .noRemotes: reasons.append(.noRemotes)
-        case .noCurrentBranch: reasons.append(.noCurrentBranch)
-        case .upstreamRemoteMissing:
-            reasons.append(.upstreamRemoteMissing(upstream: "origin/main", branch: "main"))
-        case .ambiguousUpstream:
-            reasons.append(.ambiguousUpstream(upstream: "origin/features/x", branch: "trunk"))
-        case .localUpstream:
-            reasons.append(.localUpstream(upstream: "main", branch: "topic"))
-        }
+        // Construct every fixture directly. Switching on one constant reason
+        // only constructed that one case, leaving the other messages unchecked.
+        let reasons: [PushCapability.UnavailableReason] = [
+            .detachedHead, .unbornHead, .noRemotes, .noCurrentBranch,
+            .upstreamRemoteMissing(upstream: "origin/main", branch: "main"),
+            .ambiguousUpstream(upstream: "origin/features/x", branch: "trunk"),
+            .localUpstream(upstream: "main", branch: "topic")
+        ]
+        XCTAssertEqual(reasons.count, 7, "Every unavailable reason needs a message assertion")
         for reason in reasons {
             XCTAssertTrue(reason.message.hasPrefix("Can't push: "),
                           "\(reason) must open with the shared prefix")

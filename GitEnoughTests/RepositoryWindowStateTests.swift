@@ -17,21 +17,26 @@ final class RepositoryWindowStateTests: XCTestCase {
         defer { activity.loadFromDisk() }
         backing.store.register(firstRepo)
         backing.store.register(secondRepo)
-        let firstWindow = RepositoryWindowState(appState: backing)
-        let secondWindow = RepositoryWindowState(appState: backing)
+        let recents = RecentRepositoryStore(defaults: defaults)
+        let firstWindow = RepositoryWindowState(appState: backing, recentRepositories: recents)
+        let secondWindow = RepositoryWindowState(appState: backing, recentRepositories: recents)
 
         firstWindow.select(firstRepo)
         firstWindow.selectedTab = .changes
         firstWindow.inspectorVisible = false
+        firstWindow.expandedSidebarGroupID = "manual:first"
         secondWindow.select(secondRepo)
         secondWindow.selectedTab = .branches
+        secondWindow.expandedSidebarGroupID = "account:github.com/other"
 
         XCTAssertEqual(firstWindow.selectedRepository, firstRepo)
         XCTAssertEqual(firstWindow.selectedTab, .changes)
         XCTAssertFalse(firstWindow.inspectorVisible)
+        XCTAssertEqual(firstWindow.expandedSidebarGroupID, "manual:first")
         XCTAssertEqual(secondWindow.selectedRepository, secondRepo)
         XCTAssertEqual(secondWindow.selectedTab, .branches)
         XCTAssertTrue(secondWindow.inspectorVisible)
+        XCTAssertEqual(secondWindow.expandedSidebarGroupID, "account:github.com/other")
         XCTAssertEqual(defaults.string(forKey: AppState.selectedRepositoryKey), secondRepo.path)
 
         firstWindow.activate()
@@ -44,6 +49,7 @@ final class RepositoryWindowStateTests: XCTestCase {
         XCTAssertTrue(firstModel === secondWindow.activeViewModel,
                       "Windows must share one model and operation gate for a working copy")
         XCTAssertEqual(firstWindow.selectedTab, .changes)
+        XCTAssertEqual(firstWindow.expandedSidebarGroupID, "manual:first")
         XCTAssertEqual(secondWindow.selectedTab, .branches)
         firstModel.queue.sync {}
         backing.viewModel(for: secondRepo).queue.sync {}
@@ -62,7 +68,8 @@ final class RepositoryWindowStateTests: XCTestCase {
         defer { activity.loadFromDisk() }
         backing.store.register(firstRepo)
         backing.store.register(secondRepo)
-        let window = RepositoryWindowState(appState: backing)
+        let window = RepositoryWindowState(appState: backing,
+                                           recentRepositories: RecentRepositoryStore(defaults: defaults))
 
         window.restore(path: firstRepo.path + "/.", tab: DetailTab.changes.rawValue,
                        inspectorVisible: false)

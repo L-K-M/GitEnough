@@ -12,7 +12,8 @@ struct ChangesView: View {
     @State private var selection: ChangeSelection?
     @State private var listFocusRequest = UUID()
     @StateObject private var selectionModel = ChangesSelectionModel()
-    @FocusState private var messageFocused: Bool
+    @State private var messageFocusRequest = UUID()
+    @State private var messageUndoController = CommitMessageUndoController()
     @FocusState private var stashMessageFocused: Bool
     @State private var fileToDiscard: FileChange?
     @State private var showingStashSheet = false
@@ -82,12 +83,22 @@ struct ChangesView: View {
             unstageAll: { viewModel.unstage(viewModel.status.staged) },
             commit: requestCommit,
             stash: { showingStashSheet = true },
-            generate: { viewModel.generateCommitMessage() },
+            generate: generateMessage,
             discard: { fileToDiscard = selection?.file },
-            editMessage: { messageFocused = true })
+            editMessage: { messageFocusRequest = UUID() })
+    }
+
+    private func generateMessage() {
+        messageUndoController.finishEditing()
+        messageFocusRequest = UUID()
+        let controller = messageUndoController
+        viewModel.generateCommitMessage { replacement in
+            controller.applyGenerated(replacement)
+        }
     }
 
     private func requestCommit() {
+        messageUndoController.finishEditing()
         guard canCommit else { return }
         if amendRewritesPushedCommit {
             showingAmendPushedConfirmation = true
@@ -316,18 +327,10 @@ struct ChangesView: View {
     private var commitBox: some View {
         VStack(alignment: .leading, spacing: 8) {
             ZStack(alignment: .topLeading) {
-                TextEditor(text: $viewModel.draftCommitMessage)
-                    .font(.body)
-                    .focused($messageFocused)
-                    .accessibilityLabel("Commit message")
-                    .onKeyPress(.tab, phases: .down) { press in
-                        if press.modifiers.contains(.shift) {
-                            NSApp.keyWindow?.selectPreviousKeyView(nil)
-                        } else {
-                            NSApp.keyWindow?.selectNextKeyView(nil)
-                        }
-                        return .handled
-                    }
+                CommitMessageEditor(text: $viewModel.draftCommitMessage,
+                                    focusRequest: messageFocusRequest,
+                                    controller: messageUndoController,
+                                    onEditingBegan: { viewModel.beginCommitMessageEditing() })
                     .frame(height: 76)
                     .padding(2)
                     .overlay(
@@ -359,7 +362,7 @@ struct ChangesView: View {
 
             HStack(spacing: 8) {
                 Button {
-                    viewModel.generateCommitMessage()
+                    generateMessage()
                 } label: {
                     if viewModel.isGeneratingMessage {
                         ProgressView()

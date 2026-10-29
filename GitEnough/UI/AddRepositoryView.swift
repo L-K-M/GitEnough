@@ -11,7 +11,10 @@ struct AddRepositoryView: View {
     @State private var cloneURL = ""
     @State private var cloneDestination = ""
     @State private var isCloning = false
+    @State private var isCancelling = false
+    @State private var cancellation: GitCancellationToken?
     @State private var cloneError: String?
+    @State private var cloneStatus: String?
 
     private var canClone: Bool {
         !cloneURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -59,16 +62,23 @@ struct AddRepositoryView: View {
                     .textSelection(.enabled)
                     .lineLimit(5)
             }
+            if let cloneStatus {
+                Text(cloneStatus)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
 
             HStack {
                 if isCloning {
                     ProgressView().controlSize(.small)
-                    Text("Cloning repository…").foregroundStyle(.secondary)
+                    Text(isCancelling ? "Cancelling clone…" : "Cloning repository…")
+                        .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button("Cancel") { dismiss() }
+                Button(isCloning ? "Cancel Clone" : "Cancel", action: cancel)
                     .keyboardShortcut(.cancelAction)
-                    .disabled(isCloning)
+                    .disabled(isCancelling)
                 Button("Clone") { clone() }
                     .keyboardShortcut(.defaultAction)
                     .buttonStyle(.borderedProminent)
@@ -82,6 +92,7 @@ struct AddRepositoryView: View {
             windowState.addRepositoryError = nil
             urlFocused = true
         }
+        .onDisappear { cancellation?.cancel() }
     }
 
     private func browseForCloneDestination() {
@@ -111,12 +122,19 @@ struct AddRepositoryView: View {
         }
         let target = base.appendingPathComponent(name)
         isCloning = true
+        isCancelling = false
         cloneError = nil
+        cloneStatus = nil
+        windowState.addRepositoryError = nil
+        let request = GitCancellationToken()
+        cancellation = request
         DispatchQueue.global(qos: .userInitiated).async {
             do {
-                try GitClient.clone(trimmedURL, into: target)
+                try GitClient.clone(trimmedURL, into: target, cancellation: request)
                 DispatchQueue.main.async {
                     isCloning = false
+                    isCancelling = false
+                    cancellation = nil
                     windowState.addRepository(at: target) { repo in
                         if repo != nil { dismiss() }
                     }
@@ -124,9 +142,26 @@ struct AddRepositoryView: View {
             } catch {
                 DispatchQueue.main.async {
                     isCloning = false
-                    cloneError = error.localizedDescription
+                    isCancelling = false
+                    cancellation = nil
+                    if let cancelled = error as? GitCancellationError {
+                        cloneStatus = cancelled.retainedDirectory == nil
+                            ? "Clone cancelled. You can try again."
+                            : cancelled.localizedDescription
+                    } else {
+                        cloneError = error.localizedDescription
+                    }
                 }
             }
+        }
+    }
+
+    private func cancel() {
+        if isCloning {
+            isCancelling = true
+            cancellation?.cancel()
+        } else {
+            dismiss()
         }
     }
 }
