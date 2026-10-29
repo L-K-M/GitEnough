@@ -19,7 +19,20 @@ public final class RepoViewModel: ObservableObject, Identifiable {
     public let client: GitClient
     public let queue: DispatchQueue
     private var watcher: RepoWatcher?
+    /// How many commits a snapshot loads. **Owned by `queue`**: it is read by
+    /// `collectSnapshot`, which runs there, and the watcher can call that
+    /// directly on the queue — so a main-thread write from `loadMoreHistory`
+    /// was an unsynchronized race against every poll tick. Seeded in `init`,
+    /// before any queue work exists to read it.
     private var historyLimit: Int
+    /// `canLoadMoreHistory`'s queue-side copy, for the same reason: a
+    /// history-less refresh must carry the last answer forward, and the only
+    /// value it may read to do that is one this queue owns.
+    ///
+    /// It never leaves the queue. The answer reaches the UI inside the
+    /// `Snapshot`, which `apply` publishes on main — reading this property
+    /// from there would be the same race in the other direction.
+    private var queueCanLoadMore = false
     private var operationGate = RepoOperationGate()
 
     /// Called on the main thread after each applied snapshot, so the sidebar
@@ -225,6 +238,7 @@ public final class RepoViewModel: ObservableObject, Identifiable {
 
     /// Must be called on `queue`.
     private func collectSnapshot(includeHistory: Bool) -> Snapshot {
+        dispatchPrecondition(condition: .onQueue(queue))
         let status = (try? client.status()) ?? .empty
         let branches = (try? client.branches()) ?? []
         let remotes = (try? client.remotes()) ?? []
@@ -244,11 +258,16 @@ public final class RepoViewModel: ObservableObject, Identifiable {
         var commits: [Commit]?
         var layout: GraphLayout?
         var unpushed: Set<String>?
-        var canLoadMore = canLoadMoreHistory
+        // The queue's own copy, not the published one: a history-less refresh
+        // has to carry the last answer forward, and reading the main thread's
+        // property to do it was both a cross-thread read and a value another
+        // snapshot could already have moved on from.
+        var canLoadMore = queueCanLoadMore
         if includeHistory {
             // Load one extra commit to know whether "Load more" should be offered.
             let loaded = (try? client.log(limit: historyLimit + 1)) ?? []
             canLoadMore = loaded.count > historyLimit
+            queueCanLoadMore = canLoadMore
             let trimmed = Array(loaded.prefix(historyLimit))
             commits = trimmed
             layout = GraphLayout.layout(commits: trimmed)
@@ -283,13 +302,22 @@ public final class RepoViewModel: ObservableObject, Identifiable {
     }
 
     /// Runs a snapshot load on the queue and applies it on main.
-    private func collectAndApply(includeHistory: Bool) {
+    /// `beforeCollect` runs on the queue immediately before the snapshot, for
+    /// a caller that has to change queue-owned state and have *this* snapshot
+    /// see it — `loadMoreHistory` growing the page. It is a parameter rather
+    /// than something the caller does itself so there stays one collect-then-
+    /// apply pipeline: a second copy would silently miss whatever guard this
+    /// one grows next.
+    private func collectAndApply(includeHistory: Bool,
+                                 beforeCollect: (() -> Void)? = nil) {
         // Already on the queue when invoked from the watcher; hop if needed.
         if DispatchQueue.getSpecific(key: queueKey) != nil {
+            beforeCollect?()
             let snapshot = collectSnapshot(includeHistory: includeHistory)
             DispatchQueue.main.async { self.apply(snapshot) }
         } else {
             queue.async {
+                beforeCollect?()
                 let snapshot = self.collectSnapshot(includeHistory: includeHistory)
                 DispatchQueue.main.async { self.apply(snapshot) }
             }
@@ -301,9 +329,17 @@ public final class RepoViewModel: ObservableObject, Identifiable {
         collectAndApply(includeHistory: includeHistory)
     }
 
+    /// Grows the loaded page and reloads it.
+    ///
+    /// The increment happens **on the repo queue**, not here, because
+    /// `historyLimit` belongs to that queue — see its declaration. Doing it on
+    /// main would be the write half of the race the ownership split closes, and
+    /// it would also let a snapshot already in flight finish against the old
+    /// limit and re-trim the list the click was meant to grow.
     public func loadMoreHistory() {
-        historyLimit += Self.historyPageSize
-        collectAndApply(includeHistory: true)
+        collectAndApply(includeHistory: true) {
+            self.historyLimit += Self.historyPageSize
+        }
     }
 
     // MARK: - Mutating operations

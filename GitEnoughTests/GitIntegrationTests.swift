@@ -1316,6 +1316,73 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertTrue(try client.status().staged.contains { $0.path == "new.txt" })
     }
 
+    // MARK: - History pagination across the queue boundary
+
+    /// `historyLimit` and the "is there more?" answer are read by
+    /// `collectSnapshot`, which runs on the repo's serial queue — and the
+    /// watcher calls it there directly. Growing the page from the main thread
+    /// was therefore an unsynchronized write against every poll tick, and a
+    /// history-less refresh read the published flag off-thread to carry it
+    /// forward. Both now belong to the queue; this drives the user-visible
+    /// contract they exist for.
+    func testLoadMoreHistoryGrowsThePageAndKeepsTheFlagAcrossAHistorylessRefresh() throws {
+        // setUp builds four commits: c1, c2 on feature, c3, and the merge.
+        let viewModel = RepoViewModel(repo: Repository(url: repoURL),
+                                      historyLimit: 2,
+                                      defaults: isolatedDefaults())
+
+        awaitSnapshot(from: viewModel,
+                      satisfying: { viewModel.commits.count == 2 }) {
+            viewModel.refresh(includeHistory: true)
+        }
+        XCTAssertTrue(viewModel.canLoadMoreHistory, "the first page, with more behind it")
+
+        awaitSnapshot(from: viewModel) { viewModel.refresh(includeHistory: false) }
+        XCTAssertTrue(viewModel.canLoadMoreHistory,
+                      "a status-only refresh must carry the last answer forward")
+        XCTAssertEqual(viewModel.commits.count, 2, "and must not disturb the page")
+
+        awaitSnapshot(from: viewModel,
+                      satisfying: { viewModel.commits.count == 4 }) {
+            viewModel.loadMoreHistory()
+        }
+        XCTAssertFalse(viewModel.canLoadMoreHistory, "nothing left to load")
+    }
+
+    /// Runs `trigger` and returns once an applied snapshot satisfies
+    /// `isSatisfied`.
+    ///
+    /// Waiting on the *outcome* rather than on the next event is deliberate.
+    /// `onStatusChange` fires for every applied snapshot, so a snapshot already
+    /// in flight — or a watcher tick, in a test that starts one — could satisfy
+    /// a wait meant for the one `trigger` causes, and the assertions after it
+    /// would run against the state before the change. The default condition is
+    /// for the steps that have no state change to wait for.
+    private func awaitSnapshot(from viewModel: RepoViewModel,
+                               satisfying isSatisfied: @escaping () -> Bool = { true },
+                               _ trigger: () -> Void) {
+        let applied = expectation(description: "snapshot applied")
+        applied.assertForOverFulfill = false
+        viewModel.onStatusChange = { _ in
+            if isSatisfied() { applied.fulfill() }
+        }
+        trigger()
+        wait(for: [applied], timeout: 10)
+        viewModel.onStatusChange = nil
+    }
+
+    /// A per-test suite, so a view model's draft persistence never touches the
+    /// developer's real `UserDefaults`.
+    private func isolatedDefaults() -> UserDefaults {
+        let name = "GitEnoughTests-\(UUID().uuidString)"
+        // Force-unwrapped on purpose: falling back to `.standard` would read
+        // and write the developer's real defaults, which is the one thing this
+        // helper exists to prevent.
+        let defaults = UserDefaults(suiteName: name)!
+        addTeardownBlock { defaults.removePersistentDomain(forName: name) }
+        return defaults
+    }
+
     /// A throwaway repository with an unborn HEAD, removed when the test ends.
     ///
     /// `git init` runs before the client is built: nothing in `GitClient.init`
