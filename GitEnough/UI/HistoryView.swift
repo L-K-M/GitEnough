@@ -26,7 +26,7 @@ struct HistoryView: View {
 
     private var isFiltering: Bool { !activeFilter.isEmpty }
 
-    /// Commits matching the filter (subject / author / hash prefix / ref
+    /// Commits matching the filter (subject / author / email / hash prefix / ref
     /// names). `localizedStandardContains` is Finder-style: case- *and*
     /// diacritic-insensitive, so "muller" finds "Müller". Only searches the
     /// loaded pages — "Load older commits…" widens the searchable set.
@@ -34,19 +34,7 @@ struct HistoryView: View {
     /// "feature-x" finds the commit(s) carrying that decoration (typically
     /// the branch tip), not just the ones whose subject happens to mention it.
     private var visibleCommits: [Commit] {
-        guard isFiltering else { return viewModel.commits }
-        let needle = activeFilter.lowercased()
-        return viewModel.commits.filter {
-            // Cheapest predicate first: the plain hash-prefix check runs for
-            // every commit before the localized folds (which are noticeably
-            // more expensive) get a chance to.
-            $0.hash.lowercased().hasPrefix(needle)
-                || $0.subject.localizedStandardContains(activeFilter)
-                || $0.author.localizedStandardContains(activeFilter)
-                || $0.decorations.contains {
-                    $0.name.localizedStandardContains(activeFilter)
-                }
-        }
+        HistorySearch.filter(viewModel.commits, query: activeFilter)
     }
 
     private var headRow: Int? {
@@ -282,7 +270,7 @@ struct HistoryView: View {
         HStack(spacing: 6) {
             Image(systemName: "line.3.horizontal.decrease.circle")
                 .foregroundStyle(.secondary)
-            TextField("Filter by subject, author, hash, or ref", text: $filterText)
+            TextField("Filter by subject, author, email, hash, or ref", text: $filterText)
                 .textFieldStyle(.plain)
                 .autocorrectionDisabled()
             if isFiltering {

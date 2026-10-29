@@ -78,6 +78,24 @@ final class GitIntegrationTests: XCTestCase {
         XCTAssertEqual(Set(commits.map(\.hash)).count, 4)
     }
 
+    func testLogClassifiesSlashNamedLocalAndRemoteRefsExactly() throws {
+        // A local branch can even share the displayed name of a remote ref.
+        try run(["branch", "topic/one"])
+        try run(["branch", "origin/topic"])
+        try run(["update-ref", "refs/remotes/origin/topic", "HEAD"])
+        try run(["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/topic"])
+        try run(["tag", "release/one"])
+
+        let head = try XCTUnwrap(client.log(limit: 50).first { $0.isHead })
+
+        XCTAssertTrue(head.decorations.contains(RefDecoration(kind: .localBranch, name: "topic/one")))
+        XCTAssertTrue(head.decorations.contains(RefDecoration(kind: .localBranch, name: "origin/topic")))
+        XCTAssertTrue(head.decorations.contains(RefDecoration(kind: .remoteBranch, name: "origin/topic")))
+        XCTAssertTrue(head.decorations.contains(RefDecoration(kind: .tag, name: "release/one")))
+        XCTAssertFalse(head.decorations.contains { $0.name == "origin/HEAD" })
+        XCTAssertFalse(head.decorations.contains(RefDecoration(kind: .remoteBranch, name: "topic/one")))
+    }
+
     func testGraphLayoutOfMergeShape() throws {
         let commits = try client.log(limit: 50)
         let layout = GraphLayout.layout(commits: commits)
