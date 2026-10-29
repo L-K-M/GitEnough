@@ -430,6 +430,56 @@ final class GitParsersTests: XCTestCase {
         XCTAssertEqual(GitParsers.unquoteGitPath("\"m\\303\\274nchen.txt\""), "münchen.txt")
     }
 
+    /// `unquoteGitPath` is **not idempotent**, which is why every path may pass
+    /// through it exactly once. It strips the outer quotes of whatever it is
+    /// handed, so a name that itself begins and ends with `"` survives the
+    /// first pass still looking quoted and loses its real characters on a
+    /// second. Pinned here as a property of the function, next to the status
+    /// test that pins the one call path that used to run it twice.
+    func testUnquoteGitPathIsNotIdempotent() {
+        let once = GitParsers.unquoteGitPath("\"\\\"quoted\\\"\"")
+        XCTAssertEqual(once, "\"quoted\"")
+        XCTAssertEqual(GitParsers.unquoteGitPath(once), "quoted",
+                       "a second pass eats the name's own quotes")
+    }
+
+    /// A rename destination is C-unquoted exactly once.
+    ///
+    /// The status line is verbatim from git 2.43 after
+    /// `git mv plain.txt '"quoted"'`. The destination used to be unquoted at
+    /// the call site and again inside `makeChange`, so it came back as
+    /// `quoted` — a path not in the repository, which stage and unstage then
+    /// fail on and discard silently acts on.
+    func testStatusRenameDestinationIsUnquotedExactlyOnce() {
+        let output = """
+        # branch.oid 1234567890abcdef
+        # branch.head main
+        2 R. N... 100644 100644 100644 5626abf 5626abf R100 "\\"quoted\\""\tplain.txt
+
+        """
+        let status = GitParsers.parseStatus(output)
+
+        XCTAssertEqual(status.staged.map(\.path), ["\"quoted\""])
+        // The other direction of the same mistake: moving the unquote must not
+        // stop it running on the source half.
+        XCTAssertEqual(status.staged.first?.originalPath, "plain.txt")
+    }
+
+    /// Both halves of a rename are quoted independently, so both must be
+    /// unquoted — the source is not merely passed through.
+    func testStatusRenameUnquotesBothHalves() {
+        let output = """
+        # branch.oid 1234567890abcdef
+        # branch.head main
+        2 R. N... 100644 100644 100644 5626abf 5626abf R100 "n\\303\\244w.txt"\t"\\303\\244ld.txt"
+
+        """
+        let status = GitParsers.parseStatus(output)
+
+        XCTAssertEqual(status.staged.first?.path, "näw.txt")
+        XCTAssertEqual(status.staged.first?.originalPath, "äld.txt")
+    }
+
     // MARK: - Diff parser
 
     func testDiffParserClassifiesLines() {
