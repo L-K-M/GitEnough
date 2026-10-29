@@ -444,45 +444,73 @@ struct HistoryView: View {
     }
 }
 
-/// One row of the commit list, aligned with the graph: subject, ref chips,
-/// author, relative date.
+/// One row of the commit list, aligned with the graph. Secondary metadata gives
+/// way to the subject when the sidebar and inspector leave a narrow list.
 private struct CommitRowView: View {
 
     let commit: Commit
     let isHead: Bool
 
     var body: some View {
-        HStack(spacing: 8) {
-            Text(commit.subject.isEmpty ? "(no message)" : commit.subject)
-                .fontWeight(isHead ? .semibold : .regular)
-                .lineLimit(1)
-                .truncationMode(.tail)
+        GeometryReader { geometry in
+            let compact = geometry.size.width < 600
+            let refLimit = compact ? 1 : 3
+            let refWidth = compact ? min(120, max(44, geometry.size.width * 0.25)) : 180
 
-            ForEach(commit.decorations.prefix(3)) { decoration in
-                RefChip(decoration: decoration)
+            HStack(spacing: 8) {
+                Text(commit.subject.isEmpty ? "(no message)" : commit.subject)
+                    .fontWeight(isHead ? .semibold : .regular)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .layoutPriority(1)
+
+                if !commit.decorations.isEmpty {
+                    HStack(spacing: 4) {
+                        ForEach(commit.decorations.prefix(refLimit)) { decoration in
+                            RefChip(decoration: decoration)
+                        }
+                        if commit.decorations.count > refLimit {
+                            Text("+\(commit.decorations.count - refLimit)")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .fixedSize()
+                        }
+                    }
+                    .frame(maxWidth: refWidth, alignment: .trailing)
+                    .fixedSize(horizontal: true, vertical: false)
+                }
+
+                if !compact {
+                    Text(commit.author)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .frame(maxWidth: 100, alignment: .trailing)
+                        .fixedSize(horizontal: true, vertical: false)
+
+                    RelativeDateText(date: commit.date)
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .frame(width: 110, alignment: .trailing)
+                }
             }
-            if commit.decorations.count > 3 {
-                Text("+\(commit.decorations.count - 3)")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-
-            Spacer(minLength: 8)
-
-            Text(commit.author)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-
-            RelativeDateText(date: commit.date)
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-                .frame(width: 110, alignment: .trailing)
+            .padding(.leading, 8)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .padding(.leading, 8)
-        // Fill the fixed-height row frame (applied by the caller) so the
-        // selection background is as tall as the graph strip next to it, not
-        // just as tall as the text.
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .help(metadataDescription)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(metadataDescription)
+    }
+
+    private var metadataDescription: String {
+        var lines = [commit.subject.isEmpty ? "(no message)" : commit.subject,
+                     "\(commit.author) <\(commit.email)>",
+                     commit.date?.formatted(date: .abbreviated, time: .shortened) ?? "Date unavailable",
+                     commit.hash]
+        if !commit.decorations.isEmpty {
+            lines.append("Refs: " + commit.decorations.map(\.name).joined(separator: ", "))
+        }
+        return lines.joined(separator: "\n")
     }
 }
