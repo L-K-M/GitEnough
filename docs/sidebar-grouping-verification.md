@@ -86,7 +86,7 @@ remote. Remote URL strings are enough; do not fetch example remotes.
 ## Fixed-header regression and observed results
 
 The revised fixed-header layout was exercised in the running app using owned
-disposable fixtures. Automated coverage includes seven rendered
+disposable fixtures. Automated coverage includes eight rendered
 accordion/split-window tests and the explicit-navigation window-state contract.
 Those component checks do not cover full-app repository reveal and do not
 replace the running-app checks below.
@@ -105,6 +105,11 @@ Verified behavior:
 - **Empty, short, and long bodies:** each occupied the same remaining vertical
   budget. Empty or short content did not pull later headers upward or reduce the
   body to its content height.
+- **Less than one row of remaining space:** at 961 × 573 with sixteen group
+  headers, every header stayed visible while the body used the small remaining
+  gap. Scrolling over the final header did not move the headers. The native
+  geometry regression verifies 90 points of headers and a 30-point body fit
+  exactly inside a 120-point viewport; true header overflow remains scrollable.
 - **Keyboard and selection:** Up/Down moved focus between headers. Right, Space,
   and Return opened the focused group while one body stayed open. Tab entered
   the native List; repeated Up/Down selected repository rows stably. Header

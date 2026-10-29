@@ -46,7 +46,10 @@ private struct AccordionLayout: Layout {
                       cache: inout ()) -> CGSize {
         let width = proposal.width ?? 250
         let headersHeight = headerSizes(width: width, subviews: subviews).reduce(0) { $0 + $1.height }
-        return CGSize(width: width, height: max(viewportHeight, headersHeight + 72))
+        // Keep every header pinned whenever they fit, even if the remaining
+        // list is shorter than a row. Overflow only when the headers cannot fit.
+        let height = headersHeight > viewportHeight ? headersHeight + 72 : viewportHeight
+        return CGSize(width: width, height: height)
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize,

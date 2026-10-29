@@ -34,6 +34,21 @@ final class SidebarAccordionTests: XCTestCase {
         }
     }
 
+    func testHeadersStayPinnedWhenTheListHasLessThanItsPreferredMinimumHeight() async throws {
+        let groups = makeGroups(count: 3)
+        let fixture = LayoutFixture(groups: groups, expandedID: groups[0].id, rowCount: 80,
+                                    size: NSSize(width: 280, height: 120))
+        defer { fixture.close() }
+        await fixture.settleLayout()
+
+        let viewport = try XCTUnwrap(fixture.frames["viewport"])
+        let body = try XCTUnwrap(fixture.frames["body"])
+        XCTAssertEqual(viewport.height, 120, accuracy: 1)
+        XCTAssertEqual(body.height, 30, accuracy: 1,
+                       "Headers that fit must stay visible even when fewer than 72 points remain for repositories")
+        try assertFillsSidebar(fixture, groups: groups, expandedID: groups[0].id)
+    }
+
     func testResizingKeepsHeadersAndExpandedListInsideTheSidebar() async throws {
         let groups = makeGroups(count: 3)
         let fixture = LayoutFixture(groups: groups, expandedID: groups[1].id, rowCount: 100,
