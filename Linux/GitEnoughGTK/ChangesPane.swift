@@ -19,6 +19,8 @@ final class ChangesPane {
     private let amendToggle: UnsafeMutablePointer<GtkWidget>
     private let generateButton: UnsafeMutablePointer<GtkWidget>
     private let diffView = DiffView()
+    /// Shown under the commit box when a ✨ Generate attempt failed.
+    private let generationError = UI.label("", xalign: 0)
     private var observer: ModelObserver?
 
     private var unstaged: [FileChange] = []
@@ -72,8 +74,38 @@ final class ChangesPane {
         let buttons = UI.box(GTK_ORIENTATION_HORIZONTAL, spacing: 6)
         gtk_widget_set_halign(buttons, GTK_ALIGN_END)
         UI.append(buttons, generateButton, commitButton)
+        // Generation failures land on their own published property, not on
+        // `errorMessage` — so `RepoDetailPane`'s error banner never shows one,
+        // and ✨ Generate used to fail in complete silence here: the button
+        // greyed out, came back, and the box was unchanged, which is exactly
+        // what a click that never registered looks like. "No API key
+        // configured" is the default state of a fresh install, so the most
+        // likely first use of the feature was also the most confusing.
+        //
+        // Wrapping, and capped at three lines like the macOS caption, so a long
+        // body cannot push the buttons off the bottom of the pane. Hidden while
+        // nil, so the commit box keeps its usual height in the ordinary case.
+        //
+        // MIDDLE rather than END, because what gets dropped matters: a
+        // provider's refusal opens with a status line and a URL and names the
+        // cause at the very end. Measured on gtk4 4.14.5 in this column, for a
+        // 210-byte error, counting which source bytes actually receive a glyph:
+        //
+        //   NONE    4 lines   head [0,111)   tail [172,210)   overflows the cap
+        //   END     3 lines   head [0,111)   tail [210,210)   tail not drawn
+        //   MIDDLE  3 lines   head [0,111)   tail [180,210)   tail drawn
+        //
+        // So END would have hidden exactly the part worth reading, for exactly
+        // the long bodies this caption exists to surface.
+        UI.addClass(generationError, "error")
+        let errorLabel = opaque(generationError)
+        gtk_label_set_wrap(errorLabel, 1)
+        gtk_label_set_lines(errorLabel, 3)
+        gtk_label_set_ellipsize(errorLabel, PANGO_ELLIPSIZE_MIDDLE)
+        gtk_label_set_max_width_chars(errorLabel, 1)
+        UI.setVisible(generationError, false)
         let commitBox = UI.box(GTK_ORIENTATION_VERTICAL, spacing: 6, margin: 6)
-        UI.append(commitBox, messageScroller, amendToggle, buttons)
+        UI.append(commitBox, messageScroller, generationError, amendToggle, buttons)
 
         let left = UI.box(GTK_ORIENTATION_VERTICAL)
         UI.append(left, lists, commitBox)
@@ -118,6 +150,13 @@ final class ChangesPane {
         }
         UI.setText(unstagedHeader, "Unstaged (\(unstaged.count))")
         UI.setText(stagedHeader, "Staged (\(staged.count))")
+
+        if let failure = viewModel.messageGenerationError {
+            UI.setText(generationError, failure)
+            UI.setVisible(generationError, true)
+        } else {
+            UI.setVisible(generationError, false)
+        }
 
         if !isSyncingMessage, currentMessage() != viewModel.draftCommitMessage {
             isSyncingMessage = true
