@@ -111,16 +111,18 @@ backlog and reconciled against it afterwards. Entries use the schema
 severity. No blocking findings: nothing in this wave corrupts a repository,
 destroys uncommitted work, or crashes the app.
 
-**Eleven PRs are open from this wave and their entries have been removed from
-this document** (`#109`–`#116`, `#119`–`#121`): the per-side status letter
+**Twelve PRs are open from this wave and their entries have been removed from
+this document** (`#109`–`#116`, `#119`–`#122`): the per-side status letter
 (`o-L2`), Mark Resolved accepting a deletion (`o-L7`), the GTK history signature
 (`o-L1`), the activity history's file mode (`C5b`), the HEAD-row rescan
 (`o-P2`), the GTK commit-box enablement and amend read-back (`o-X15`, `o-X16`),
 the history page's queue ownership (`o-L11`), the GTK diff pane rendering
 through `DiffParser`, the rename destination unquoted twice (`o-L10`), the
-duplicate-parent phantom lane (`o-H5`), and the GTK front end reporting a failed
-✨ Generate. `o-X5` was removed as already shipped in `main`; `o-X13` was removed
-because it does not reproduce (see Verified non-issues).
+duplicate-parent phantom lane (`o-H5`), the GTK front end reporting a failed
+✨ Generate, and the Settings surface itself (`o-PS9`), which `#122` builds
+along with the keyring timeout that case exposed. `o-X5` was removed as already
+shipped in `main`; `o-X13` was removed because it does not reproduce (see
+Verified non-issues).
 
 **How the evidence was gathered.** The container had no Swift toolchain and no
 gtk4, so both were installed to match the CI pins — Swift 6.2.1 on Ubuntu 24.04
@@ -132,24 +134,6 @@ too, so the GTK front end can be built *and run*: `xvfb-run` satisfies
 real view model and then walks the live widget tree is how the GTK findings here
 were confirmed and their fixes shown to work. `GitEnough/UI/` is macOS-only and
 could not be compiled here; findings in it are read from source, and say so.
-
-### No Settings surface on Linux
-
-missing features — important
-
-The LLM provider, base URL, model and API key are configurable only through
-`GitEnough/UI/SettingsView.swift`, which is macOS-only. The GTK ✨ Generate
-button is wired and functional, but there is no way to give it an endpoint or a
-key short of writing the key into the Secret Service by hand with `secret-tool`
-and the rest into `UserDefaults`. So the headline feature is unreachable on the
-platform. (`o-PS9` is the same gap seen from the keyring side: the *writer*
-exists — `SecretService.save` — and nothing calls it.)
-
-Build a GTK preferences dialog over the same `LLMConfiguration` and
-`KeychainStore`. Roughly a day. **Deliberately left without a PR in this wave**:
-it is a feature build rather than a fix, and a preferences dialog is the one
-thing an `xvfb-run` widget-tree walk judges poorly — it can show that the fields
-exist and bind, not whether the pane is usable.
 
 ### The HEAD ring is wider than the lane it sits in
 
@@ -2840,15 +2824,6 @@ Subscribers are stored in a dictionary and notified in its iteration order, whic
 is unspecified and varies per process. macOS delivers in subscription order.
 **Fix:** an ordered store, so the two platforms behave alike.
 
-### o-PS9 · The Linux keyring has no writer — M
-
-`SecretService.save` exists and `KeychainStore` routes to it, so the *model*
-can store a key on Linux — what is missing is any surface that calls it. The
-Settings window is `UI/`, which is macOS-only, so the AI feature cannot be
-configured on Linux at all. Pairs with **No Settings surface on Linux** below:
-the keyring write and the dialog that drives it are the same gap seen from two
-sides.
-
 ### o-PS10 · `KeychainStore` imports `Security` from `AI/` — S
 
 Direct violation of the stated rule that nothing outside `Platform/` imports
@@ -3149,8 +3124,9 @@ five have shipped (PRs #96–#101); what remains starts at the sixth.*
 8. **o-A1 + o-A2 + o-A3 (+ o-A7, o-A8) · Harden the LLM request.** Bound the
    stat, use a delimiter the payload cannot forge, set a real wall-clock
    deadline. All five are the same request path and share a fixture.
-9. **o-A6 + o-PS9 · Make local models usable**, on both platforms. The best
-   answer to the app's own privacy positioning.
+9. **o-A6 · Make local models usable**, on both platforms — `#122` gives Linux
+   the Settings surface this needed, so only the "no API key" half of `o-A6`
+   is left. The best answer to the app's own privacy positioning.
 
 ### The everyday loop
 
