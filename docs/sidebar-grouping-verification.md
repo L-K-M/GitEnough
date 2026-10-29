@@ -74,9 +74,11 @@ remote. Remote URL strings are enough; do not fetch example remotes.
 5. Move two repositories to the group, rename it, then reopen the app and verify
    membership persists. Delete the group and confirm both registrations appear
    under Ungrouped with their files, stars, and original flat order intact.
-6. Open two repository windows. Change the app-wide grouping mode, then expand
-   different groups in the two windows. Verify their expansions remain
-   independent and restore after reopening.
+6. Open two repository windows. Change the app-wide grouping mode, then open
+   different groups and select different repositories. Verify their live states
+   remain independent while switching between windows. Record quit/relaunch
+   behavior separately: the independently browsed group currently resets to the
+   selected repository's group, as described under restoration limits below.
 7. Delete a group from another window while it is expanded. The first window
    should recover to a valid group. Apply a filter with no matches and use Clear
    Filters to recover without losing the selected repository.
@@ -84,9 +86,10 @@ remote. Remote URL strings are enough; do not fetch example remotes.
 ## Fixed-header regression and observed results
 
 The revised fixed-header layout was exercised in the running app using owned
-disposable fixtures. The final isolated hosted suite passes all 513 tests,
-including seven rendered accordion/split-window tests and the explicit-navigation
-window-state contract. Component checks do not replace the full-app checks below.
+disposable fixtures. Automated coverage includes seven rendered
+accordion/split-window tests and the explicit-navigation window-state contract.
+Those component checks do not cover full-app repository reveal and do not
+replace the running-app checks below.
 
 Before this revision, DisclosureGroups lived inside one scrolling outline.
 Opening a group with many repositories made its siblings scroll away. The
@@ -112,8 +115,10 @@ Verified behavior:
   worked from the empty body outside a List.
 - **Manual groups:** Return created an empty group; rename and deletion worked.
   Deleting it opened a valid fallback and preserved all 29 fixture registrations.
-- **External reveal:** opening the eighteenth Alpha repository while the query
-  `Gamma` hid it cleared the query, opened its group, and scrolled to its row.
+- **Explicit opening and reveal:** reopening the already selected eighteenth
+  Alpha repository while a query hid its row cleared the query, reapplied native
+  selection, and scrolled it fully into view. Grouped and flat modes passed, with
+  fixed headers retained in grouped mode. Ordinary arrow navigation stayed stable.
 - **Independent windows:** two windows retained different open groups and
   repository selections when switching between them.
 - **Flat mode:** mouse and keyboard selection, stars, the Uncommitted Changes
@@ -124,6 +129,28 @@ Verified behavior:
 - **Actual resizing:** with the commit inspector visible, resizing the real app
   between 961 × 573 and 1920 × 960 passed after the metadata ScrollView fix
   described below. This covers the short and tall window layouts.
+
+## Reopening an already selected repository
+
+Before the fix, explicitly opening an already selected repository after a query
+hid its row could clear the query yet leave the row offscreen. Accessibility
+reported Alpha18 selected while the scrollbar stayed at the top and only
+Alpha01–Alpha12 were visible. The manual reproduction uses name sorting: select
+Alpha18, search for Alpha01 in the same group, then use Command-O to open Alpha18
+again.
+
+In the corrected running app, Command-O cleared the query, selected Alpha18, and
+scrolled it fully into view at the bottom with all headers pinned. The same
+selection-and-visibility flow passed in flat mode. Repeated ordinary arrow
+navigation retained the existing List and stable selection. Explicit Open, add,
+and drop refresh the native List and reapply selection after its body mounts;
+ordinary row navigation preserves its native table and keyboard focus.
+
+This regression is verified manually in the actual app. The rendered component
+and native split-window tests do not establish this full-app reveal behavior.
+Repeat the procedure after changing sidebar identity, filtering, selection,
+or scroll-view ownership; require both the correct native selection and a fully
+visible target row.
 
 ## Inspector resize regression
 

@@ -13,6 +13,8 @@ struct SidebarView: View {
     @AppStorage("sidebarGroupingMode") private var groupingRaw = SidebarGroupingMode.none.rawValue
     @State private var filterText = ""
     @State private var listFocusRequest = UUID()
+    @State private var repositoryListRevision = UUID()
+    @State private var repositorySelectionRestoreRequest: UUID?
     @State private var selectedGroupHeaderID: String?
     @FocusState private var focusedGroupHeaderID: String?
     @FocusState private var searchFocused: Bool
@@ -35,6 +37,11 @@ struct SidebarView: View {
     private struct SelectedRepositoryGroup: Equatable {
         let path: String?
         let id: String?
+    }
+
+    private struct RepositoryListIdentity: Hashable {
+        let groupID: String
+        let revision: UUID
     }
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -99,8 +106,9 @@ struct SidebarView: View {
 
     private var selection: Binding<String?> {
         Binding(
-            get: { windowState.selectedRepoPath },
+            get: { repositorySelectionRestoreRequest == nil ? windowState.selectedRepoPath : nil },
             set: { path in
+                guard repositorySelectionRestoreRequest == nil else { return }
                 if let path, let repo = store.repositories.first(where: { $0.path == path }) {
                     selectedGroupHeaderID = nil
                     windowState.select(repo)
@@ -189,7 +197,8 @@ struct SidebarView: View {
     }
 
     var body: some View {
-        ScrollViewReader { proxy in
+        let listRevision = repositoryListRevision
+        return ScrollViewReader { proxy in
             Group {
                 if groupingMode == .none {
                     List(selection: selection) {
@@ -199,35 +208,53 @@ struct SidebarView: View {
                         }
                     }
                     .listStyle(.sidebar)
+                    .id(listRevision)
+                    .onAppear {
+                        if let group = groups.first {
+                            scrollToRepository(in: group.id, revision: listRevision, with: proxy)
+                        }
+                    }
+                    .onChange(of: visibleRepositories.map(\.path)) { _, _ in
+                        if windowState.lastAddedRepoPath != nil, let group = groups.first {
+                            scrollToRepository(in: group.id, revision: listRevision, with: proxy)
+                        }
+                    }
                 } else {
                     SidebarAccordion(groups: groups, expandedGroupID: expandedGroupID) { group in
                         groupHeader(group)
                     } content: { group in
-                        Group {
-                            if group.repositories.isEmpty {
-                                VStack(alignment: .leading) {
-                                    if !filterText.isEmpty || sidebarFilter != .all {
-                                        noMatchingRepositories
-                                    } else {
-                                        Text("No repositories in this group")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
+                        ScrollViewReader { listProxy in
+                            Group {
+                                if group.repositories.isEmpty {
+                                    VStack(alignment: .leading) {
+                                        if !filterText.isEmpty || sidebarFilter != .all {
+                                            noMatchingRepositories
+                                        } else {
+                                            Text("No repositories in this group")
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                        Spacer(minLength: 0)
                                     }
-                                    Spacer(minLength: 0)
+                                    .padding(12)
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                                } else {
+                                    List(selection: selection) {
+                                        ForEach(group.repositories) { repo in rowContent(repo) }
+                                    }
+                                    .listStyle(.sidebar)
+                                    .scrollContentBackground(.hidden)
+                                    .accessibilityLabel("\(group.title) repositories")
                                 }
-                                .padding(12)
-                                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                            } else {
-                                List(selection: selection) {
-                                    ForEach(group.repositories) { repo in rowContent(repo) }
+                            }
+                            .onAppear { scrollToRepository(in: group.id, revision: listRevision, with: listProxy) }
+                            .onChange(of: group.repositories.map(\.path)) { _, paths in
+                                if let path = windowState.lastAddedRepoPath, paths.contains(path) {
+                                    scrollToRepository(in: group.id, revision: listRevision, with: listProxy)
                                 }
-                                .listStyle(.sidebar)
-                                .scrollContentBackground(.hidden)
-                                .accessibilityLabel("\(group.title) repositories")
                             }
                         }
-                        .id(group.id)
-                        .onAppear { scrollToRepository(in: group, with: proxy) }
+                        .id(RepositoryListIdentity(groupID: group.id, revision: listRevision))
                     }
                 }
             }
@@ -236,7 +263,7 @@ struct SidebarView: View {
             .onChange(of: windowState.sidebarSearchRequest) { _, _ in searchFocused = true }
             .onDrop(of: [UTType.fileURL], isTargeted: nil, perform: handleDrop)
             .onChange(of: windowState.lastAddedRepoPath) { _, newPath in
-                reveal(newPath, with: proxy)
+                reveal(newPath)
             }
             .onAppear {
                 // ContentView restores the scene's group in its onAppear.
@@ -437,12 +464,26 @@ struct SidebarView: View {
         return .handled
     }
 
-    private func scrollToRepository(in group: SidebarRepositoryGroup, with proxy: ScrollViewProxy) {
-        let path = windowState.lastAddedRepoPath ?? windowState.selectedRepoPath
-        guard let path, group.repositories.contains(where: { $0.path == path }) else { return }
+    private func scrollToRepository(in groupID: String, revision: UUID, with proxy: ScrollViewProxy) {
+        // Resolve the live rows after filters change, then let the native List
+        // install them before scrolling. An onAppear snapshot can still be filtered.
         DispatchQueue.main.async {
-            proxy.scrollTo(path, anchor: .center)
-            if windowState.lastAddedRepoPath == path { windowState.lastAddedRepoPath = nil }
+            guard repositoryListRevision == revision else { return }
+            // Release this request's native selection reset even if its target
+            // was removed or hidden before the mounted list could reveal it.
+            if repositorySelectionRestoreRequest == revision { repositorySelectionRestoreRequest = nil }
+            let pendingPath = windowState.lastAddedRepoPath
+            guard let path = pendingPath ?? windowState.selectedRepoPath,
+                  let group = groups.first(where: { $0.id == groupID }),
+                  group.repositories.contains(where: { $0.path == path }) else { return }
+            DispatchQueue.main.async {
+                guard repositoryListRevision == revision,
+                      windowState.lastAddedRepoPath == pendingPath else { return }
+                withAnimation(pendingPath != nil && !reduceMotion ? .default : nil) {
+                    proxy.scrollTo(path, anchor: .center)
+                }
+                if windowState.lastAddedRepoPath == path { windowState.lastAddedRepoPath = nil }
+            }
         }
     }
 
@@ -602,10 +643,10 @@ struct SidebarView: View {
         .padding(.horizontal, 14)
     }
 
-    /// Scrolls the sidebar so a freshly added repository is on screen. Deferred
-    /// one runloop turn so the List has actually inserted the row first, and
-    /// clears the cue afterwards so re-adding the same repository re-reveals it.
-    private func reveal(_ path: String?, with proxy: ScrollViewProxy) {
+    /// Open, clone and drop must reapply selection even when a filter hid the
+    /// already-selected repository. Remount only for these explicit requests;
+    /// ordinary row navigation keeps its native table and keyboard focus.
+    private func reveal(_ path: String?) {
         guard let path else { return }
         if !visibleRepositories.contains(where: { $0.path == path }) {
             searchExpansionSnapshot = nil
@@ -613,16 +654,11 @@ struct SidebarView: View {
         }
         if groupingMode != .none,
            let group = unfilteredGroups.first(where: { $0.repositories.contains { $0.path == path } }) {
-            if expandedGroupID != group.id {
-                windowState.expandedSidebarGroupID = group.id
-                // The new native List scrolls after it is mounted.
-                return
-            }
+            windowState.expandedSidebarGroupID = group.id
         }
-        DispatchQueue.main.async {
-            withAnimation(reduceMotion ? nil : .default) { proxy.scrollTo(path, anchor: .center) }
-            if windowState.lastAddedRepoPath == path { windowState.lastAddedRepoPath = nil }
-        }
+        let revision = UUID()
+        repositorySelectionRestoreRequest = revision
+        repositoryListRevision = revision
     }
 
     @ViewBuilder
