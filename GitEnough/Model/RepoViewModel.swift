@@ -31,7 +31,7 @@ public final class RepoViewModel: ObservableObject, Identifiable {
 
     public static let historyPageSize = 300
     private static let rebaseCommitRefusal =
-        "Can't commit while resolving a rebase. Use Continue Rebase, Skip Commit, or Abort Rebase."
+        "Can't commit while resolving a rebase. Use git rebase --continue, --skip, or --abort."
 
     // MARK: - Published state
 
@@ -229,13 +229,16 @@ public final class RepoViewModel: ObservableObject, Identifiable {
         let remotes = (try? client.remotes()) ?? []
         let stash = (try? client.stashList()) ?? []
         let operation = client.inProgressOperation()
+        let isEditingRebaseCommit = operation == .rebase && client.isEditingRebaseCommit()
         var operationLabel: String?
         if let operation { operationLabel = client.operationLabel(for: operation) }
         let mergeState = MergeState(
             operation: operation,
             operationLabel: operationLabel,
             conflictedFiles: (try? client.conflictedPaths()) ?? [],
-            isEditingRebaseCommit: operation == .rebase && client.isEditingRebaseCommit()
+            isEditingRebaseCommit: isEditingRebaseCommit,
+            rebaseSkipTarget: operation == .rebase && !isEditingRebaseCommit
+                ? client.rebaseSkipTarget(headHash: status.headHash) : nil
         )
         var commits: [Commit]?
         var layout: GraphLayout?
@@ -644,11 +647,13 @@ public final class RepoViewModel: ObservableObject, Identifiable {
         }
     }
 
-    func skipRebaseCommit() {
-        guard mergeState.operation == .rebase else { return }
+    func skipRebaseCommit(_ expected: RebaseSkipTarget) {
         perform("Skipping rebase commit…") { client in
-            guard client.inProgressOperation() == .rebase else {
-                throw GitError(message: "Can't skip: no rebase is in progress.", exitCode: -1)
+            guard client.inProgressOperation() == .rebase,
+                  !client.isEditingRebaseCommit(),
+                  client.rebaseSkipTarget(headHash: try client.status().headHash) == expected else {
+                throw GitError(message: "Can't skip: the rebase changed. Review it and try again.",
+                               exitCode: -1)
             }
             try client.rebaseSkip()
         }

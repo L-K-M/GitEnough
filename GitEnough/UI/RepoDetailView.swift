@@ -18,6 +18,7 @@ struct RepoDetailView: View {
     /// the single most destructive unguarded action in the banner.
     @State private var confirmingAbort = false
     @State private var confirmingRebaseSkip = false
+    @State private var pendingRebaseSkip: RebaseSkipTarget?
     @State private var showingForcePushConfirmation = false
     /// The exact command the open confirmation dialog is showing. Compared
     /// against a freshly resolved one when the user confirms, so a refresh
@@ -214,13 +215,14 @@ struct RepoDetailView: View {
 
         .confirmationDialog("Skip the current rebase commit?",
                             isPresented: $confirmingRebaseSkip,
-                            titleVisibility: .visible) {
+                            titleVisibility: .visible,
+                            presenting: pendingRebaseSkip) { target in
             Button("Skip Commit", role: .destructive) {
-                viewModel.skipRebaseCommit()
+                viewModel.skipRebaseCommit(target)
             }
             Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("This drops the commit being replayed and discards its conflict resolutions, then continues the rebase.")
+        } message: { _ in
+            Text("This drops the replayed commit and discards uncommitted changes, then continues the rebase.")
         }
 
         // `presenting:` rather than reading `pendingForcePush` inside the
@@ -386,8 +388,9 @@ struct RepoDetailView: View {
                 confirmingAbort = true
             }
             .disabled(viewModel.isBusy)
-            if state.operation == .rebase {
+            if let target = state.rebaseSkipTarget {
                 Button("Skip Commit…") {
+                    pendingRebaseSkip = target
                     confirmingRebaseSkip = true
                 }
                 .disabled(viewModel.isBusy)

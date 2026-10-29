@@ -1351,6 +1351,17 @@ public final class GitClient {
             atPath: gitDir.appendingPathComponent("rebase-merge/amend").path)
     }
 
+    func rebaseSkipTarget(headHash: String?) -> RebaseSkipTarget? {
+        guard let headHash,
+              let result = try? runReadChecked(
+                ["-C", worktree.path, "rev-parse", "--verify", "REBASE_HEAD"], in: nil) else {
+            return nil
+        }
+        let commit = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !commit.isEmpty else { return nil }
+        return RebaseSkipTarget(commit: commit, headHash: headHash)
+    }
+
     /// A human label for the operation banner: MERGE_MSG's first line for merges,
     /// "Rebasing <branch>" for rebases, a plain phrase otherwise.
     public func operationLabel(for operation: InProgressOperation) -> String? {

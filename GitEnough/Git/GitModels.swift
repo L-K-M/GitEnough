@@ -371,6 +371,7 @@ public struct MergeState: Equatable {
     public var operationLabel: String?
     public var conflictedFiles: [String]
     var isEditingRebaseCommit = false
+    var rebaseSkipTarget: RebaseSkipTarget? = nil
 
     public var isInProgress: Bool { operation != nil }
     public var isResolvingConflicts: Bool { !conflictedFiles.isEmpty }
