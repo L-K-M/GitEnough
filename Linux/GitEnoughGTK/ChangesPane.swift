@@ -136,13 +136,13 @@ final class ChangesPane {
 
     private func refresh() {
         let status = viewModel.status
-        if unstaged.map(rowKey) != status.unstaged.map(rowKey) {
+        if unstaged.map(unstagedRowKey) != status.unstaged.map(unstagedRowKey) {
             unstaged = status.unstaged
             isRebuilding = true
             UI.replaceRows(unstagedList, with: unstaged.map { row($0, staged: false) })
             isRebuilding = false
         }
-        if staged.map(rowKey) != status.staged.map(rowKey) {
+        if staged.map(stagedRowKey) != status.staged.map(stagedRowKey) {
             staged = status.staged
             isRebuilding = true
             UI.replaceRows(stagedList, with: staged.map { row($0, staged: true) })
@@ -201,13 +201,25 @@ final class ChangesPane {
         gtk_check_button_get_active(cast(amendToggle, to: GtkCheckButton.self)) != 0
     }
 
-    private func rowKey(_ change: FileChange) -> String {
-        change.path + change.displayStatus.rawValue
+    /// Per-side, like the letter the row renders: a path whose worktree column
+    /// changes while its index column does not still has to rebuild the
+    /// unstaged list, and vice versa.
+    private func stagedRowKey(_ change: FileChange) -> String {
+        rowKey(change, staged: true)
+    }
+
+    private func unstagedRowKey(_ change: FileChange) -> String {
+        rowKey(change, staged: false)
+    }
+
+    private func rowKey(_ change: FileChange, staged: Bool) -> String {
+        change.path + change.displayStatus(staged: staged).rawValue
     }
 
     private func row(_ change: FileChange, staged: Bool) -> UnsafeMutablePointer<GtkWidget> {
         let box = UI.box(GTK_ORIENTATION_HORIZONTAL, spacing: 8, margin: 4)
-        UI.append(box, UI.label(change.displayStatus.rawValue, dim: true, monospace: true))
+        UI.append(box, UI.label(change.displayStatus(staged: staged).rawValue,
+                                dim: true, monospace: true))
         let path = UI.label(change.path, ellipsize: true)
         UI.expand(path, vertical: false)
         UI.append(box, path)

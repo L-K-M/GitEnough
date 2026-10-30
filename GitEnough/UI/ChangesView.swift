@@ -228,6 +228,7 @@ struct ChangesView: View {
                 ForEach(viewModel.status.staged) { file in
                     FileRow(file: file,
                             repoURL: viewModel.repo.url,
+                            isStagedList: true,
                             isSelected: selection?.file.path == file.path && selection?.isStaged == true,
                             focusRequest: listFocusRequest,
                             actionIcon: "minus.circle",
@@ -238,6 +239,7 @@ struct ChangesView: View {
                     } onDiscard: {
                         fileToDiscard = file
                     }
+                    .id(ChangeRowID(path: file.path, isStaged: true))
                     .tag(ChangeRowID(path: file.path, isStaged: true))
                 }
             } header: {
@@ -257,6 +259,7 @@ struct ChangesView: View {
                 ForEach(viewModel.status.unstaged) { file in
                     FileRow(file: file,
                             repoURL: viewModel.repo.url,
+                            isStagedList: false,
                             isSelected: selection?.file.path == file.path && selection?.isStaged == false,
                             focusRequest: listFocusRequest,
                             actionIcon: "plus.circle",
@@ -267,6 +270,7 @@ struct ChangesView: View {
                     } onDiscard: {
                         fileToDiscard = file
                     }
+                    .id(ChangeRowID(path: file.path, isStaged: false))
                     .tag(ChangeRowID(path: file.path, isStaged: false))
                 }
             } header: {
@@ -468,6 +472,9 @@ private struct FileRow: View {
 
     let file: FileChange
     let repoURL: URL
+    /// Which list this row is in. A partially staged path appears in both, and
+    /// the two rows describe different changes — see `displayStatus(staged:)`.
+    let isStagedList: Bool
     let isSelected: Bool
     let focusRequest: UUID
     let actionIcon: String
@@ -479,7 +486,7 @@ private struct FileRow: View {
     var body: some View {
         HStack(spacing: 6) {
             HStack(spacing: 6) {
-                FileStatusBadge(status: file.displayStatus)
+                FileStatusBadge(status: file.displayStatus(staged: isStagedList))
                 FilePathText(path: file.path, originalPath: file.originalPath)
                     .font(.callout)
                 Spacer()

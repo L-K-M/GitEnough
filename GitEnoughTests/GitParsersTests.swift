@@ -159,6 +159,36 @@ final class GitParsersTests: XCTestCase {
         XCTAssertEqual(status.changeCount, 5)
     }
 
+    /// Porcelain v2 reports the index and the worktree as two separate columns,
+    /// and every partially staged shape puts one path in both lists with a
+    /// *different* letter on each side. End-to-end from git's own output,
+    /// because the bug this pins was a display rule reading the wrong column
+    /// rather than a parse error.
+    func testPartiallyStagedShapesCarryBothColumns() {
+        let output = """
+        # branch.oid 1234567890abcdef
+        # branch.head main
+        1 AM N... 100644 100644 100644 abc def added-then-modified.txt
+        1 MD N... 100644 100644 000000 abc def modified-then-deleted.txt
+        1 AD N... 100644 100644 000000 abc def added-then-deleted.txt
+
+        """
+        let status = GitParsers.parseStatus(output)
+
+        func sides(_ path: String) -> (FileChange.Status?, FileChange.Status?) {
+            (status.staged.first { $0.path == path }?.displayStatus(staged: true),
+             status.unstaged.first { $0.path == path }?.displayStatus(staged: false))
+        }
+
+        XCTAssertEqual(sides("added-then-modified.txt").0, .added)
+        XCTAssertEqual(sides("added-then-modified.txt").1, .modified)
+        XCTAssertEqual(sides("modified-then-deleted.txt").0, .modified)
+        XCTAssertEqual(sides("modified-then-deleted.txt").1, .deleted)
+        XCTAssertEqual(sides("added-then-deleted.txt").0, .added)
+        // The one that used to render a green "A" over a file that is gone.
+        XCTAssertEqual(sides("added-then-deleted.txt").1, .deleted)
+    }
+
     /// The `staged`/`unstaged` assertions here are **load-bearing, not
     /// incidental**. `GitClient.stage(paths:)` is deliberately unguarded against
     /// conflicts — naming a path is the user resolving it, which is what
