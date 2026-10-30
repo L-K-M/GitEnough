@@ -133,6 +133,30 @@ final class SettingsEditStateTests: XCTestCase {
                       "the visible key was never written and must not read as saved")
     }
 
+    /// `moved` compares configuration and key revision, and neither is unique
+    /// across showings: `present()` resets the revision, so showing B's first
+    /// key edit lands on the same number as showing A's. A completion that
+    /// consults `moved` without first checking it owns the dialog can
+    /// therefore conclude "nothing changed" about a showing it has never seen,
+    /// and report A's write as having saved B's fields.
+    ///
+    /// This is why the save completion checks `isFromCurrentPresentation`
+    /// first. Pinned here so the ordering is not mistaken for redundancy.
+    func testMovedCannotDistinguishShowingsOnItsOwn() {
+        var state = SettingsEditState()
+        state.present()
+        state.editKey()
+        let fromA = state.request(for: zai)
+
+        state.present()
+        state.editKey()
+
+        XCTAssertFalse(state.moved(since: fromA, configuration: zai),
+                       "same configuration, same revision — moved sees no difference")
+        XCTAssertFalse(state.isFromCurrentPresentation(fromA),
+                       "so ownership is the check that has to come first")
+    }
+
     // MARK: - Busy state across a reopen
 
     /// Start an operation, close, reopen. The old completion is discarded by

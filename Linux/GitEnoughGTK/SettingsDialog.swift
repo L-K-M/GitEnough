@@ -256,11 +256,19 @@ final class SettingsDialog {
                 }
             }
             DispatchQueue.main.async { [weak self] in
-                // No presentation guard here: a write that landed must be
-                // recorded even if the user has reopened the dialog since, or
-                // the editor would show a stale saved state. `finish` reports
-                // against the live fields instead.
-                guard let self else { return }
+                // A completion only touches the showing that started it. An
+                // earlier one owns none of this dialog's state: clearing busy
+                // would cancel the spinner of an operation this showing
+                // started, and `finish` would record the old showing's values
+                // as saved — including `keyIsKnown`, which makes this
+                // showing's own opening lookup return without filling its
+                // field.
+                //
+                // Nothing is lost by dropping it. The keyring queue is serial,
+                // so this showing's lookup is enqueued behind that write and
+                // observes it; the fields get the stored truth from their own
+                // read rather than from a dialog the user has closed.
+                guard let self, edit.isFromCurrentPresentation(request) else { return }
                 setBusy(false)
                 finish(save: request, key: key, failure: failure)
             }
