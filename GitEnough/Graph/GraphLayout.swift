@@ -104,6 +104,18 @@ public struct GraphLayout: Equatable {
             return lanes.count - 1
         }
 
+        /// A commit's parents with repeats removed, order preserved.
+        ///
+        /// Deliberately here rather than in `GitParsers`: the parser's job is
+        /// to report the object faithfully, including a malformed one. The
+        /// graph is where "two edges to the same commit" has to become one
+        /// lane, because lanes are what the duplicate would strand.
+        func uniqueParents(of commit: Commit) -> [String] {
+            guard commit.parents.count > 1 else { return commit.parents }
+            var seen = Set<String>()
+            return commit.parents.filter { seen.insert($0).inserted }
+        }
+
         for (row, commit) in commits.enumerated() {
             // 1. Claim the lane for this commit.
             let matching = lanes.indices.filter { lanes[$0] == commit.hash }
@@ -119,11 +131,27 @@ public struct GraphLayout: Equatable {
             layout.nodes.append(Node(row: row, column: column, colorIndex: laneColors[column]))
 
             // 3. Hand out parents. Lanes born here start drawing one row down.
+            //
+            // Deduplicated first, because a commit object may name the same
+            // parent twice. `git commit-tree` refuses to write one ("error:
+            // duplicate parent … ignored", measured on 2.43) but `fast-import`
+            // writes both silently and `fsck` passes them, so histories
+            // produced by cvs2git, hg-fast-export and git-filter-repo carry
+            // them and `%P` prints both.
+            //
+            // Two edges to one commit are one lane. Left in, a repeat of the
+            // *first* parent breaks the invariant this algorithm rests on: the
+            // lookup below excludes `column`, so it cannot see that this node's
+            // own lane already expects that hash, and opens a second lane for
+            // it. Step 1 then claims only the leftmost match, and the other
+            // lane expects a hash no later commit can consume — a lane that
+            // draws a vertical segment on every remaining row, forever.
+            let parents = uniqueParents(of: commit)
             var newbornLanes = Set<Int>()
-            if commit.parents.isEmpty {
+            if parents.isEmpty {
                 lanes[column] = nil
             } else {
-                let firstParent = commit.parents[0]
+                let firstParent = parents[0]
                 if let existing = lanes.indices.first(where: { $0 != column && lanes[$0] == firstParent }) {
                     // First parent already has a lane (it is the second parent of a
                     // merge further up): fold this lane into it. The join takes the
@@ -136,7 +164,7 @@ public struct GraphLayout: Equatable {
                 } else {
                     lanes[column] = firstParent
                 }
-                for parent in commit.parents.dropFirst() {
+                for parent in parents.dropFirst() {
                     if let existing = lanes.indices.first(where: { $0 != column && lanes[$0] == parent }) {
                         layout.segments.append(Segment(fromRow: row, fromColumn: column,
                                                        toRow: row + 1, toColumn: existing,

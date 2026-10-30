@@ -1264,6 +1264,17 @@ public final class GitClient {
 
     /// Marks a conflicted path resolved (for when the user fixed it by hand or in
     /// a tool that didn't stage it).
+    ///
+    /// **Deleting the file is a resolution**, not a reason to refuse. A
+    /// modify/delete conflict (`u UD`/`u DU`) is resolved either by keeping the
+    /// surviving side or by accepting the deletion, and accepting it means the
+    /// file is gone — at which point the marker scan below used to throw
+    /// "no such file" and the conflict could not be cleared from the GUI at all.
+    /// git has no such objection: measured on 2.43, `git add -- <path>` on a
+    /// `u UD` entry whose file was removed exits 0 and stages the deletion
+    /// (`1 D. … <path>`). The same dead end was reached automatically whenever
+    /// an external merge tool resolved by deleting, since `openMergeTool`
+    /// finishes through here.
     public func markResolved(path: String) throws {
         if try fileHasConflictMarkers(path) {
             throw GitError(
@@ -1280,9 +1291,30 @@ public final class GitClient {
     /// git's "was it resolved?" prompt (which hits a headless EOF), so GitEnough
     /// verifies the file itself. Throws when the file can't be inspected so a
     /// read/permission failure can never be mistaken for a resolved conflict.
+    ///
+    /// **A file that is not there has no markers.** That is the one absence this
+    /// distinguishes from a failure: it is how a modify/delete conflict is
+    /// resolved in favour of the deletion, and how a merge tool that resolves by
+    /// deleting leaves the worktree. The distinction is made on the open
+    /// error's own code, so every other failure — a permissions problem, an I/O
+    /// error, a path that turned into a directory — still throws, which is the
+    /// property the doc above claims and this keeps.
     public func fileHasConflictMarkers(_ path: String, chunkSize: Int = 64 * 1024) throws -> Bool {
         let url = worktree.appendingPathComponent(path)
-        let handle = try FileHandle(forReadingFrom: url)
+        let handle: FileHandle
+        do {
+            handle = try FileHandle(forReadingFrom: url)
+        } catch {
+            // The *error*, not a second look at the filesystem. `fileExists`
+            // is false for more than absence — an ancestor directory that
+            // denies search answers false too — so forgiving everything it
+            // calls missing would forgive exactly the permission failure this
+            // method promises to surface. Asking the error that already
+            // happened is also fail-safe: an unrecognised shape rethrows,
+            // which is the behaviour this whole change relaxes.
+            guard Self.isFileNotFound(error) else { throw error }
+            return false
+        }
         defer { try? handle.close() }
         let opening = Array("<<<<<<<".utf8)
         let closing = Array(">>>>>>>".utf8)
@@ -1307,6 +1339,23 @@ public final class GitClient {
             }
         }
         return false
+    }
+
+    /// Whether an open failure means "there is nothing at that path".
+    ///
+    /// Both spellings are checked because the two platforms report it
+    /// differently: Foundation wraps it as `NSFileReadNoSuchFileError`, and a
+    /// raw POSIX `ENOENT` reaches here from some paths on corelibs-foundation.
+    /// A dangling symlink lands here too, and that is the right answer — `open`
+    /// follows the link and genuinely finds nothing, and a symlink carries no
+    /// conflict markers either way.
+    private static func isFileNotFound(_ error: Error) -> Bool {
+        let error = error as NSError
+        if error.domain == NSCocoaErrorDomain {
+            return error.code == NSFileReadNoSuchFileError
+                || error.code == NSFileNoSuchFileError
+        }
+        return error.domain == NSPOSIXErrorDomain && error.code == Int(ENOENT)
     }
 
     /// Resolves a conflicted path by checking out one side and staging it.
@@ -1426,7 +1475,7 @@ public final class GitClient {
     public func stashList() throws -> [StashEntry] {
         let f = GitParsers.fieldSep
         let result = try runReadChecked(
-            ["-C", worktree.path, "stash", "list", "--format=%gd\(f)%gs"], in: nil)
+            ["-C", worktree.path, "stash", "list", "--format=%gd\(f)%gs\(f)%H"], in: nil)
         return GitParsers.parseStash(result.stdout)
     }
 
@@ -1448,6 +1497,29 @@ public final class GitClient {
     public func stashDrop(index: Int) throws {
         try runChecked(
             ["-C", worktree.path, "stash", "drop", "stash@{\(index)}"], in: nil)
+    }
+
+    /// Resolve a captured selection on the repository queue immediately before
+    /// using it. A window's confirmation can outlive a pop/drop in another
+    /// window, so the captured reflog index alone cannot identify its target.
+    public func stashApply(_ entry: StashEntry, pop: Bool) throws {
+        try stashApply(index: currentStashIndex(for: entry), pop: pop)
+    }
+
+    public func stashDrop(_ entry: StashEntry) throws {
+        try stashDrop(index: currentStashIndex(for: entry))
+    }
+
+    private func currentStashIndex(for entry: StashEntry) throws -> Int {
+        guard let objectID = entry.objectID else {
+            throw GitError(message: "Can't identify this stash. Refresh and select it again.",
+                           exitCode: -1)
+        }
+        guard let current = try stashList().first(where: { $0.objectID == objectID }) else {
+            throw GitError(message: "This stash is no longer in the repository. Refresh and select a remaining stash.",
+                           exitCode: -1)
+        }
+        return current.index
     }
 
     // MARK: - Commit-targeted actions
@@ -1490,7 +1562,82 @@ public final class GitClient {
     // MARK: - Clone
 
     /// Clones `url` into `destination`. Progress goes to stderr (which we surface).
-    public static func clone(_ url: String, into destination: URL) throws {
-        try GitShell.shared.runChecked(["clone", "--", url, destination.path], in: nil)
+    /// New cancellable destinations are published only after git succeeds.
+    /// Existing empty directories are cloned in place without replacing them.
+    public static func clone(_ url: String, into destination: URL,
+                             cancellation: GitCancellationToken? = nil,
+                             environmentOverrides: [String: String] = [:]) throws {
+        guard let cancellation else {
+            _ = try GitShell.shared.runChecked(["clone", "--", url, destination.path], in: nil,
+                                              environmentOverrides: environmentOverrides)
+            return
+        }
+        try cancellation.checkCancellation()
+        let files = FileManager.default
+        var isDirectory: ObjCBool = false
+        if files.fileExists(atPath: destination.path, isDirectory: &isDirectory) {
+            guard isDirectory.boolValue,
+                  try files.contentsOfDirectory(atPath: destination.path).isEmpty else {
+                throw GitError(message: "A file or nonempty folder already exists at \(destination.path). Choose another destination.",
+                               exitCode: -1)
+            }
+            try cloneIntoExistingDirectory(url, destination: destination,
+                                           cancellation: cancellation,
+                                           environmentOverrides: environmentOverrides)
+            return
+        }
+        // A sibling keeps publication on the same volume. Only this private,
+        // newly created directory is ever cleaned up after failure/cancellation;
+        // an existing destination or a folder created there meanwhile is safe.
+        let temporary = destination.deletingLastPathComponent()
+            .appendingPathComponent(".GitEnough-Clone-\(UUID().uuidString)", isDirectory: true)
+        try files.createDirectory(at: temporary, withIntermediateDirectories: false,
+                                  attributes: [.posixPermissions: 0o700])
+        let workingCopy = temporary.appendingPathComponent(destination.lastPathComponent, isDirectory: true)
+        do {
+            _ = try GitShell.shared.runChecked(["clone", "--", url, workingCopy.path], in: nil,
+                                              environmentOverrides: environmentOverrides,
+                                              cancellation: cancellation)
+            try cancellation.beginCompletion()
+            try files.moveItem(at: workingCopy, to: destination)
+        } catch {
+            do {
+                try files.removeItem(at: temporary)
+            } catch let cleanupError {
+                if error is GitCancellationError {
+                    throw GitCancellationError(retainedDirectory: temporary)
+                }
+                throw GitError(message: "\(error.localizedDescription) A temporary clone remains at \(temporary.path): \(cleanupError.localizedDescription)",
+                               exitCode: (error as? GitError)?.exitCode ?? -1)
+            }
+            throw error
+        }
+        do {
+            try files.removeItem(at: temporary)
+        } catch {
+            // The working copy is already published. An empty staging folder
+            // must not turn that successful clone into a reported failure.
+            NSLog("[GitEnough] Could not remove empty clone staging directory: %@", error.localizedDescription)
+        }
+    }
+
+    private static func cloneIntoExistingDirectory(_ url: String, destination: URL,
+                                                   cancellation: GitCancellationToken,
+                                                   environmentOverrides: [String: String]) throws {
+        do {
+            _ = try GitShell.shared.runChecked(["clone", "--", url, destination.path], in: nil,
+                                              environmentOverrides: environmentOverrides,
+                                              cancellation: cancellation)
+            try cancellation.beginCompletion()
+        } catch is GitCancellationError {
+            // The caller owns this directory, its inode/ACLs, and anything
+            // added during cloning. Never remove or recreate it on cancellation.
+            let files = FileManager.default
+            let remaining = try? files.contentsOfDirectory(atPath: destination.path)
+            if files.fileExists(atPath: destination.path), remaining?.isEmpty != true {
+                throw GitCancellationError(preservingExistingDirectory: destination)
+            }
+            throw GitCancellationError()
+        }
     }
 }

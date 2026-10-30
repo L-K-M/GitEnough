@@ -19,7 +19,20 @@ public final class RepoViewModel: ObservableObject, Identifiable {
     public let client: GitClient
     public let queue: DispatchQueue
     private var watcher: RepoWatcher?
+    /// How many commits a snapshot loads. **Owned by `queue`**: it is read by
+    /// `collectSnapshot`, which runs there, and the watcher can call that
+    /// directly on the queue — so a main-thread write from `loadMoreHistory`
+    /// was an unsynchronized race against every poll tick. Seeded in `init`,
+    /// before any queue work exists to read it.
     private var historyLimit: Int
+    /// `canLoadMoreHistory`'s queue-side copy, for the same reason: a
+    /// history-less refresh must carry the last answer forward, and the only
+    /// value it may read to do that is one this queue owns.
+    ///
+    /// It never leaves the queue. The answer reaches the UI inside the
+    /// `Snapshot`, which `apply` publishes on main — reading this property
+    /// from there would be the same race in the other direction.
+    private var queueCanLoadMore = false
     private var operationGate = RepoOperationGate()
 
     /// Called on the main thread after each applied snapshot, so the sidebar
@@ -150,7 +163,7 @@ public final class RepoViewModel: ObservableObject, Identifiable {
          defaults: UserDefaults = .standard) {
         self.repo = repo
         self.client = GitClient(worktree: repo.url)
-        self.queue = DispatchQueue(label: "gitenough.repo.\(repo.name)", qos: .userInitiated)
+        self.queue = RepositoryOperationQueues.shared.queue(for: repo)
         self.historyLimit = historyLimit
         self.defaults = defaults
         // Restore via the backing storage: a plain assignment could re-run
@@ -196,7 +209,8 @@ public final class RepoViewModel: ObservableObject, Identifiable {
         refresh(includeHistory: true)
         queue.async { [weak self] in
             guard let self, let gitDir = self.client.gitDir() else { return }
-            DispatchQueue.main.async {
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
                 self.watcher = RepoWatcher(gitDir: gitDir, worktree: self.repo.url,
                                            queue: self.queue) { [weak self] in
                     self?.collectAndApply(includeHistory: true)
@@ -224,6 +238,7 @@ public final class RepoViewModel: ObservableObject, Identifiable {
 
     /// Must be called on `queue`.
     private func collectSnapshot(includeHistory: Bool) -> Snapshot {
+        dispatchPrecondition(condition: .onQueue(queue))
         let status = (try? client.status()) ?? .empty
         let branches = (try? client.branches()) ?? []
         let remotes = (try? client.remotes()) ?? []
@@ -243,11 +258,16 @@ public final class RepoViewModel: ObservableObject, Identifiable {
         var commits: [Commit]?
         var layout: GraphLayout?
         var unpushed: Set<String>?
-        var canLoadMore = canLoadMoreHistory
+        // The queue's own copy, not the published one: a history-less refresh
+        // has to carry the last answer forward, and reading the main thread's
+        // property to do it was both a cross-thread read and a value another
+        // snapshot could already have moved on from.
+        var canLoadMore = queueCanLoadMore
         if includeHistory {
             // Load one extra commit to know whether "Load more" should be offered.
             let loaded = (try? client.log(limit: historyLimit + 1)) ?? []
             canLoadMore = loaded.count > historyLimit
+            queueCanLoadMore = canLoadMore
             let trimmed = Array(loaded.prefix(historyLimit))
             commits = trimmed
             layout = GraphLayout.layout(commits: trimmed)
@@ -278,17 +298,26 @@ public final class RepoViewModel: ObservableObject, Identifiable {
         // the commit just made). commit() guards independently; this clears
         // the flag regardless of which tab is mounted.
         if snapshot.status.isUnborn, amendLastCommit { amendLastCommit = false }
-        onStatusChange?(RepoSummary(status: snapshot.status))
+        onStatusChange?(RepoSummary(status: snapshot.status, remotes: snapshot.remotes))
     }
 
     /// Runs a snapshot load on the queue and applies it on main.
-    private func collectAndApply(includeHistory: Bool) {
+    /// `beforeCollect` runs on the queue immediately before the snapshot, for
+    /// a caller that has to change queue-owned state and have *this* snapshot
+    /// see it — `loadMoreHistory` growing the page. It is a parameter rather
+    /// than something the caller does itself so there stays one collect-then-
+    /// apply pipeline: a second copy would silently miss whatever guard this
+    /// one grows next.
+    private func collectAndApply(includeHistory: Bool,
+                                 beforeCollect: (() -> Void)? = nil) {
         // Already on the queue when invoked from the watcher; hop if needed.
         if DispatchQueue.getSpecific(key: queueKey) != nil {
+            beforeCollect?()
             let snapshot = collectSnapshot(includeHistory: includeHistory)
             DispatchQueue.main.async { self.apply(snapshot) }
         } else {
             queue.async {
+                beforeCollect?()
                 let snapshot = self.collectSnapshot(includeHistory: includeHistory)
                 DispatchQueue.main.async { self.apply(snapshot) }
             }
@@ -300,9 +329,17 @@ public final class RepoViewModel: ObservableObject, Identifiable {
         collectAndApply(includeHistory: includeHistory)
     }
 
+    /// Grows the loaded page and reloads it.
+    ///
+    /// The increment happens **on the repo queue**, not here, because
+    /// `historyLimit` belongs to that queue — see its declaration. Doing it on
+    /// main would be the write half of the race the ownership split closes, and
+    /// it would also let a snapshot already in flight finish against the old
+    /// limit and re-trim the list the click was meant to grow.
     public func loadMoreHistory() {
-        historyLimit += Self.historyPageSize
-        collectAndApply(includeHistory: true)
+        collectAndApply(includeHistory: true) {
+            self.historyLimit += Self.historyPageSize
+        }
     }
 
     // MARK: - Mutating operations
@@ -948,6 +985,44 @@ public final class RepoViewModel: ObservableObject, Identifiable {
         }
     }
 
+    /// Whether Commit would do anything.
+    ///
+    /// A view-model property for the same reason `canPull` and
+    /// `canPushOrPublish` are: the decision is made once, so two front ends
+    /// cannot describe one button differently. They already had — the GTK box
+    /// gated Commit on the staged list alone, which offered the button with an
+    /// empty message (where `commit()` returns silently), offered it mid-fetch
+    /// (where the operation gate turns the click away just as silently), and
+    /// withheld it for the one commit that legitimately stages nothing: an
+    /// amend that only rewords the last message.
+    ///
+    /// `allowsManualCommit` is one of the terms rather than a separate check in
+    /// each front end: it is the same question, and leaving it out here would
+    /// re-open mid-rebase commits on both at once. `conflicted.isEmpty` is here
+    /// for the same reason, and arrived the same way: the macOS view had grown
+    /// it locally while the GTK box had no conflict check at all, so the two
+    /// front ends disagreed about whether Commit is offered with unmerged
+    /// files. Deciding it once is what stops that recurring.
+    public var canCommit: Bool {
+        !draftCommitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && (amendLastCommit || !status.staged.isEmpty)
+            && mergeState.allowsManualCommit
+            && status.conflicted.isEmpty
+            && !isBusy
+    }
+
+    /// Whether ✨ Generate has anything to send. An empty staged diff costs a
+    /// request and describes nothing, so it is not a message worth asking for.
+    ///
+    /// That deliberately excludes an amend-only reword, where `canCommit` is
+    /// true and this is not: the patch `generateCommitMessage` sends *is* the
+    /// staged diff, so there would be nothing in the request to write a message
+    /// about. Offering it there would need the last commit's own diff as the
+    /// input instead, which is a different feature rather than a relaxed guard.
+    public var canGenerateCommitMessage: Bool {
+        !isGeneratingMessage && !isBusy && !status.staged.isEmpty
+    }
+
     public func commit() {
         guard mergeState.allowsManualCommit else {
             errorMessage = Self.rebaseCommitRefusal
@@ -960,9 +1035,14 @@ public final class RepoViewModel: ObservableObject, Identifiable {
         // not reach the command line either.
         let amend = amendLastCommit && !status.isUnborn
         let expectedHeadHash = status.headHash
+        let committedDraftRevision = draftCommitMessageRevision
         // Only clear the box on success — a rejected hook must not eat the message.
         perform("Committing…", onSuccess: {
-            self.draftCommitMessage = ""
+            // Typing can continue while a hook runs, including in another
+            // window on this repository. That newer draft belongs to the user.
+            if self.draftCommitMessageRevision == committedDraftRevision {
+                self.draftCommitMessage = ""
+            }
             self.amendLastCommit = false
         }) { client in
             // A terminal may have started a rebase since the last UI snapshot.
@@ -987,12 +1067,12 @@ public final class RepoViewModel: ObservableObject, Identifiable {
     }
 
     public func stashApply(_ entry: StashEntry, pop: Bool) {
-        perform(pop ? "Popping stash…" : "Applying stash…") { try $0.stashApply(index: entry.index, pop: pop) }
+        perform(pop ? "Popping stash…" : "Applying stash…") { try $0.stashApply(entry, pop: pop) }
     }
 
     public func stashDrop(_ entry: StashEntry) {
         perform("Dropping stash…", invalidatesMessageGeneration: false) {
-            try $0.stashDrop(index: entry.index)
+            try $0.stashDrop(entry)
         }
     }
 
@@ -1156,7 +1236,8 @@ public final class RepoViewModel: ObservableObject, Identifiable {
         _ message: String,
         context: CommitMessageGenerationContext,
         generatedFrom stagedDiff: String,
-        currentStagedDiff: String
+        currentStagedDiff: String,
+        onReplacement: ((CommitMessageReplacement) -> Void)?
     ) {
         guard activeMessageGenerationToken == context.token else { return }
         let accepted = context.accepts(
@@ -1174,7 +1255,20 @@ public final class RepoViewModel: ObservableObject, Identifiable {
             messageGenerationError = "Staged changes changed while the message was being generated. Generate again to use the latest changes."
             return
         }
-        draftCommitMessage = message
+        let replacement = CommitMessageReplacement(previousMessage: draftCommitMessage, message: message)
+        if replacement.previousMessage != message { onReplacement?(replacement) }
+        // The initiating native editor can apply the edit through its text
+        // system first, registering undo. If it is gone, update the model here.
+        // A callback that edits the draft again must not lose that newer text.
+        if let message = replacement.replacing(draftCommitMessage) {
+            draftCommitMessage = message
+        }
+    }
+
+    /// An input method can begin editing marked text before it commits a new
+    /// shared draft value. A pending suggestion no longer owns that input.
+    func beginCommitMessageEditing() {
+        invalidateCommitMessageGeneration()
     }
 
     /// Hop back through the main-thread-owned view model before scheduling the
@@ -1183,7 +1277,8 @@ public final class RepoViewModel: ObservableObject, Identifiable {
     private func verifyGeneratedCommitMessage(
         _ message: String,
         context: CommitMessageGenerationContext,
-        generatedFrom stagedDiff: String
+        generatedFrom stagedDiff: String,
+        onReplacement: ((CommitMessageReplacement) -> Void)?
     ) {
         queue.async { [weak self] in
             guard let self else { return }
@@ -1194,7 +1289,8 @@ public final class RepoViewModel: ObservableObject, Identifiable {
                         message,
                         context: context,
                         generatedFrom: stagedDiff,
-                        currentStagedDiff: currentDiff)
+                        currentStagedDiff: currentDiff,
+                        onReplacement: onReplacement)
                 }
             } catch {
                 let failure = "Couldn’t read staged changes: \(error.localizedDescription)"
@@ -1205,7 +1301,13 @@ public final class RepoViewModel: ObservableObject, Identifiable {
         }
     }
 
-    public func generateCommitMessage() {
+    /// Offers an accepted edit to the initiating UI on main before updating
+    /// the draft itself, so a native editor can register text undo. The model
+    /// still applies the edit when that editor has closed or no callback exists.
+    public func generateCommitMessage(
+        using generator: CommitMessageGenerator? = nil,
+        onReplacement: ((CommitMessageReplacement) -> Void)? = nil
+    ) {
         guard !isGeneratingMessage, !isBusy else { return }
         nextMessageGenerationToken &+= 1
         let context = CommitMessageGenerationContext(
@@ -1237,7 +1339,7 @@ public final class RepoViewModel: ObservableObject, Identifiable {
                         activeToken: self.activeMessageGenerationToken,
                         currentDraftRevision: self.draftCommitMessageRevision,
                         currentStagedRevision: self.stagedContentRevision) else { return }
-                let generator = CommitMessageGenerator(configuration: LLMConfiguration.load())
+                let generator = generator ?? CommitMessageGenerator(configuration: LLMConfiguration.load())
                 Task { [weak self] in
                     guard let self else { return }
                     do {
@@ -1245,7 +1347,8 @@ public final class RepoViewModel: ObservableObject, Identifiable {
                             diffStat: stat, diff: diff, branch: branch)
                         await MainActor.run { [weak self] in
                             self?.verifyGeneratedCommitMessage(
-                                message, context: context, generatedFrom: diff)
+                                message, context: context, generatedFrom: diff,
+                                onReplacement: onReplacement)
                         }
                     } catch {
                         await MainActor.run { [weak self] in

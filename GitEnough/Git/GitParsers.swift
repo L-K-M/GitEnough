@@ -154,10 +154,19 @@ public enum GitParsers {
                 // 2 <XY> <sub> <mH> <mI> <mW> <hH> <hI> <X><score> <path><TAB><origPath>
                 let fields = splitLimit(line, maxSplits: 9)
                 guard fields.count == 10 else { continue }
+                // Both halves arrive quoted independently, and both are handed
+                // over still quoted: `makeChange` unquotes each exactly once.
+                // Unquoting the destination here as well ran it through twice,
+                // and `unquoteGitPath` is not idempotent — it strips the outer
+                // quotes of whatever it is given, so a destination whose own
+                // name begins and ends with `"` lost them. `git mv plain.txt
+                // '"quoted"'` emits `"\"quoted\""`, which became `quoted`: a
+                // path not in the repository, which stage and unstage then fail
+                // on and discard silently acts on.
                 let paths = fields[9].components(separatedBy: "\t")
-                let path = unquoteGitPath(paths[0])
-                let original = paths.count > 1 ? unquoteGitPath(paths[1]) : nil
-                apply(change: makeChange(path: path, originalPath: original, xy: fields[1]),
+                apply(change: makeChange(path: paths[0],
+                                         originalPath: paths.count > 1 ? paths[1] : nil,
+                                         xy: fields[1]),
                       to: &status)
             } else if line.hasPrefix("u ") {
                 // u <XY> <sub> <m1> <m2> <m3> <mW> <h1> <h2> <h3> <path>
@@ -198,8 +207,10 @@ public enum GitParsers {
         let chars = Array(xy)
         let x = chars.count > 0 ? chars[0] : "."
         let y = chars.count > 1 ? chars[1] : "."
+        // Both sides unquote here, so no caller has to decide — the split
+        // responsibility is what let the destination be unquoted twice.
         return FileChange(path: unquoteGitPath(path),
-                          originalPath: originalPath,
+                          originalPath: originalPath.map(unquoteGitPath),
                           stagedStatus: FileChange.Status(rawValue: String(x)),
                           unstagedStatus: FileChange.Status(rawValue: String(y)))
     }
@@ -283,7 +294,7 @@ public enum GitParsers {
         return remotes
     }
 
-    // MARK: - git stash list --format=%gd%x1F%gs
+    // MARK: - git stash list --format=%gd%x1F%gs%x1F%H
 
     public static func parseStash(_ output: String) -> [StashEntry] {
         var entries: [StashEntry] = []
@@ -296,8 +307,12 @@ public enum GitParsers {
                     .replacingOccurrences(of: "}", with: "")) else { continue }
             // %gs is either "WIP on <branch>: <hash> <subject>" (no -m given) or
             // "On <branch>: <message>" (custom message given).
+            // %H is last, so a literal field separator inside the user-supplied
+            // message cannot replace the object's identity or truncate the text.
+            let objectID = fields.count > 2 ? fields.last.flatMap { $0.isEmpty ? nil : $0 } : nil
+            let subjectFields = objectID == nil ? fields.dropFirst() : fields.dropFirst().dropLast()
             var branch = ""
-            var message = fields[1]
+            var message = subjectFields.joined(separator: fieldSep)
             var isWIP = false
             var rest: String?
             if message.hasPrefix("WIP on ") {
@@ -316,7 +331,8 @@ public enum GitParsers {
                     if pieces.count == 2 { message = String(pieces[1]) }
                 }
             }
-            entries.append(StashEntry(index: index, branch: branch, message: message))
+            entries.append(StashEntry(index: index, branch: branch, message: message,
+                                      objectID: objectID))
         }
         return entries
     }

@@ -6,26 +6,52 @@ import AppKit
 struct AppCommands: Commands {
 
     @ObservedObject var appState: AppState
+    let appDelegate: AppDelegate
+    @ObservedObject var recentRepositories: RecentRepositoryStore
+    @FocusedObject private var windowState: RepositoryWindowState?
     @AppStorage("pullRebase") private var pullRebase = false
+    @AppStorage("sidebarGroupingMode") private var sidebarGroupingRaw = SidebarGroupingMode.none.rawValue
     @Environment(\.openWindow) private var openWindow
 
-    private var active: RepoViewModel? { appState.activeViewModel }
+    private var active: RepoViewModel? { sheetPresented ? nil : windowState?.activeViewModel }
+    private var recentURLs: [URL] {
+        recentRepositories.urls
+    }
+    private var sheetPresented: Bool {
+        windowState?.isPresentingSheet == true
+    }
 
     var body: some Commands {
-        // Replacing (not adding after) the New Item group removes the default
-        // "New Window" command: AppState holds a single global selection, so a
-        // second window would just fight the first over the same repository.
         CommandGroup(replacing: .newItem) {
-            Button("Add Repository…") {
-                appState.showingAddRepository = true
+            Button("New Window") { openWindow(id: "repository") }
+                .keyboardShortcut("n", modifiers: .command)
+            Button("Open Repository…") { appDelegate.openRepository() }
+                .keyboardShortcut("o", modifiers: .command)
+                .disabled(sheetPresented)
+            Button("Clone Repository…") { appDelegate.cloneRepository() }
+                .keyboardShortcut("o", modifiers: [.shift, .command])
+                .disabled(sheetPresented)
+            Menu("Open Recent") {
+                ForEach(recentURLs, id: \.self) { url in
+                    Button(recentMenuTitle(for: url)) {
+                        appDelegate.application(NSApplication.shared, open: [url])
+                    }
+                    .help(url.path)
+                }
+                Divider()
+                Button("Clear Menu") {
+                    NSDocumentController.shared.clearRecentDocuments(nil)
+                    recentRepositories.clear()
+                }
+                .disabled(recentURLs.isEmpty)
             }
-            .keyboardShortcut("o", modifiers: .command)
+            .disabled(sheetPresented)
         }
 
         CommandMenu("Repository") {
             Button("Fetch") { active?.fetch() }
                 .keyboardShortcut("f", modifiers: [.option, .command])
-                .disabled(active == nil || active?.isBusy == true)
+                .disabled(active == nil || active?.isBusy == true || active?.remotes.isEmpty != false)
 
             Button(pullRebase ? "Pull (Rebase)" : "Pull") { active?.pull(rebase: pullRebase) }
                 .keyboardShortcut("l", modifiers: [.shift, .command])
@@ -37,11 +63,13 @@ struct AppCommands: Commands {
 
             Button("Open Pull Request…") { active?.openPullRequest() }
                 .keyboardShortcut("p", modifiers: [.option, .command])
-                .disabled(active == nil || active?.isBusy == true)
+                .disabled(active == nil || active?.isBusy == true
+                          || active?.isResolvingPullRequest == true
+                          || active?.remotes.isEmpty != false || active?.status.head == nil)
 
             Divider()
 
-            Button("New Branch…") { appState.showingNewBranch = true }
+            Button("New Branch…") { windowState?.showingNewBranch = true }
                 .keyboardShortcut("b", modifiers: [.shift, .command])
                 .disabled(active == nil || active?.isBusy == true)
 
@@ -52,14 +80,14 @@ struct AppCommands: Commands {
             Divider()
 
             Button("Show in Finder") {
-                if let repo = appState.selectedRepository {
+                if let repo = windowState?.selectedRepository {
                     NSWorkspace.shared.activateFileViewerSelecting([repo.url])
                 }
             }
-            .disabled(appState.selectedRepository == nil)
+            .disabled(windowState?.selectedRepository == nil)
 
             Button("Open in Terminal") {
-                if let repo = appState.selectedRepository {
+                if let repo = windowState?.selectedRepository {
                     // `open -a Terminal <path>` — avoids the NSWorkspace.OpenConfiguration
                     // init() ambiguity and works on every stock macOS install.
                     let process = Process()
@@ -68,19 +96,44 @@ struct AppCommands: Commands {
                     try? process.run()
                 }
             }
-            .disabled(appState.selectedRepository == nil)
+            .disabled(windowState?.selectedRepository == nil)
         }
 
         CommandGroup(after: .toolbar) {
-            Button("History") { appState.selectedTab = .history }
+            Button("History") { windowState?.selectedTab = .history }
                 .keyboardShortcut("1", modifiers: .command)
-            Button("Changes") { appState.selectedTab = .changes }
+                .disabled(windowState?.selectedRepository == nil || sheetPresented)
+            Button("Changes") { windowState?.selectedTab = .changes }
                 .keyboardShortcut("2", modifiers: .command)
-            Button("Branches") { appState.selectedTab = .branches }
+                .disabled(windowState?.selectedRepository == nil || sheetPresented)
+            Button("Branches") { windowState?.selectedTab = .branches }
                 .keyboardShortcut("3", modifiers: .command)
+                .disabled(windowState?.selectedRepository == nil || sheetPresented)
+            Picker("Group Repositories by", selection: $sidebarGroupingRaw) {
+                ForEach(SidebarGroupingMode.allCases) { mode in
+                    Text(mode.displayName).tag(mode.rawValue)
+                }
+            }
+            .disabled(windowState == nil || sheetPresented)
+            Button("Find Repository") { windowState?.sidebarSearchRequest = UUID() }
+                .keyboardShortcut("f", modifiers: [.shift, .command])
+                .disabled(windowState == nil || sheetPresented)
+            Divider()
+            Button(windowState?.inspectorVisible == true ? "Hide Inspector" : "Show Inspector") {
+                windowState?.inspectorVisible.toggle()
+            }
+            .keyboardShortcut("i", modifiers: [.option, .command])
+            .disabled(windowState?.selectedRepository == nil || windowState?.selectedTab != .history || sheetPresented)
             Divider()
             Button("Git Activity History") { openWindow(id: "git-activity") }
                 .keyboardShortcut("a", modifiers: [.shift, .command])
         }
+    }
+
+    private func recentMenuTitle(for url: URL) -> String {
+        let name = url.lastPathComponent
+        guard recentURLs.filter({ $0.lastPathComponent == name }).count > 1 else { return name }
+        let parent = (url.deletingLastPathComponent().path as NSString).abbreviatingWithTildeInPath
+        return "\(name) (\(parent))"
     }
 }

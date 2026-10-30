@@ -7,14 +7,31 @@ struct ContentView: View {
 
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var store: RepoStore
+    @Environment(\.openWindow) private var openWindow
+    @StateObject private var windowState: RepositoryWindowState
+    @SceneStorage("repositoryPath") private var savedRepositoryPath = ""
+    @SceneStorage("repositoryTab") private var savedTab = DetailTab.history.rawValue
+    @SceneStorage("repositoryInspectorVisible") private var savedInspectorVisible = true
+    @SceneStorage("repositorySidebarVisible") private var savedSidebarVisible = true
+    @SceneStorage("repositoryExpandedSidebarGroup") private var savedSidebarGroupID: String?
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var gitAlertDismissed = false
+    @State private var restored = false
+    private let appDelegate: AppDelegate
+
+    init(appState: AppState, appDelegate: AppDelegate,
+         recentRepositories: RecentRepositoryStore) {
+        _windowState = StateObject(wrappedValue: RepositoryWindowState(
+            appState: appState, recentRepositories: recentRepositories))
+        self.appDelegate = appDelegate
+    }
 
     var body: some View {
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
             SidebarView()
                 .navigationSplitViewColumnWidth(min: 200, ideal: 250, max: 340)
         } detail: {
-            if let repo = appState.selectedRepository {
+            if let repo = windowState.selectedRepository {
                 // Distinct identity per repo: view-local state (history
                 // filter, selections, sheet drafts) must not leak across a
                 // repository switch.
@@ -24,35 +41,63 @@ struct ContentView: View {
                 WelcomeView()
             }
         }
-        .sheet(isPresented: $appState.showingAddRepository) {
+        .navigationSplitViewStyle(.balanced)
+        .sheet(isPresented: $windowState.showingAddRepository) {
             AddRepositoryView()
         }
         .alert("Couldn't add repository",
                isPresented: dropErrorPresented) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text(appState.dropAddError ?? "")
+            Text(windowState.dropAddError ?? "")
         }
         .onAppear {
+            appDelegate.appState = appState
+            appDelegate.openRepositoryWindow = { [openWindow] in openWindow(id: "repository") }
+            if !restored {
+                windowState.restore(path: savedRepositoryPath, tab: savedTab,
+                                    inspectorVisible: savedInspectorVisible)
+                if let savedSidebarGroupID {
+                    windowState.hasSavedSidebarGroupState = true
+                    windowState.expandedSidebarGroupID = savedSidebarGroupID.isEmpty ? nil : savedSidebarGroupID
+                }
+                columnVisibility = savedSidebarVisible ? .all : .detailOnly
+                restored = true
+            }
             appState.refreshSummaries()
             appState.scanDiscoveryFolder()
         }
+        .onChange(of: windowState.selectedRepoPath) { _, path in
+            savedRepositoryPath = path ?? ""
+        }
+        .onChange(of: windowState.selectedTab) { _, tab in savedTab = tab.rawValue }
+        .onChange(of: windowState.inspectorVisible) { _, visible in savedInspectorVisible = visible }
+        .onChange(of: columnVisibility) { _, visibility in
+            savedSidebarVisible = visibility != .detailOnly
+        }
+        .onChange(of: windowState.expandedSidebarGroupID) { _, groupID in
+            windowState.hasSavedSidebarGroupState = true
+            savedSidebarGroupID = groupID ?? ""
+        }
         .alert("git is not installed", isPresented: gitUnavailable) {
             Button("Install Command Line Tools") {
-                try? Process.run(URL(fileURLWithPath: "/usr/bin/xcode-select"),
+                _ = try? Process.run(URL(fileURLWithPath: "/usr/bin/xcode-select"),
                                  arguments: ["--install"])
             }
             Button("Later", role: .cancel) {}
         } message: {
             Text("GitEnough drives the git command-line tool, which ships with the Xcode Command Line Tools. Install them, then relaunch GitEnough.")
         }
+        .background(RepositoryWindowRegistration(state: windowState, delegate: appDelegate))
+        .environmentObject(windowState)
+        .focusedSceneObject(windowState)
     }
 
     private var dropErrorPresented: Binding<Bool> {
         Binding(
-            get: { appState.dropAddError != nil },
+            get: { windowState.dropAddError != nil },
             set: { isPresented in
-                if !isPresented { appState.dropAddError = nil }
+                if !isPresented { windowState.dropAddError = nil }
             }
         )
     }

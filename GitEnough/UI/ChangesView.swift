@@ -7,8 +7,14 @@ import AppKit
 struct ChangesView: View {
 
     @ObservedObject var viewModel: RepoViewModel
+    @EnvironmentObject private var windowState: RepositoryWindowState
 
     @State private var selection: ChangeSelection?
+    @State private var listFocusRequest = UUID()
+    @StateObject private var selectionModel = ChangesSelectionModel()
+    @State private var messageFocusRequest = UUID()
+    @StateObject private var messageUndoController = CommitMessageUndoController()
+    @FocusState private var stashMessageFocused: Bool
     @State private var fileToDiscard: FileChange?
     @State private var showingStashSheet = false
     @State private var showingAmendPushedConfirmation = false
@@ -41,6 +47,59 @@ struct ChangesView: View {
         viewModel.amendWouldRewritePushedCommit
     }
 
+    private var selectedRow: Binding<ChangeRowID?> {
+        Binding(get: {
+            selection.map { ChangeRowID(path: $0.file.path, isStaged: $0.isStaged) }
+        }, set: { row in
+            guard let row else { selection = nil; return }
+            let files = row.isStaged ? viewModel.status.staged : viewModel.status.unstaged
+            selection = files.first(where: { $0.path == row.path }).map {
+                ChangeSelection(file: $0, isStaged: row.isStaged)
+            }
+            listFocusRequest = UUID()
+        })
+    }
+
+    private var commands: ChangesActions {
+        ChangesActions(
+            canStage: !viewModel.isBusy && selection?.isStaged == false,
+            canUnstage: !viewModel.isBusy && selection?.isStaged == true,
+            canStageAll: !viewModel.isBusy && conflicts.isEmpty && !viewModel.status.unstaged.isEmpty,
+            canUnstageAll: !viewModel.isBusy && !viewModel.status.staged.isEmpty,
+            canCommit: viewModel.canCommit,
+            canStash: !viewModel.isBusy && !conflictUIActive && viewModel.status.isDirty,
+            canGenerate: !viewModel.isBusy && !viewModel.isGeneratingMessage && !viewModel.status.staged.isEmpty,
+            canDiscard: !viewModel.isBusy && selection != nil,
+            stage: { if let selection { viewModel.stage([selection.file]) } },
+            unstage: { if let selection { viewModel.unstage([selection.file]) } },
+            stageAll: { viewModel.stageAll() },
+            unstageAll: { viewModel.unstage(viewModel.status.staged) },
+            commit: requestCommit,
+            stash: { showingStashSheet = true },
+            generate: generateMessage,
+            discard: { fileToDiscard = selection?.file },
+            editMessage: { messageFocusRequest = UUID() })
+    }
+
+    private func generateMessage() {
+        messageUndoController.finishEditing()
+        messageFocusRequest = UUID()
+        let controller = messageUndoController
+        viewModel.generateCommitMessage { replacement in
+            controller.applyGenerated(replacement)
+        }
+    }
+
+    private func requestCommit() {
+        messageUndoController.finishEditing()
+        guard viewModel.canCommit else { return }
+        if amendRewritesPushedCommit {
+            showingAmendPushedConfirmation = true
+        } else {
+            viewModel.commit()
+        }
+    }
+
     var body: some View {
         HSplitView {
             VStack(spacing: 0) {
@@ -53,17 +112,25 @@ struct ChangesView: View {
                 .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
         }
         .onChange(of: selection) { _, selection in
-            viewModel.selectFile(selection?.file, staged: selection?.isStaged ?? false)
+            selectionModel.select(selection, in: viewModel)
         }
-        .onChange(of: viewModel.status) { _, status in
-            // Keep the selection pointed at the file as it moves between the
-            // staged and unstaged lists (FileChange equality includes the status
-            // columns, so comparing whole values would drop the selection on
-            // every stage/unstage); clear it only when the file is gone from
-            // both lists (committed, discarded, resolved).
-            guard let selection else { return }
-            self.selection = selection.updated(for: status)
+        .onReceive(viewModel.$status) { status in
+            // A refreshed path can have the same status letters but new content.
+            // Read its patch on every applied snapshot, using the window's selection.
+            let updated = selection?.updated(for: status)
+                ?? status.unstaged.first.map { ChangeSelection(file: $0, isStaged: false) }
+                ?? status.staged.first.map { ChangeSelection(file: $0, isStaged: true) }
+            if selection != updated {
+                selection = updated
+            } else {
+                selectionModel.select(updated, in: viewModel)
+            }
         }
+        .focusedSceneObject(messageUndoController.state.isFocused ? messageUndoController : nil)
+        .focusedSceneValue(\.changesActions,
+                           windowState.isPresentingSheet
+                           || showingStashSheet || showingAmendPushedConfirmation || fileToDiscard != nil
+                           ? nil : commands)
         .confirmationDialog("Discard changes?",
                             isPresented: discardConfirmationPresented,
                             titleVisibility: .visible) {
@@ -107,18 +174,42 @@ struct ChangesView: View {
     /// row. A spinner covers the content until that exact side finishes loading.
     @ViewBuilder
     private var diffPane: some View {
-        if viewModel.isLoadingDiff {
-            ProgressView()
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else {
-            DiffView(diff: viewModel.selectedFileDiff)
+        VStack(spacing: 0) {
+            HStack {
+                Label(selection?.file.path ?? "Changes", systemImage: "doc.text")
+                    .font(.callout.weight(.medium))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer()
+                if let selection {
+                    Text(selection.isStaged ? "Staged" : "Unstaged")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .background(.bar)
+            Divider()
+            if selectionModel.isLoading {
+                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let error = selectionModel.errorMessage {
+                EmptyPane(systemImage: "exclamationmark.triangle", title: "Couldn't load changes", subtitle: error)
+            } else if selection == nil {
+                EmptyPane(systemImage: viewModel.status.isDirty ? "doc.text.magnifyingglass" : "checkmark.circle",
+                          title: viewModel.status.isDirty ? "Select a file" : "Working tree clean",
+                          subtitle: conflicts.isEmpty ? "Changes to this repository will appear here."
+                            : "Resolve the conflicted files, then continue the operation above.")
+            } else {
+                DiffView(diff: selectionModel.diff)
+            }
         }
     }
 
     // MARK: - File lists
 
     private var fileList: some View {
-        List {
+        List(selection: selectedRow) {
             // No "Conflicted Files (0)" header over zero rows: once the last
             // conflict is resolved the section has nothing left to show, and
             // the operation banner already offers Continue.
@@ -137,18 +228,17 @@ struct ChangesView: View {
                 ForEach(viewModel.status.staged) { file in
                     FileRow(file: file,
                             repoURL: viewModel.repo.url,
-                            isSelected: selection?.file.path == file.path
-                                && selection?.isStaged == true,
+                            isSelected: selection?.file.path == file.path && selection?.isStaged == true,
+                            focusRequest: listFocusRequest,
                             actionIcon: "minus.circle",
                             actionHelp: "Unstage") {
-                        selection = ChangeSelection(file: file, isStaged: true)
-                    } onAction: {
                         viewModel.unstage([file])
                     } onIgnore: {
                         // Staged files are tracked; ignore only applies to untracked.
                     } onDiscard: {
                         fileToDiscard = file
                     }
+                    .tag(ChangeRowID(path: file.path, isStaged: true))
                 }
             } header: {
                 HStack {
@@ -167,18 +257,17 @@ struct ChangesView: View {
                 ForEach(viewModel.status.unstaged) { file in
                     FileRow(file: file,
                             repoURL: viewModel.repo.url,
-                            isSelected: selection?.file.path == file.path
-                                && selection?.isStaged == false,
+                            isSelected: selection?.file.path == file.path && selection?.isStaged == false,
+                            focusRequest: listFocusRequest,
                             actionIcon: "plus.circle",
                             actionHelp: "Stage") {
-                        selection = ChangeSelection(file: file, isStaged: false)
-                    } onAction: {
                         viewModel.stage([file])
                     } onIgnore: {
                         viewModel.ignore(file)
                     } onDiscard: {
                         fileToDiscard = file
                     }
+                    .tag(ChangeRowID(path: file.path, isStaged: false))
                 }
             } header: {
                 HStack {
@@ -222,6 +311,7 @@ struct ChangesView: View {
             }
         }
         .listStyle(.inset)
+        .accessibilityLabel("Changed files")
         .disabled(viewModel.isBusy)
         .frame(maxHeight: .infinity)
     }
@@ -231,8 +321,10 @@ struct ChangesView: View {
     private var commitBox: some View {
         VStack(alignment: .leading, spacing: 8) {
             ZStack(alignment: .topLeading) {
-                TextEditor(text: $viewModel.draftCommitMessage)
-                    .font(.body)
+                CommitMessageEditor(text: $viewModel.draftCommitMessage,
+                                    focusRequest: messageFocusRequest,
+                                    controller: messageUndoController,
+                                    onEditingBegan: { viewModel.beginCommitMessageEditing() })
                     .frame(height: 76)
                     .padding(2)
                     .overlay(
@@ -264,7 +356,7 @@ struct ChangesView: View {
 
             HStack(spacing: 8) {
                 Button {
-                    viewModel.generateCommitMessage()
+                    generateMessage()
                 } label: {
                     if viewModel.isGeneratingMessage {
                         ProgressView()
@@ -273,8 +365,7 @@ struct ChangesView: View {
                         Label("Generate", systemImage: "sparkles")
                     }
                 }
-                .disabled(viewModel.isGeneratingMessage || viewModel.isBusy
-                    || viewModel.status.staged.isEmpty)
+                .disabled(!viewModel.canGenerateCommitMessage)
                 .help("Write the commit message with the configured LLM (Settings → AI)")
 
                 if !viewModel.draftCommitMessage.isEmpty {
@@ -299,23 +390,13 @@ struct ChangesView: View {
                     .disabled(viewModel.status.isUnborn)
                     .help("Amend the last commit instead of creating a new one")
 
-                Button("Commit") {
-                    // The inline warning can be scrolled past — gate the
-                    // action itself when the amend would rewrite a pushed
-                    // commit.
-                    if amendRewritesPushedCommit {
-                        showingAmendPushedConfirmation = true
-                    } else {
-                        viewModel.commit()
-                    }
-                }
-                .keyboardShortcut(.return, modifiers: .command)
+                Button("Commit", action: requestCommit)
+                .help("Commit staged changes (⌘↩)")
                 .buttonStyle(.borderedProminent)
-                .disabled(viewModel.draftCommitMessage
-                    .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    || (!viewModel.amendLastCommit && viewModel.status.staged.isEmpty)
-                    || !viewModel.mergeState.allowsManualCommit
-                    || viewModel.isBusy)
+                // The predicate itself lives on the view model, so the GTK
+                // commit box cannot describe this button differently — which
+                // it did, and in both directions.
+                .disabled(!viewModel.canCommit)
             }
         }
         .padding(10)
@@ -331,6 +412,7 @@ struct ChangesView: View {
             Text("Stash Changes")
                 .font(.headline)
             TextField("Stash message (optional)", text: $stashMessage)
+                .focused($stashMessageFocused)
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 320)
             Toggle("Include untracked files", isOn: $stashIncludeUntracked)
@@ -346,11 +428,17 @@ struct ChangesView: View {
                 }
                 .keyboardShortcut(.defaultAction)
                 .buttonStyle(.borderedProminent)
-                .disabled(viewModel.isBusy)
+                .disabled(viewModel.isBusy || conflictUIActive || !viewModel.status.isDirty)
             }
         }
         .padding(20)
+        .defaultFocus($stashMessageFocused, true)
     }
+}
+
+private struct ChangeRowID: Hashable {
+    let path: String
+    let isStaged: Bool
 }
 
 // Internal rather than private: `stageAllBlockedHelp` is the copy a macOS user
@@ -381,31 +469,33 @@ private struct FileRow: View {
     let file: FileChange
     let repoURL: URL
     let isSelected: Bool
+    let focusRequest: UUID
     let actionIcon: String
     let actionHelp: String
-    let onSelect: () -> Void
     let onAction: () -> Void
     let onIgnore: () -> Void
     let onDiscard: () -> Void
 
     var body: some View {
         HStack(spacing: 6) {
-            FileStatusBadge(status: file.displayStatus)
-            FilePathText(path: file.path, originalPath: file.originalPath)
-                .font(.callout)
-            Spacer()
+            HStack(spacing: 6) {
+                FileStatusBadge(status: file.displayStatus)
+                FilePathText(path: file.path, originalPath: file.originalPath)
+                    .font(.callout)
+                Spacer()
+            }
+            .contentShape(Rectangle())
+            .nativeListRowFocus(isSelected: isSelected, focusRequest: focusRequest)
             Button(action: onAction) {
                 Image(systemName: actionIcon)
             }
             .buttonStyle(.borderless)
             .help(actionHelp)
+            .accessibilityLabel("\(actionHelp) \(file.path)")
         }
         .padding(.vertical, 2)
         .padding(.horizontal, 4)
-        .background(isSelected ? Color.accentColor.opacity(0.20) : Color.clear)
-        .clipShape(RoundedRectangle(cornerRadius: 4))
         .contentShape(Rectangle())
-        .onTapGesture(perform: onSelect)
         .contextMenu {
             Button(action: onAction) {
                 Label(actionHelp, systemImage: actionIcon)

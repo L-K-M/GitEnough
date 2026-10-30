@@ -6,7 +6,7 @@ import AppKit
 struct BranchesView: View {
 
     @ObservedObject var viewModel: RepoViewModel
-    @EnvironmentObject var appState: AppState
+    @EnvironmentObject var windowState: RepositoryWindowState
 
     @State private var branchToDelete: Branch?
     @State private var remoteBranchToDelete: Branch?
@@ -14,19 +14,83 @@ struct BranchesView: View {
     @State private var stashToDrop: StashEntry?
     @State private var branchToRename: Branch?
     @State private var renameText = ""
+    @State private var selection: BranchRowID?
+    @State private var listFocusRequest = UUID()
+    @FocusState private var renameFocused: Bool
 
     private var localBranches: [Branch] { viewModel.branches.filter { !$0.isRemote } }
     private var remoteBranches: [Branch] { viewModel.branches.filter { $0.isRemote } }
 
+    private var selectedRow: Binding<BranchRowID?> {
+        Binding(get: { selection }, set: { row in
+            selection = row
+            if row != nil { listFocusRequest = UUID() }
+        })
+    }
+
+    private var selectedBranch: Branch? {
+        guard case .branch(let ref) = selection else { return nil }
+        return viewModel.branches.first { $0.refName == ref }
+    }
+
+    private var selectedStash: StashEntry? {
+        guard case .stash(let index) = selection else { return nil }
+        return viewModel.stash.first { $0.index == index }
+    }
+
+    private var canCheckout: Bool {
+        guard let branch = selectedBranch, !branch.isHead,
+              !viewModel.isBusy, !viewModel.mergeState.isInProgress else { return false }
+        guard branch.isRemote else { return true }
+        guard let local = branch.localNameForRemote else { return false }
+        return !localBranches.contains { $0.name == local }
+    }
+
+    private var commands: BranchActions {
+        BranchActions(
+            canCheckout: canCheckout,
+            canRename: !viewModel.isBusy && selectedBranch?.isRemote == false,
+            canMerge: !viewModel.isBusy && !viewModel.mergeState.isInProgress
+                && selectedBranch != nil && selectedBranch?.isHead == false,
+            canDelete: !viewModel.isBusy && selectedBranch != nil && selectedBranch?.isHead == false,
+            canUseStash: !viewModel.isBusy && !viewModel.mergeState.isInProgress && selectedStash != nil,
+            checkout: { if let branch = selectedBranch { viewModel.checkout(branch: branch) } },
+            rename: requestRename,
+            merge: { branchToMerge = selectedBranch },
+            delete: requestDelete,
+            applyStash: { if let stash = selectedStash { viewModel.stashApply(stash, pop: false) } },
+            popStash: { if let stash = selectedStash { viewModel.stashApply(stash, pop: true) } },
+            dropStash: { stashToDrop = selectedStash })
+    }
+
+    private func requestRename() {
+        guard let branch = selectedBranch, !branch.isRemote else { return }
+        renameText = branch.name
+        branchToRename = branch
+    }
+
+    private func requestDelete() {
+        guard let branch = selectedBranch, !branch.isHead else { return }
+        if branch.isRemote {
+            remoteBranchToDelete = branch
+        } else {
+            branchToDelete = branch
+        }
+    }
+
     var body: some View {
-        List {
+        List(selection: selectedRow) {
             Section {
                 ForEach(localBranches) { branch in
                     LocalBranchRow(branch: branch)
+                        .tag(BranchRowID.branch(branch.refName))
+                        .nativeListRowFocus(isSelected: selection == .branch(branch.refName), focusRequest: listFocusRequest)
                         .contextMenu {
                             if !branch.isHead {
                                 Button("Check Out") { viewModel.checkout(branch: branch) }
+                                    .disabled(viewModel.isBusy || viewModel.mergeState.isInProgress)
                                 Button("Merge into Current Branch…") { branchToMerge = branch }
+                                    .disabled(viewModel.isBusy || viewModel.mergeState.isInProgress)
                             }
                             Button("Rename…") {
                                 renameText = branch.name
@@ -39,7 +103,9 @@ struct BranchesView: View {
                             }
                         }
                         .onTapGesture(count: 2) {
-                            if !branch.isHead { viewModel.checkout(branch: branch) }
+                            guard !branch.isHead, !viewModel.isBusy,
+                                  !viewModel.mergeState.isInProgress else { return }
+                            viewModel.checkout(branch: branch)
                         }
                 }
             } header: {
@@ -49,7 +115,7 @@ struct BranchesView: View {
                     // Branch creation lives here too, not only in the toolbar
                     // and ⇧⌘B — the tab where branch operations actually happen
                     // should offer the most common one.
-                    Button("New Branch…") { appState.showingNewBranch = true }
+                    Button("New Branch…") { windowState.showingNewBranch = true }
                         .buttonStyle(.borderless)
                         .font(.caption)
                 }
@@ -76,12 +142,16 @@ struct BranchesView: View {
                             BranchRecencyText(date: branch.lastCommitDate)
                         }
                         .padding(.vertical, 2)
+                        .tag(BranchRowID.branch(branch.refName))
+                        .nativeListRowFocus(isSelected: selection == .branch(branch.refName), focusRequest: listFocusRequest)
                         .contextMenu {
                             if let local = branch.localNameForRemote,
                                !localBranches.contains(where: { $0.name == local }) {
                                 Button("Check Out as \(local)") { viewModel.checkout(branch: branch) }
+                                    .disabled(viewModel.isBusy || viewModel.mergeState.isInProgress)
                             }
                             Button("Merge into Current Branch…") { branchToMerge = branch }
+                                .disabled(viewModel.isBusy || viewModel.mergeState.isInProgress)
                             Button("Copy Name") { NSPasteboard.general.copyString(branch.name) }
                             Divider()
                             Button("Delete Remote Branch…", role: .destructive) {
@@ -95,6 +165,12 @@ struct BranchesView: View {
             }
 
             Section {
+                if viewModel.stash.isEmpty {
+                    Text("No stashed changes")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .selectionDisabled()
+                }
                 ForEach(viewModel.stash) { entry in
                     HStack(spacing: 6) {
                         Image(systemName: "tray")
@@ -113,11 +189,16 @@ struct BranchesView: View {
                         Spacer()
                     }
                     .padding(.vertical, 2)
+                    .tag(BranchRowID.stash(entry.index))
+                    .nativeListRowFocus(isSelected: selection == .stash(entry.index), focusRequest: listFocusRequest)
                     .contextMenu {
                         Button("Apply") { viewModel.stashApply(entry, pop: false) }
+                            .disabled(viewModel.isBusy || viewModel.mergeState.isInProgress)
                         Button("Pop") { viewModel.stashApply(entry, pop: true) }
+                            .disabled(viewModel.isBusy || viewModel.mergeState.isInProgress)
                         Divider()
                         Button("Drop…", role: .destructive) { stashToDrop = entry }
+                            .disabled(viewModel.isBusy || viewModel.mergeState.isInProgress)
                     }
                 }
             } header: {
@@ -125,7 +206,20 @@ struct BranchesView: View {
             }
         }
         .listStyle(.inset)
+        .accessibilityLabel("Branches and stashes")
+        .safeAreaInset(edge: .bottom, spacing: 0) { selectionBar }
         .disabled(viewModel.isBusy)
+        .focusedSceneValue(\.branchActions,
+                           windowState.isPresentingSheet
+                           || branchToDelete != nil || remoteBranchToDelete != nil || branchToMerge != nil
+                           || stashToDrop != nil || branchToRename != nil ? nil : commands)
+        .onAppear { restoreSelection() }
+        .onChange(of: viewModel.branches.map(\.refName)) { _, _ in restoreSelection() }
+        .onChange(of: viewModel.stash) { _, _ in
+            // Stash indices move after a pop/drop; don't retarget an old selection.
+            if case .stash = selection { selection = nil }
+            stashToDrop = nil
+        }
         .confirmationDialog("Delete branch “\(branchToDelete?.name ?? "")”?",
                             isPresented: deleteConfirmationPresented,
                             titleVisibility: .visible) {
@@ -192,6 +286,7 @@ struct BranchesView: View {
                 Text("Rename “\(branch.name)”")
                     .font(.headline)
                 TextField("New name", text: $renameText)
+                    .focused($renameFocused)
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 300)
                 HStack {
@@ -206,12 +301,65 @@ struct BranchesView: View {
                         branchToRename = nil
                     }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(renameText.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .disabled(renameText.trimmingCharacters(in: .whitespaces).isEmpty
+                        || renameText.trimmingCharacters(in: .whitespaces) == branch.name)
                     .buttonStyle(.borderedProminent)
                 }
             }
             .padding(20)
+            .defaultFocus($renameFocused, true)
         }
+    }
+
+    private func restoreSelection() {
+        if let selectedBranch, viewModel.branches.contains(where: { $0.refName == selectedBranch.refName }) {
+            return
+        }
+        if selectedStash != nil { return }
+        selection = (viewModel.branches.first(where: \.isHead) ?? localBranches.first)
+            .map { .branch($0.refName) }
+    }
+
+    private var selectionBar: some View {
+        HStack(spacing: 8) {
+            if let branch = selectedBranch {
+                Label(branch.name, systemImage: branch.isRemote ? "network" : "arrow.triangle.branch")
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer()
+                Button("Check Out") { commands.checkout() }
+                    .disabled(!commands.canCheckout)
+                Button("Merge…") { commands.merge() }
+                    .disabled(!commands.canMerge)
+                Menu("More", systemImage: "ellipsis.circle") {
+                    Button("Rename…", action: requestRename).disabled(!commands.canRename)
+                    Button("Copy Name") { NSPasteboard.general.copyString(branch.name) }
+                    Divider()
+                    Button("Delete…", role: .destructive, action: requestDelete)
+                        .disabled(!commands.canDelete)
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+            } else if let entry = selectedStash {
+                Label(entry.ref, systemImage: "tray")
+                Spacer()
+                Button("Apply") { commands.applyStash() }
+                    .disabled(!commands.canUseStash)
+                Button("Pop") { commands.popStash() }
+                    .disabled(!commands.canUseStash)
+                Button("Drop…", role: .destructive) { commands.dropStash() }
+                    .disabled(!commands.canUseStash)
+            } else {
+                Text("Select a branch or stash to see its actions.")
+                    .foregroundStyle(.secondary)
+                Spacer()
+            }
+        }
+        .font(.callout)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(.bar)
+        .overlay(alignment: .top) { Divider() }
     }
 
     private var deleteConfirmationPresented: Binding<Bool> {
@@ -229,6 +377,11 @@ struct BranchesView: View {
     private var dropConfirmationPresented: Binding<Bool> {
         Binding(get: { stashToDrop != nil }, set: { if !$0 { stashToDrop = nil } })
     }
+}
+
+private enum BranchRowID: Hashable {
+    case branch(String)
+    case stash(Int)
 }
 
 /// A local branch row: name (with checkmark for HEAD), upstream, ahead/behind.
