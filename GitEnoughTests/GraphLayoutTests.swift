@@ -369,4 +369,27 @@ final class GraphLayoutTests: XCTestCase {
         let branchOut = layout.segments.first { $0.kind == .branchOut }
         XCTAssertEqual(branchOut?.colorIndex, sideColor)
     }
+
+    // MARK: - Determinism
+
+    /// The same commits always lay out the same way.
+    ///
+    /// Load-bearing outside this file: the GTK history pane skips rebuilding
+    /// its rows when the loaded commits hash unchanged, on the strength of the
+    /// layout being a function of those commits alone. A layout that varied
+    /// per call — a dictionary iteration order leaking into lane assignment,
+    /// say — would make the graph disagree with the rows it is drawn beside,
+    /// and nothing else would notice.
+    func testTheSameCommitsAlwaysLayOutTheSameWay() {
+        let commits = [
+            commit("M", parents: ["c1", "c2"]),
+            commit("c1", parents: ["c0"]),
+            commit("c2", parents: ["c0"]),
+            commit("c0"),
+        ]
+        let first = GraphLayout.layout(commits: commits)
+        for _ in 0..<20 {
+            XCTAssertEqual(GraphLayout.layout(commits: commits), first)
+        }
+    }
 }

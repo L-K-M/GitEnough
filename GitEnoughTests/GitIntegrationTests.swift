@@ -1383,6 +1383,44 @@ final class GitIntegrationTests: XCTestCase {
         return defaults
     }
 
+    /// A checkout that moves no commits still changes the loaded history's
+    /// hash, because `Commit`'s synthesized `Hashable` covers its decorations.
+    ///
+    /// The GTK history pane leans on exactly this: it skips rebuilding its rows
+    /// when the hash of the loaded commits is unchanged, and the ref chips and
+    /// the HEAD ring are drawn from `decorations`. A future `Commit` keyed only
+    /// on its SHA — a natural-looking optimization — would make that cache skip
+    /// a checkout and leave the ring on the branch the user just left. Pinned
+    /// here rather than in the front end because it is a fact about the model.
+    func testCheckoutThatMovesNoCommitsStillChangesTheLoadedHistorysHash() throws {
+        func signature(_ commits: [Commit]) -> Int {
+            var hasher = Hasher()
+            for commit in commits { hasher.combine(commit) }
+            return hasher.finalize()
+        }
+
+        // `client.log` passes `--all`, which is what makes the checkout below
+        // leave the commit set alone — without it the precondition fails.
+        let before = try client.log(limit: 50)
+        try run(["checkout", "feature"])
+        let after = try client.log(limit: 50)
+
+        XCTAssertEqual(before.map(\.hash), after.map(\.hash),
+                       "precondition: --all already loaded both branches, so the "
+                       + "commit set and its order are unchanged")
+        XCTAssertNotEqual(before.filter(\.isHead).map(\.hash),
+                          after.filter(\.isHead).map(\.hash),
+                          "precondition: HEAD moved")
+        XCTAssertNotEqual(signature(before), signature(after))
+
+        // The other direction, which the cache depends on just as much: two
+        // loads of an unchanged repository must hash the same. A stored
+        // property on `Commit` that varied per load — a fetch timestamp, a
+        // cached stat — would hash differently every time and quietly turn the
+        // skip into "rebuild every publish", with nothing failing.
+        XCTAssertEqual(signature(after), signature(try client.log(limit: 50)))
+    }
+
     /// A throwaway repository with an unborn HEAD, removed when the test ends.
     ///
     /// `git init` runs before the client is built: nothing in `GitClient.init`
