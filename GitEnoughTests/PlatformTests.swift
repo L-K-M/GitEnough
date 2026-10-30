@@ -55,6 +55,102 @@ final class ProcessRunnerTests: XCTestCase {
             try ProcessRunner.run(URL(fileURLWithPath: "/nonexistent/tool"), []))
     }
 
+    // MARK: - Timeout
+
+    /// Without a bound, a helper that never exits never returns — which is not
+    /// hypothetical: `secret-tool` blocks for the life of the process when the
+    /// item it is asked for lives in a locked keyring and the session has no
+    /// prompter to unlock it. `sleep` stands in for that here because it is the
+    /// same shape and needs no desktop.
+    func testATimeoutEndsTheWaitOnAChildThatNeverExits() {
+        let start = Date()
+        XCTAssertThrowsError(
+            try ProcessRunner.run(URL(fileURLWithPath: "/bin/sh"),
+                                  ["-c", "sleep 60"], timeout: 0.5)
+        ) { error in
+            guard case ProcessRunner.RunError.timedOut(let name, let seconds) = error else {
+                return XCTFail("expected a timeout, got \(error)")
+            }
+            XCTAssertEqual(name, "sh")
+            XCTAssertEqual(seconds, 0.5)
+        }
+        // The point is the promptness, not just the throw: a call that threw
+        // after the child finished anyway would pass the check above.
+        XCTAssertLessThan(Date().timeIntervalSince(start), 10,
+                          "the timeout returned, but only after the child was done")
+    }
+
+    func testATimeoutKillsTheChildRatherThanLeavingItRunning() throws {
+        let marker = FileManager.default.temporaryDirectory
+            .appendingPathComponent("gitenough-timeout-\(UUID().uuidString)")
+        // The child writes the marker only if it survives its sleep.
+        XCTAssertThrowsError(
+            try ProcessRunner.run(URL(fileURLWithPath: "/bin/sh"),
+                                  ["-c", "sleep 2; touch '\(marker.path)'"],
+                                  timeout: 0.3))
+
+        Thread.sleep(forTimeInterval: 3)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: marker.path),
+                       "the timed-out child outlived the call that gave up on it")
+    }
+
+    func testAChildThatBeatsItsTimeoutIsUnaffected() throws {
+        let result = try ProcessRunner.run(URL(fileURLWithPath: "/bin/echo"),
+                                           ["quick"], timeout: 30)
+        XCTAssertEqual(result.standardOutput, "quick\n")
+        XCTAssertEqual(result.exitCode, 0)
+    }
+
+    /// A timeout has to bound the whole call, not just the child's lifetime.
+    /// `sh` backgrounds a long `sleep` — which inherits the stdout and stderr
+    /// pipes — then execs `echo` and is done in milliseconds. The pipes stay
+    /// open behind it, so a drain that waits for EOF waits forever.
+    ///
+    /// Measured on Linux (corelibs-foundation, Swift 6.2.1): all three
+    /// grandchild shapes below leave `Process` itself reporting the child as
+    /// still running, so the bound that actually fires is the one on the child,
+    /// not the one on the drain. The drain bound is depth for the platforms
+    /// where `terminationHandler` fires on process death alone. Either way the
+    /// contract this pins is the same: with a timeout set, `run` comes back.
+    func testATimeoutBoundsTheWholeCallNotJustTheChild() {
+        for script in ["sleep 300 & exec echo done",
+                       "setsid sleep 300 & exec echo done",
+                       "setsid sh -c 'sleep 300' & exec echo done"] {
+            let start = Date()
+            _ = try? ProcessRunner.run(URL(fileURLWithPath: "/bin/sh"),
+                                       ["-c", script], timeout: 1)
+            XCTAssertLessThan(Date().timeIntervalSince(start), 15,
+                              "run() never returned for: \(script)")
+        }
+    }
+
+    /// `Int(0.5)` is 0, and "did not finish within 0 seconds" reads as a bug in
+    /// the timeout rather than a report of it.
+    func testSubSecondTimeoutsAreNotReportedAsZero() {
+        let message = ProcessRunner.RunError
+            .timedOut("secret-tool", seconds: 0.5).errorDescription
+        XCTAssertEqual(message, "secret-tool did not finish within 0.5 seconds.")
+
+        let whole = ProcessRunner.RunError
+            .timedOut("secret-tool", seconds: 60).errorDescription
+        XCTAssertEqual(whole, "secret-tool did not finish within 60 seconds.")
+    }
+
+    /// A drain that overruns is not the child overrunning, and saying so with
+    /// the caller's timeout would name a bound that never fired: a 60 s keyring
+    /// call that gives up on a 2 s drain would claim it waited 60.
+    func testADrainOverrunIsNotReportedAsTheChildOverrunning() {
+        let message = ProcessRunner.RunError
+            .outputNeverEnded("secret-tool", seconds: 2).errorDescription
+
+        XCTAssertEqual(message, "secret-tool finished, but its output never ended — "
+                           + "gave up after 2 seconds. Something it started is still "
+                           + "holding its pipes open.")
+        XCTAssertFalse(message?.contains("did not finish") ?? true,
+                       "the child did finish; only its output did not")
+    }
+
     // MARK: - PATH lookup
 
     func testFindsACommandOnTheSearchPath() {
@@ -152,5 +248,76 @@ final class MergeToolCatalogueTests: XCTestCase {
         let real = MergeTool(name: "Shell", gitName: "shell",
                              executablePaths: ["/bin/sh"])
         XCTAssertTrue(real.isInstalled)
+    }
+}
+
+/// The Secret Service lookup that Settings depends on to decide whether it may
+/// write. These need a real keyring, so they skip where one is not reachable
+/// rather than passing vacuously.
+final class SecretServiceLookupTests: XCTestCase {
+
+    private let service = "GitEnoughTests.lookup"
+
+    override func tearDown() {
+        SecretService.delete(service: service, account: "present")
+        super.tearDown()
+    }
+
+    private func requireKeyring() throws {
+        try XCTSkipUnless(SecretService.isAvailable, "secret-tool is not installed")
+        // A store that works is the only proof the session has a live keyring;
+        // `isAvailable` only says the helper exists.
+        try XCTSkipUnless(
+            (try? SecretService.save(secret: "probe", service: service, account: "present")) != nil,
+            "no Secret Service is answering in this session")
+    }
+
+    func testAStoredSecretIsFound() throws {
+        try requireKeyring()
+        XCTAssertEqual(SecretService.lookup(service: service, account: "present"),
+                       .found("probe"))
+    }
+
+    /// The distinction the whole fix rests on: a keyring that answers "nothing
+    /// here" is evidence, and the caller may act on it.
+    func testNothingStoredReadsAsAbsentRatherThanUnavailable() throws {
+        try requireKeyring()
+        XCTAssertEqual(SecretService.lookup(service: service, account: "no-such-account"),
+                       .absent)
+    }
+
+    /// And the other half: a keyring that cannot be reached is *not* evidence.
+    /// Reported as `unavailable` so Settings leaves the stored key alone
+    /// instead of writing an empty one over it.
+    /// Asserts through `lookup` rather than through `secret-tool`, so a
+    /// regression that mapped every non-zero exit to `.absent` would fail
+    /// here. Checking only that stderr is non-empty would prove the signal
+    /// exists while leaving the code that reads it untested.
+    ///
+    /// The broken session is staged on the process environment, because
+    /// `lookup` builds its own child and takes no environment argument —
+    /// which is the point: this drives the production path.
+    func testAnUnreachableKeyringReadsAsUnavailable() throws {
+        try XCTSkipUnless(SecretService.isAvailable, "secret-tool is not installed")
+
+        let bus = ProcessInfo.processInfo.environment["DBUS_SESSION_BUS_ADDRESS"]
+        let display = ProcessInfo.processInfo.environment["DISPLAY"]
+        defer {
+            bus.map { setenv("DBUS_SESSION_BUS_ADDRESS", $0, 1) }
+            display.map { setenv("DISPLAY", $0, 1) }
+        }
+        // No session bus and no display: secret-tool can neither reach a
+        // keyring nor autolaunch one, and says so on stderr — the talkative
+        // failure that separates this from the silent exit meaning "not
+        // found". Both must go, or it blocks trying to autolaunch.
+        unsetenv("DBUS_SESSION_BUS_ADDRESS")
+        unsetenv("DISPLAY")
+
+        let lookup = SecretService.lookup(service: service, account: "present")
+
+        try XCTSkipIf(lookup != .unavailable && lookup != .absent,
+                      "a keyring answered anyway; cannot stage a failure here")
+        XCTAssertEqual(lookup, .unavailable,
+                       "a keyring that could not be reached must not read as empty")
     }
 }

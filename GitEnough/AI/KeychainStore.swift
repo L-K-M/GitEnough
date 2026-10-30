@@ -15,6 +15,22 @@ public enum KeychainStore {
 
     public static let service = Bundle.main.bundleIdentifier ?? "ch.lkmc.GitEnough"
 
+    /// Whether this machine can store a secret at all.
+    ///
+    /// Settings asks before offering an API-key field it might not be able to
+    /// honour: the macOS Keychain is always there, but a Linux desktop without
+    /// libsecret-tools has nowhere to put a secret, and GitEnough will not fall
+    /// back to a file. Which of those applies is the `Platform` seam's business,
+    /// not a front end's — hence the question lives here rather than on
+    /// `SecretService`.
+    public static var isAvailable: Bool {
+        #if canImport(Security)
+        return true
+        #else
+        return SecretService.isAvailable
+        #endif
+    }
+
     public static func save(secret: String, account: String) throws {
         #if canImport(Security)
         let data = Data(secret.utf8)
@@ -47,7 +63,18 @@ public enum KeychainStore {
         #endif
     }
 
+    /// The stored secret, or nil for every reason there might not be one.
+    ///
+    /// Fine for a caller that only wants a key to send. A caller deciding
+    /// whether to *write* must use `lookup` instead: nil here cannot tell
+    /// "nothing is stored" from "I could not ask".
     public static func read(account: String) -> String? {
+        guard case .found(let secret) = lookup(account: account) else { return nil }
+        return secret
+    }
+
+    /// The stored secret, with absence and failure kept apart.
+    public static func lookup(account: String) -> SecretLookup {
         #if canImport(Security)
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -58,10 +85,19 @@ public enum KeychainStore {
         ]
         var result: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
-        guard status == errSecSuccess, let data = result as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
+        switch status {
+        case errSecSuccess:
+            guard let data = result as? Data,
+                  let secret = String(data: data, encoding: .utf8) else { return .unavailable }
+            return .found(secret)
+        case errSecItemNotFound:
+            return .absent
+        default:
+            // A locked keychain, a denied prompt, a daemon that did not answer.
+            return .unavailable
+        }
         #else
-        return SecretService.read(service: service, account: account)
+        return SecretService.lookup(service: service, account: account)
         #endif
     }
 

@@ -22,6 +22,9 @@ final class MainWindow {
 
     private var sidebar: SidebarPane?
     private var observer: ModelObserver?
+    /// Built on first use and kept, so reopening Settings is instant and the
+    /// window's widget pointers stay valid between showings.
+    private var settings: SettingsDialog?
     /// One detail pane per repository, kept alive so switching back doesn't
     /// reload the history — the same reason AppState caches view models.
     private var detailPanes: [String: RepoDetailPane] = [:]
@@ -39,6 +42,15 @@ final class MainWindow {
         UI.append(title, titleLabel, subtitleLabel)
         gtk_header_bar_set_title_widget(opaque(header), title)
         gtk_header_bar_pack_start(opaque(header), switcher)
+        // Packed before the repo actions so it ends up rightmost, and outside
+        // `actionBox` so it survives the no-repository state: configuring the
+        // LLM is exactly what a fresh install has to do before it has anything
+        // else to show.
+        gtk_header_bar_pack_end(opaque(header),
+                                UI.iconButton("preferences-system-symbolic",
+                                              tooltip: "Settings") { [weak self] in
+                                    self?.showSettings()
+                                })
         gtk_header_bar_pack_end(opaque(header), actionBox)
         gtk_window_set_titlebar(window, header)
 
@@ -129,6 +141,14 @@ final class MainWindow {
         UI.setText(titleLabel, repo.name)
         let status = detailPanes[repo.path]?.viewModel.status
         UI.setText(subtitleLabel, status?.head.map { "on \($0)" } ?? repo.path)
+    }
+
+    // MARK: - Settings
+
+    private func showSettings() {
+        let dialog = settings ?? SettingsDialog(parent: window)
+        settings = dialog
+        dialog.present()
     }
 
     // MARK: - Actions

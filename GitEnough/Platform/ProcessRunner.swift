@@ -26,6 +26,12 @@ public enum ProcessRunner {
     public enum RunError: Error, LocalizedError {
         case notFound(String)
         case launchFailed(String, underlying: String)
+        case timedOut(String, seconds: TimeInterval)
+        /// The child exited, but its pipes stayed open behind it — something it
+        /// started still holds the write ends. Separate from `timedOut` because
+        /// the child is not the thing that overran, and because the bound that
+        /// fired is the drain's, not the caller's.
+        case outputNeverEnded(String, seconds: TimeInterval)
 
         public var errorDescription: String? {
             switch self {
@@ -33,9 +39,25 @@ public enum ProcessRunner {
                 return "\(name) is not installed."
             case .launchFailed(let name, let underlying):
                 return "Could not run \(name): \(underlying)"
+            case .timedOut(let name, let seconds):
+                return "\(name) did not finish within \(Self.describe(seconds)) seconds."
+            case .outputNeverEnded(let name, let seconds):
+                return "\(name) finished, but its output never ended — gave up after "
+                    + "\(Self.describe(seconds)) seconds. Something it started is still "
+                    + "holding its pipes open."
             }
         }
+
+        /// Whole seconds without a decimal point, fractions with one — so a
+        /// sub-second bound does not report itself as "0 seconds".
+        private static func describe(_ seconds: TimeInterval) -> String {
+            let tenths = (seconds * 10).rounded() / 10
+            return tenths == tenths.rounded() ? "\(Int(tenths))" : "\(tenths)"
+        }
     }
+
+    /// How long a timed-out child gets to handle SIGTERM before SIGKILL.
+    private static let terminationGrace: TimeInterval = 2
 
     /// Writing to a child that has already exited raises SIGPIPE, and its
     /// default action is to kill *us* — the write is never allowed to fail, so
@@ -56,11 +78,19 @@ public enum ProcessRunner {
     /// **Blocking** — call it off the main thread. stdout is drained on a helper
     /// thread and stdin is written on another so a child that talks on both
     /// pipes can't deadlock against a full buffer.
+    ///
+    /// `timeout` bounds the wait. Without one the call is as patient as the
+    /// child, which for a helper that talks to a desktop service means
+    /// "forever": `secret-tool` blocks indefinitely when the keyring it is
+    /// asked about is locked and the session has no prompter to unlock it, and
+    /// a GUI waiting on that never comes back. Pass a timeout for anything that
+    /// crosses an IPC boundary; leave it off for a local, deterministic tool.
     public static func run(_ executable: URL,
                     _ arguments: [String],
                     input: Data? = nil,
                     environmentOverrides: [String: String] = [:],
-                    workingDirectory: URL? = nil) throws -> Result {
+                    workingDirectory: URL? = nil,
+                    timeout: TimeInterval? = nil) throws -> Result {
         _ = brokenPipesAreErrors
         let process = Process()
         process.executableURL = executable
@@ -80,6 +110,11 @@ public enum ProcessRunner {
         process.standardError = errPipe
         let inPipe = input.map { _ in Pipe() }
         process.standardInput = inPipe ?? FileHandle.nullDevice
+
+        // Set before launching: a short-lived child can exit before `run()`
+        // returns, and a handler installed afterwards would never fire.
+        let exited = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in exited.signal() }
 
         do {
             try process.run()
@@ -113,8 +148,42 @@ public enum ProcessRunner {
                 group.leave()
             }
         }
-        process.waitUntilExit()
-        group.wait()
+        if let timeout, exited.wait(timeout: .now() + timeout) == .timedOut {
+            process.terminate()
+            if exited.wait(timeout: .now() + terminationGrace) == .timedOut {
+                kill(process.processIdentifier, SIGKILL)
+            }
+            // The drain group is deliberately not waited on here. A helper that
+            // spawned a daemon of its own — `secret-tool` autolaunches D-Bus —
+            // leaves that daemon holding the write end of these pipes, so the
+            // readers can outlive the child they were started for. Waiting on
+            // them would reintroduce exactly the unbounded wait the timeout
+            // exists to end; they finish on their own when the pipes close.
+            throw RunError.timedOut(executable.lastPathComponent, seconds: timeout)
+        }
+        // Cheap once the process has exited, and it is what makes
+        // `terminationStatus` safe to read.
+        if let timeout {
+            process.waitUntilExit()
+            // The child is gone, but its pipes can outlive it: a helper that
+            // spawned a daemon leaves that daemon holding the write ends, so
+            // the readers may never see EOF. An unbounded wait here would put
+            // back the unbounded wait the timeout exists to remove.
+            //
+            // On expiry the boxes are deliberately left unread — a reader is
+            // still writing one, and a partial read must never pass for the
+            // whole. `SecretService.read` hands this stdout back as an API key;
+            // half a key is worse than an error.
+            guard group.wait(timeout: .now() + terminationGrace) == .success else {
+                throw RunError.outputNeverEnded(executable.lastPathComponent,
+                                                seconds: terminationGrace)
+            }
+        } else {
+            // No timeout, so nothing here needs the termination handler: this
+            // path waits the way it always did, and `exited` goes unused.
+            process.waitUntilExit()
+            group.wait()
+        }
 
         return Result(stdout: out.value,
                       stderr: String(decoding: err.value, as: UTF8.self)
