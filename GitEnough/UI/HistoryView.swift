@@ -42,10 +42,6 @@ struct HistoryView: View {
         HistorySearch.filter(viewModel.commits, query: activeFilter)
     }
 
-    private var headRow: Int? {
-        viewModel.commits.firstIndex { $0.isHead }
-    }
-
     var body: some View {
         // Split into two builder expressions (core + dialogs): as one giant
         // expression this body timed the Swift type-checker out on CI.
@@ -259,8 +255,18 @@ struct HistoryView: View {
             // The graph only aligns with the full, unfiltered row sequence —
             // hide it while filtering.
             if !isFiltering {
+                // The row's own commit answers this. It used to be
+                // `row == headRow`, where `headRow` scanned the whole commit
+                // array for the `.head` decoration — once per rendered row, so
+                // a 300-row page cost 300 scans of 300 commits, each walking a
+                // decoration list. The two are the same answer: `.head` is a
+                // `%D` decoration and HEAD decorates exactly one commit, so the
+                // first index carrying it is the only index carrying it.
                 GraphStripView(layout: viewModel.layout, row: row,
-                               isHeadRow: row == headRow,
+                               isHeadRow: commit.isHead,
+                               // #123 moved the selection highlight to the
+                               // row's own `nativeListRowFocus` below, so the
+                               // strip must not draw a second one.
                                isSelected: false,
                                isUnpushedRow: viewModel.unpushedHashes.contains(commit.hash),
                                clipsTail: row == viewModel.commits.count - 1)
