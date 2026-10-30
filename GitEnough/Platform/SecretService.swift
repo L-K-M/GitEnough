@@ -74,12 +74,16 @@ public enum SecretService {
                 tool, ["store", "--label=" + label] + attributes(service: service, account: account),
                 input: Data(secret.utf8),
                 timeout: operationTimeout)
-        } catch ProcessRunner.RunError.timedOut {
+        // Two different causes, one remedy for the person at the keyboard: the
+        // keyring never confirmed the write, either because it did not answer
+        // in time or because its output never closed.
+        } catch ProcessRunner.RunError.timedOut, ProcessRunner.RunError.outputNeverEnded {
             throw SecretServiceError.timedOut
-        } catch ProcessRunner.RunError.outputNeverEnded {
-            // Different cause, same remedy for the person at the keyboard: the
-            // keyring did not see the write through.
-            throw SecretServiceError.timedOut
+        } catch {
+            // Everything save() throws is a SecretServiceError, so a launch
+            // failure arrives described as what it stopped rather than as a
+            // bare process error.
+            throw SecretServiceError.storeFailed(error.localizedDescription)
         }
         guard result.succeeded else {
             throw SecretServiceError.storeFailed(result.stderr)

@@ -11,18 +11,6 @@ import Security
 /// `libsecret-tools`) rather than linking libsecret, keeping GitEnough's
 /// zero-dependency build. When it isn't installed the key simply isn't stored:
 /// GitEnough never falls back to writing a secret to disk in the clear.
-/// What a secret store said when asked for a secret.
-///
-/// `absent` and `unavailable` are kept apart because collapsing them destroys
-/// data: a caller that reads "I could not look" as "there is nothing there"
-/// will happily write an empty value over a key the user never touched. Only
-/// `absent` is evidence that nothing is stored.
-public enum SecretLookup: Equatable {
-    case found(String)
-    case absent
-    case unavailable
-}
-
 public enum KeychainStore {
 
     public static let service = Bundle.main.bundleIdentifier ?? "ch.lkmc.GitEnough"

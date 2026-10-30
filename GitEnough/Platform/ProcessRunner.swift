@@ -179,7 +179,8 @@ public enum ProcessRunner {
                                                 seconds: terminationGrace)
             }
         } else {
-            exited.wait()
+            // No timeout, so nothing here needs the termination handler: this
+            // path waits the way it always did, and `exited` goes unused.
             process.waitUntilExit()
             group.wait()
         }
