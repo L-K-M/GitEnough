@@ -332,7 +332,7 @@ struct SidebarView: View {
                     windowState.expandedSidebarGroupID = currentID
                 }
             }
-            .safeAreaInset(edge: .bottom) {
+            .safeAreaInset(edge: .bottom, spacing: 0) {
                 VStack(spacing: 6) {
                     sidebarControls
                     // Always-visible counterpart to the old list footer: a
